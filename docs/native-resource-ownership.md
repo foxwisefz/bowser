@@ -1,0 +1,210 @@
+# Native resource ownership
+
+The native process owns windows, tab identities and editors for their complete lifetime.
+Elixir controllers own feature decisions; native components own immediate input
+and rendering. A controller reconnect reconciles existing resources rather than
+recreating webviews. Profile membership remains enforced by the native owner.
+
+Inactive pages can release their WKWebView while retaining their tab identity,
+URL, icon, profile and WebKit interaction state (including navigation history).
+Selection restores the page. Every 30 seconds, the memory policy tries to unload
+up to two pages idle for five minutes when more than eight pages are loaded.
+Memory-pressure events use a two-minute grace period and a four-page target.
+These are soft targets: visible pages, downloads, capture, media, known editors
+and conferencing sites, shared popup controllers, frames, editable content,
+modified forms, tabs with non-GET navigation history, and pages with trusted input
+since navigation remain protected.
+Unresponsive safety checks time out without unloading. This conservative policy
+does not impose a hard memory cap and does not guarantee every web app's state
+can be discarded. Inspection of an unloaded page returns `tab_unloaded`.
+
+Session restore negotiates `hello.deferred_restore`. Supporting shells accept the
+internal `restore_tab` operation with `url` and `profile`, append the tab, and
+publish its URL without loading a background page. The URL remains available to
+session persistence and reconnect snapshots. Mounting the tab in a window starts
+the load, including selection, split panes, or explicit warming. Already visible
+tabs load immediately. Ordinary link and mod tab opens keep loading immediately;
+shells without the capability receive the existing `chrome.open_tab` operation.
+
+`hello.resources` and `resource_snapshot` expose protocol version 1, native launch
+session ID, next command sequence, topology revision, and windows with stable IDs,
+profile IDs, ordered tab IDs and active tab. No cookie or document data is included.
+
+`resource_command` contains `version`, `session`, `sequence`, and `command`.
+The command names its observed `revision`, `window`, `profile`, `tab`, and `action`.
+Actions are `activate`, `move` (with `target` and `after`), and `close`.
+`resource_result` returns an acknowledgement plus the current resource snapshot.
+A stale topology is rejected before applying an operation. A failed operation
+still consumes its sequence; retrying uses the original envelope.
+
+Sequences are monotonic within a native launch. The owner retains the latest 128
+acknowledgements and rejects older sequences even after their acknowledgement was
+evicted. Identical retries return the original result; conflicting reuse fails.
+This prevents duplicate effects while the native process lives. After reconnect,
+controllers obtain a fresh snapshot and reconcile uncertain operations rather
+than manufacturing new sequence numbers for destructive retries. Commands queued
+from a disconnected socket cannot act through a subsequent connection.
+
+These are internal controller contracts, not new ModSmith capabilities. Existing
+native call sites remain until their controller is extracted. Creating native
+objects, calling AppKit and fulfilling platform delegate contracts remain native;
+choosing feature behavior belongs in the replaceable controller layer.
+
+## Mod state upgrades
+
+Mods declare `state_version/0` (default 0), `migrate_state(old_version, state)`
+returning `{:ok, state}` or `{:error, reason}`, and `validate_state(state)` returning
+`:ok` or `{:error, reason}`. Defaults retain state only for an unchanged version.
+Migration and validation run in a disposable BEAM with the candidate code, before
+any candidate bytecode enters the browser brain. Callbacks must be pure data
+transformations; browser services are not started there. Accepted Elixir remains
+fully privileged: this compiler peer is not an operating-system sandbox.
+
+The loader suspends affected mod event loops, snapshots their data-only state,
+prepares and validates migrations, installs state while still suspended, and
+atomically loads the candidate modules. Failed compilation or preparation never
+changes the live code. Failed activation restores old state before resuming.
+Mailboxes retain queued events. Successful upgrades emit `mod_reloaded` for UI
+reassertion; `init_mod/1` does not run again. Runtime handles in mod state require
+an explicit redesign of that mod's state ownership before it can use this path.
+Whole-brain checkpoint handoff remains a separate upgrade mechanism.
+
+## Tab controller
+
+`ResourceController` is a supervised, reconstructible Elixir service. Tab order,
+new-tab placement, activation/cycling and close-successor selection are pure
+policy functions there. The native process allocates webviews synchronously when
+WebKit requires one, then asks the controller to arrange/activate them. The first
+tab of a new window is bootstrap resource creation. Saved site apps retain their
+single-app native behavior.
+
+After `resource_ready`, native tab gestures and commands enqueue intents (up to
+256) instead of making policy decisions locally. One head intent is issued at a
+time with a fresh topology snapshot. `resource_decision` must reference that
+request. A stale topology retries with a fresh snapshot; a completed request ID
+cannot be applied again. Pending intents stay native through controller death,
+reconnection and whole-brain replacement. A one-second readiness heartbeat recovers
+a controller restart without requiring a new socket connection. Browser-internal
+resource intents go only to the controller, not to mod event subscribers.
+
+The controller contains no authoritative resource state, so it reconstructs from
+native snapshots rather than joining the whole-brain checkpoint's state schema.
+Native drag feedback and text input continue while it is disconnected; queued tab
+operations resume when it returns. The owner validates window/profile membership
+and complete tab-order permutations before applying decisions to existing views.
+
+`bin/check-resource-controller` runs actual Elixir code replacement and controller
+process reconnection against an isolated native browser window. It checks changed
+policy behavior, single application of a queued close, retained webview/document,
+editor draft/selection/focus/undo and advancing video. This is synthetic input and
+local media, not a physical-input or DRM qualification.
+
+## Navigation and downloads
+
+Elixir publishes ordered navigation rules with required/forbidden modifier names
+and a native tab action. The native owner validates the complete rule set before
+replacing its cached policy, then answers WebKit synchronously. External-scheme
+approval, WebKit-required popup allocation and non-displayable-response handling
+remain native enforcement. Policy refresh does not replace any webview.
+
+`NativeDownloads` owns WKDownload delegates and pending destination callbacks
+independently of source tabs. Destination naming is decided by the Elixir
+controller from a native download snapshot. The native owner enforces profile
+identity, basename-only filenames, collision avoidance (including reserved paths)
+and single completion of each callback. Once started, a transfer continues
+without the controller. A source tab closing does not retire its download.
+
+The native integration check also streams a real 1 MiB WebKit download from a
+loopback fixture, closes its source tab and restarts the controller before
+completion. Files are written only to the temporary fixture directory.
+
+The remaining restart boundary is changes to native object storage/lifetime,
+platform delegate integration, the shared SurfaceKit contract, IPC transport and
+native UI not extracted into signed modules. Elixir policy and existing native
+module behavior can update independently; this does not replace WebKit itself.
+
+Controllers negotiate resource protocol version 1 from the native hello before
+polling or publishing policy. The advertised capability survives backend handoff;
+resource topology itself stays native. Internal topology is removed from the
+hello broadcast to user mods and is delivered only to the resource controller.
+
+## Replaceable browser screens
+
+The signed surface renderer also contains the command palette, ModSmith workspace,
+Settings/profile forms and character chooser, onboarding form, built-in and dynamic
+menu presentation, browser prompt construction, and website split containers.
+The Settings toolbar's item presentation uses the same renderer generation.
+
+`BrowserScreenContext` keeps screen models and persistent presentation values in
+SurfaceKit. Host models retain requests, drafts and selections. A screen update
+waits while a text field/editor has focus, marked text is active, a sheet is open,
+a menu is tracking or an interaction is underway. This preserves the active
+editing session; it is a deferred update, not a promise to replace every screen
+in the middle of typing. ModSmith details/chooser state and new-profile drafts
+are stored outside transient rendering views.
+
+AppKit palette generations take over callbacks only after the module slot commits
+replacement. The host retains the palette panel and performs validated browser
+actions. Native menu and prompt factories change for subsequent interactions;
+an already-open prompt keeps its original callback and approval decision.
+
+Website layouts snapshot current divider weights and replace their container
+hierarchy after activation. The host retains the same EngineView/WKWebView
+objects and restores the existing responder. Single-webview layouts keep their
+leaf mounted. Layout validation, profile membership and website data-store
+selection remain native enforcement.
+
+`bin/check-native-screens` builds and loads two real signed renderer generations.
+It exercises persistent ModSmith/profile drafts, a palette action after replacement,
+and retained website identity, pane proportions and playing local video through
+split-container replacement. It uses isolated test windows and local fixtures.
+
+Changing these renderer implementations now takes the native-module update path.
+Changing the shared presentation contract or host-owned window/platform service
+implementation still requires a normal quit/reopen. System-provided file choosers,
+WebKit permission callbacks and the app's startup/recovery machinery remain host
+responsibilities. Modules remain subject to the existing signature, exact SurfaceKit
+identity, generation-count and mapped-byte limits.
+
+Unloaded tabs reuse the startup snapshot capture for a per-tab preview. Captures are limited to 1280 points wide; compressed previews use at most 512 KB per tab and 16 MB total, evicting oldest entries. Only displayed overlays decode an image. Selecting a sleeping tab shows its matching URL preview synchronously while interaction state reloads. Completion, failure, explicit navigation, unmounting, a click, or an eight-second timeout removes the overlay. Closed tabs release cached previews; cache entries are not persisted.
+
+
+## Capture mode
+
+View → Capture Mode (⇧⌘H) temporarily hides the native toolbar, window buttons
+and profile indicator in every browser window, including windows opened later.
+The same command restores their previous visibility. Hover and toolbar refreshes
+cannot reveal them while capture mode is on. Page views, layout and navigation
+remain intact; capture mode resets when the application quits.
+
+Bowser also follows `NSWindow.hasActiveWindowSharingSession`, the public AppKit
+SharePlay window-sharing signal. Ending sharing restores chrome unless manual
+capture mode is still on. Explicitly leaving capture mode suppresses automatic
+entry for the remainder of that sharing session. This signal is not universal
+screenshot/recording detection: enable capture mode before using CleanShot,
+screenshot shortcuts or other recorders, particularly for a clean first frame.
+Detection reads window state and requests no recording or Accessibility access.
+
+## Navigation failure diagnostics
+
+Main-frame navigation failures (excluding normal cancellation/download handoff)
+write local JSON lines to `BOWSER_HOME/diagnostics/navigation-failures.jsonl`.
+The default home is `~/.bowser`. One previous file is retained; each file rotates
+at approximately 256 KiB. Files are private (0600), in a private directory
+(0700), and are never uploaded by telemetry.
+
+Records include the app/OS version, timestamp, random navigation identifier,
+pre/post-commit stage, monotonic elapsed time, redirect count, and up to five
+underlying error domain/code pairs. Network snapshots include path availability,
+interface types, DNS support, expensive/constrained flags and the number of path
+updates since navigation began. Unknown or stale navigation timing is left
+unknown rather than attributed to a newer load. No URLs, hostnames, search terms,
+page contents, headers, credentials, IP addresses, interface names or free-form
+error descriptions are stored. Synthetic error-page loads do not start a new
+trace; ordinary navigation cancellation does not generate a failure record.
+
+A satisfied network path and DNS support are capability signals, not proof that
+DNS lookup, TLS negotiation or the destination server succeeded. WebKit does not
+provide URLSession transaction metrics here. These records narrow the cause of a
+timeout; they cannot always identify it conclusively. No automatic retry or
+additional network probe is performed.

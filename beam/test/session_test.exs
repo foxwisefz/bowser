@@ -1,0 +1,273 @@
+defmodule BowserBrain.SessionTest do
+  # Session state transitions are tested by driving handle_info/2 directly —
+  # no engine, no socket. Outbound casts go to the (disconnected) Bridge and
+  # are dropped; what we assert is the state machine.
+  use ExUnit.Case, async: false
+
+  alias BowserBrain.Session
+
+  test "restore defers background loads only on supporting shells" do
+    entry = %{url: "https://saved.example/", profile: "work"}
+    assert Session.restore_message(entry, true) == %{op: "restore_tab", url: entry.url, profile: "work"}
+    assert Session.restore_message(entry, false) == %{op: "chrome", chrome: "open_tab", url: entry.url, profile: "work", append: true}
+  end
+
+  @moduletag :tmp_dir
+
+  setup %{tmp_dir: tmp_dir} do
+    path = Path.join(tmp_dir, "session.json")
+    old = Application.get_env(:bowser_brain, :session_path)
+    Application.put_env(:bowser_brain, :session_path, path)
+    on_exit(fn ->
+      if old,
+        do: Application.put_env(:bowser_brain, :session_path, old),
+        else: Application.delete_env(:bowser_brain, :session_path)
+    end)
+
+    {:ok, path: path}
+  end
+
+  defp base_state(overrides \\ %{}) do
+    Map.merge(
+      %{tabs: %{}, active: nil, cookies: %{}, disk: %{tabs: [], urls: [], active: 0}, restore: nil},
+      overrides
+    )
+  end
+
+  defp event(state, map) do
+    {:noreply, state} = Session.handle_info({:browser_event, map}, state)
+    state
+  end
+
+  test "native insertion order persists and reconnect preserves it", %{path: path} do
+    state = base_state()
+      |> event(%{"event" => "hello", "tabs" => [
+        %{"id" => 1, "url" => "https://a.example/"},
+        %{"id" => 2, "url" => "https://b.example/"}], "active" => 1})
+      |> event(%{"event" => "tab_opened", "webview" => 3, "order" => [1, 3, 2]})
+      |> event(%{"event" => "url_changed", "webview" => 3, "url" => "https://c.example/"})
+      |> event(%{"event" => "tab_activated", "webview" => 3})
+    assert {:reply, ["https://a.example/", "https://c.example/", "https://b.example/"], _} = Session.handle_call(:tabs, nil, state)
+    stored = JSON.decode!(File.read!(path))
+    assert stored["active"] == 1
+    event(state, %{"event" => "tabs_reordered", "order" => [3, 2, 1]})
+    reordered = JSON.decode!(File.read!(path))
+    assert reordered["active"] == 0
+    assert Enum.map(reordered["tabs"], & &1["url"]) == ["https://c.example/", "https://b.example/", "https://a.example/"]
+    assert Enum.map(stored["tabs"], & &1["url"]) == ["https://a.example/", "https://c.example/", "https://b.example/"]
+  end
+
+  test "quit freezes the full session before window teardown", %{path: path} do
+    state = base_state(%{tabs: %{1 => "https://a.example/", 2 => "https://b.example/"}, active: 2,
+                         profiles: %{1 => "default", 2 => "work"}})
+    {:reply, :ok, quitting} = Session.handle_call(:prepare_quit, self(), state)
+    before = File.read!(path)
+    quitting = event(quitting, %{"event" => "webview_closed", "webview" => 1})
+    quitting = event(quitting, %{"event" => "webview_closed", "webview" => 2})
+    event(quitting, %{"event" => "tab_activated", "webview" => 1})
+    assert File.read!(path) == before
+    assert %{"active" => 1, "tabs" => [_, %{"profile" => "work"}]} = JSON.decode!(before)
+    refute File.exists?(path <> ".tmp")
+  end
+
+  test "quitting before restore preserves the saved session", %{path: path} do
+    File.write!(path, JSON.encode!(%{tabs: [%{url: "https://saved.example/", profile: "default"}], active: 0}))
+    before = File.read!(path)
+    {:reply, :ok, _} = Session.handle_call(:prepare_quit, self(), base_state())
+    assert File.read!(path) == before
+  end
+
+  test "tab_activated tracks the active webview" do
+    state =
+      base_state()
+      |> event(%{"event" => "url_changed", "webview" => 1, "url" => "https://a.example/"})
+      |> event(%{"event" => "url_changed", "webview" => 2, "url" => "https://b.example/"})
+      |> event(%{"event" => "tab_activated", "webview" => 2})
+
+    assert state.active == 2
+  end
+
+  test "closing the active webview clears active" do
+    state =
+      base_state(%{tabs: %{1 => "https://a.example/"}, active: 1})
+      |> event(%{"event" => "webview_closed", "webview" => 1})
+
+    assert state.active == nil
+    assert state.tabs == %{}
+  end
+
+  test "persist writes tab records and the active index to disk", %{path: path} do
+    base_state()
+    |> event(%{"event" => "url_changed", "webview" => 1, "url" => "https://a.example/"})
+    |> event(%{"event" => "url_changed", "webview" => 2, "url" => "https://b.example/"})
+    |> event(%{"event" => "url_changed", "webview" => 3, "url" => "https://c.example/"})
+    |> event(%{"event" => "tab_activated", "webview" => 2})
+
+    assert {:ok, raw} = File.read(path)
+    assert {:ok, %{"tabs" => tabs, "active" => 1}} = JSON.decode(raw)
+    refute Map.has_key?(JSON.decode!(raw), "urls")
+    assert Enum.map(tabs, & &1["url"]) == ["https://a.example/", "https://b.example/", "https://c.example/"]
+  end
+
+  test "load_disk reads tab records and rejects obsolete formats", %{path: path} do
+    File.write!(path, JSON.encode!(%{tabs: [%{url: "https://w.example/", profile: "work"}], active: 7}))
+    assert %{tabs: [%{url: "https://w.example/", profile: "work"}], active: 0} = Session.load_disk()
+    for obsolete <- [%{urls: ["https://a.example/"], active: 0}, ["https://a.example/"]] do
+      File.write!(path, JSON.encode!(obsolete))
+      assert %{tabs: [], urls: [], active: 0} = Session.load_disk()
+    end
+  end
+
+  test "hello adoption takes the engine's active tab" do
+    state =
+      base_state()
+      |> event(%{
+        "event" => "hello",
+        "tabs" => [
+          %{"id" => 1, "url" => "https://a.example/"},
+          %{"id" => 2, "url" => "https://b.example/"}
+        ],
+        "active" => 2
+      })
+
+    assert state.tabs == %{1 => "https://a.example/", 2 => "https://b.example/"}
+    assert state.active == 2
+  end
+
+  test "a new native process with a launch URL restores both profiles without discarding the launch page", %{path: path} do
+    saved = [%{url: "https://personal.example/", profile: "default"},
+             %{url: "https://work.example/", profile: "work"}]
+    state = base_state(%{disk: %{tabs: saved, urls: Enum.map(saved, & &1.url), active: 0, engine_session_id: "old"}})
+      |> event(%{"event" => "hello", "engine_session_id" => "new", "active" => 2,
+        "tabs" => [%{"id" => 2, "url" => "http://localhost:3000/", "profile" => "default"}]})
+    assert state.pending_restore == saved
+    assert state.active == 2
+    assert %{"tabs" => [_, _, _], "engine_session_id" => "new"} = JSON.decode!(File.read!(path))
+    # Even before any navigation completes, a quit retains the whole session.
+    {:reply, :ok, _} = Session.handle_call(:prepare_quit, self(), state)
+    assert length(JSON.decode!(File.read!(path))["tabs"]) == 3
+    state = state |> event(%{"event" => "tab_opened", "webview" => 3})
+                  |> event(%{"event" => "tab_opened", "webview" => 4})
+    assert state.pending_restore == []
+    assert state.tabs[2] == "http://localhost:3000/"
+    assert state.tabs[3] == "https://personal.example/"
+    assert state.profiles[4] == "work"
+    assert Session.load_disk().engine_session_id == "new"
+  end
+
+  test "backend reconnect to the same native process adopts live tabs without resurrecting closed ones" do
+    saved = [%{url: "https://closed.example/", profile: "default"}]
+    state = base_state(%{disk: %{tabs: saved, urls: [hd(saved).url], active: 0, engine_session_id: "same"}})
+      |> event(%{"event" => "hello", "engine_session_id" => "same", "active" => 8,
+        "tabs" => [%{"id" => 8, "url" => "https://live.example/", "profile" => "work"}]})
+    assert state.tabs == %{8 => "https://live.example/"}
+    refute Map.has_key?(state, :pending_restore)
+  end
+
+  test "launch matching preserves duplicate tabs and never matches across profiles" do
+    personal = %{url: "https://same.example/", profile: "default"}
+    work = %{url: personal.url, profile: "work"}
+    assert Session.missing_entries([personal, personal, work],
+      [%{"id" => 1, "url" => personal.url, "profile" => "default"}]) == [personal, work]
+  end
+
+  test "fresh-engine restore arms activation for the remembered active tab" do
+    state =
+      base_state(%{
+        tabs: %{
+          1 => "https://a.example/",
+          2 => "https://b.example/",
+          3 => "https://c.example/"
+        },
+        active: 3
+      })
+      |> event(%{"event" => "hello", "tabs" => [%{"id" => 1, "url" => nil}], "active" => 1})
+
+    # Active was the 3rd remembered tab: the 2nd open_tab after restore is it.
+    assert state.restore == %{remaining: 2}
+
+    state = event(state, %{"event" => "tab_opened", "webview" => 2})
+    assert state.restore == %{remaining: 1}
+
+    # The counter clears when the active tab's webview appears (and
+    # Surface.activate_tab is cast for it — dropped here, no engine).
+    state = event(state, %{"event" => "tab_opened", "webview" => 3})
+    assert state.restore == nil
+  end
+
+  test "restore of an already-visible active tab arms nothing" do
+    state =
+      base_state(%{
+        tabs: %{1 => "https://a.example/", 2 => "https://b.example/"},
+        active: 1
+      })
+      |> event(%{"event" => "hello", "tabs" => [%{"id" => 1, "url" => nil}], "active" => 1})
+
+    assert state.restore == nil
+  end
+
+  test "full-stack restore arms activation from the disk active index" do
+    state =
+      base_state(%{
+        disk: %{
+          tabs: Enum.map(["https://a.example/", "https://b.example/", "https://c.example/"], &%{url: &1, profile: "default"}),
+          urls: ["https://a.example/", "https://b.example/", "https://c.example/"],
+          active: 1
+        }
+      })
+      |> event(%{"event" => "hello", "tabs" => [%{"id" => 1, "url" => nil}], "active" => 1})
+
+    assert state.restore == %{remaining: 1}
+  end
+
+  test "full restart retains every saved URL before background pages navigate", %{path: path} do
+    saved = [%{url: "https://first.example/", profile: "default"},
+             %{url: "https://slow.example/", profile: "work"},
+             %{url: "https://unloaded.example/", profile: "default"}]
+    File.write!(path, JSON.encode!(%{tabs: saved, active: 1}))
+    state = base_state(%{disk: %{tabs: saved, urls: Enum.map(saved, & &1.url), active: 1}})
+      |> event(%{"event" => "hello", "tabs" => [%{"id" => 1, "url" => nil}], "active" => 1})
+    assert length(JSON.decode!(File.read!(path))["tabs"]) == 3
+    state = state
+      |> event(%{"event" => "url_changed", "webview" => 1, "url" => "https://first.example/"})
+      |> event(%{"event" => "tab_opened", "webview" => 2, "profile" => "work", "order" => [1, 2]})
+    assert state.restore == nil
+    {:reply, :ok, _} = Session.handle_call(:prepare_quit, self(), state)
+    assert JSON.decode!(File.read!(path))["tabs"] == Enum.map(saved, fn t -> %{"url" => t.url, "profile" => t.profile} end)
+    state = state |> event(%{"event" => "tab_opened", "webview" => 3, "order" => [1, 2, 3]})
+    assert state.tabs[2] == "https://slow.example/"
+    assert state.tabs[3] == "https://unloaded.example/"
+    assert state.pending_restore == []
+  end
+
+  test "tab_opened outside a restore leaves state alone" do
+    state = base_state() |> event(%{"event" => "tab_opened", "webview" => 5})
+    assert state.restore == nil
+  end
+
+  describe "profiles (restore_plan/2)" do
+    alias BowserBrain.Session
+
+    test "the first default-profile tab loads into the existing window; the rest open with their profile" do
+      entries = [
+        %{url: "https://w.example/1", profile: "work"},
+        %{url: "https://p.example/1", profile: "default"},
+        %{url: "https://p.example/2", profile: "default"}
+      ]
+
+      assert {"https://p.example/1", rest, 0} = Session.restore_plan(entries, 1)
+      assert Enum.map(rest, & &1.url) == ["https://w.example/1", "https://p.example/2"]
+      # active = the work tab: it is the FIRST open_tab -> 1 tab_opened to wait for
+      assert {_, _, 1} = Session.restore_plan(entries, 0)
+      # active = second default tab: second open_tab
+      assert {_, _, 2} = Session.restore_plan(entries, 2)
+    end
+
+    test "no default tab: the blank first webview stays and everything opens by profile" do
+      entries = [%{url: "https://w.example/1", profile: "work"}, %{url: "https://w.example/2", profile: "work"}]
+      assert {nil, ^entries, 2} = Session.restore_plan(entries, 1)
+    end
+
+
+  end
+end

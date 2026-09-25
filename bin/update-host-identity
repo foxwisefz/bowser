@@ -1,0 +1,67 @@
+#!/usr/bin/env python3
+"""Seal the restart boundary into release metadata before signing the app.
+
+Mach-O LC_UUID identifies linked code independently of signing timestamps.
+Everything except live renderers, the BEAM release and display version metadata
+contributes. Missing/unknown binary identities fail packaging rather than guess.
+"""
+import hashlib
+import json
+from pathlib import Path
+import plistlib
+import struct
+import sys
+
+
+def content_identity(path):
+    data = path.read_bytes()
+    if data[:4] == b'\xcf\xfa\xed\xfe':  # arm64 Mach-O, little endian 64-bit
+        count = struct.unpack_from('<I', data, 16)[0]
+        offset = 32
+        for _ in range(count):
+            command, size = struct.unpack_from('<II', data, offset)
+            if size < 8 or offset + size > len(data):
+                raise ValueError(f'invalid Mach-O: {path}')
+            if command == 0x1b and size == 24:  # LC_UUID
+                return 'uuid:' + data[offset + 8:offset + 24].hex()
+            offset += size
+        raise ValueError(f'Mach-O has no UUID: {path}')
+    if data[:4] in (b'\xca\xfe\xba\xbe', b'\xbe\xba\xfe\xca', b'\xfe\xed\xfa\xce', b'\xfe\xed\xfa\xcf'):
+        raise ValueError(f'unsupported Mach-O: {path}')
+    return 'sha256:' + hashlib.sha256(data).hexdigest()
+
+
+def host_identity(app, entitlements):
+    contents = app / 'Contents'
+    info = plistlib.loads((contents / 'Info.plist').read_bytes())
+    for key in ('CFBundleVersion', 'CFBundleShortVersionString', 'BowserHostIdentity'):
+        info.pop(key, None)
+    records = {'Info.plist': hashlib.sha256(plistlib.dumps(info, sort_keys=True)).hexdigest(),
+               'entitlements': content_identity(entitlements), 'identity-format': '1'}
+    excluded = ('_CodeSignature', 'Resources/CommandToolbar.bundle', 'Resources/SurfaceRenderer.bundle',
+                'Resources/runtime/brain')
+    for path in sorted(contents.rglob('*')):
+        relative = path.relative_to(contents).as_posix()
+        if any(relative == prefix or relative.startswith(prefix + '/') for prefix in excluded):
+            continue
+        if relative in ('Info.plist', 'Resources/runtime/VERSION'):
+            continue
+        if path.is_symlink():
+            raise ValueError(f'unexpected host symlink: {path}')
+        if path.is_file():
+            records[relative] = [content_identity(path), path.stat().st_mode & 0o111]
+    return hashlib.sha256(json.dumps(records, sort_keys=True).encode()).hexdigest()
+
+
+def main():
+    app, entitlements = map(Path, sys.argv[1:])
+    path = app / 'Contents/Info.plist'
+    info = plistlib.loads(path.read_bytes())
+    info['BowserLiveUpdates'] = 1
+    path.write_bytes(plistlib.dumps(info))
+    info['BowserHostIdentity'] = host_identity(app, entitlements)
+    path.write_bytes(plistlib.dumps(info))
+
+
+if __name__ == '__main__':
+    main()

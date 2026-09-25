@@ -1,0 +1,43 @@
+target/
+.DS_Store
+.build/
+_build/
+deps/
+/beam/tmp/
+
+# Compiler artifacts (swiftc side-products once committed by accident)
+*.o
+*.d
+*.swiftdeps
+*.swiftdeps~
+*.pcm
+
+# Python interpreter caches
+__pycache__/
+*.py[cod]
+
+# Private services and local project memory are maintained separately.
+/server/
+/website/
+/marketing/
+/.beads/
+**/.env
+**/.envrc
+*.key
+*.p12
+
+# Private validation recordings; regenerate locally.
+/experiments/backend-handoff/local-result.json
+/experiments/backend-handoff/x-result.json
+/experiments/controller-handoff/result.json
+/experiments/installed-handoff/local-result.json
+/experiments/installed-handoff/x-result.json
+/experiments/native-modules/results/background-load-1.json
+/experiments/native-modules/results/background-load-2.json
+/experiments/native-modules/results/background-load-3.json
+/experiments/native-modules/results/draft-rollback.json
+/experiments/native-modules/results/fullscreen-scroll.json
+/experiments/native-modules/results/fullscreen.json
+/tests/native-surfaces/results/drag-replacement.json
+/tests/native-surfaces/results/signed-replacement.json
+/tests/native-toolbar/results/signed-replacement.json

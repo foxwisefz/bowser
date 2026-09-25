@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Extend the existing icon system with a legible channel badge.
+set -euo pipefail
+REPO="$(cd "$(dirname "$0")/.." && pwd -P)"
+[ "$#" = 1 ] || { echo 'usage: build-staging-icon OUTPUT.icns' >&2; exit 2; }
+ICON_TMP="$(mktemp -d)"
+trap 'rm -rf "$ICON_TMP"' EXIT
+mkdir -p "$ICON_TMP/Staging.iconset"
+swift "$REPO/bin/render-staging-icon.swift" "$REPO/assets/AppIcon.png" "$ICON_TMP/Staging.iconset"
+iconutil --convert icns --output "$1" "$ICON_TMP/Staging.iconset"

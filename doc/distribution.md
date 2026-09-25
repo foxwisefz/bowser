@@ -1,0 +1,191 @@
+# Desktop DMG
+
+For the complete GitHub secrets, container and Ubuntu setup, see
+[release setup](release-setup.md).
+
+`bin/install` produces a complete unpublished stage and prints its path.
+Package that exact pair without accessing profile, session or credential data:
+
+```sh
+bin/package-dmg /path/to/updates/build.ABC123 /tmp/Bowser.dmg
+```
+
+The image contains `Bowser.app` and an Applications shortcut. The app includes
+its BEAM release and native helpers in `Contents/Resources/runtime`; clean
+machines do not need Elixir, Python, developer tools, or a preinstalled runtime.
+User data remains under `~/.bowser`.
+
+By default, local packaging uses ad-hoc signing without notarization. `BOWSER_SIGN_IDENTITY` selects a
+Developer ID Application identity. Set `BOWSER_NOTARIZE=1` and
+`BOWSER_NOTARY_PROFILE` to require Apple acceptance and stapling. Optional
+`BOWSER_SIGN_KEYCHAIN` selects a dedicated keychain. Signed builds enable hardened
+runtime and secure timestamps; only `beam.smp` receives the JIT entitlement.
+The app is signed, notarized and stapled before DMG creation. The final DMG is
+then signed, notarized, stapled and assessed by Gatekeeper before update hashing.
+Never modify the DMG after generating its update manifest.
+
+## Signed update channel
+
+The native app checks `https://assets.bowser.app/updates/stable.json` at startup at most
+once daily (also while it remains open), and from **Check for Updates…**. It verifies an Ed25519 signature
+against the public key embedded in the installed app, checks build ordering,
+macOS compatibility and expiry, then automatically downloads verified newer releases. It verifies the
+DMG's signed length and SHA-256 before mounting it read-only and checking the
+bundle signature/build. It publishes the native UI modules for live loading and
+asks the backend host to perform a compatible handoff. Running hosts enforce
+signature, Team ID, ABI, dependency and module-loading limits; active editing
+can defer a UI swap. The complete app/runtime remains staged for the next normal
+quit, so host changes and incompatible components activate only after Bowser and
+saved apps quit. Current browsing is preserved. Prepared builds are remembered to
+avoid downloading them again while the installed host still has its old build
+number. Automatic checks continue discovering newer releases even while an earlier
+release is staged. A fully applied release shows a brief “Bowser updated” notice;
+mixed releases offer “Restart to finish updating” after allowing a minute for live
+adoption. Manual checks report current adoption or open the restart offer.
+
+`bin/package-dmg` seals `BowserHostIdentity` and `BowserLiveUpdates` into the signed
+app metadata. The host identity covers linked native code (Mach-O UUIDs), shared
+state libraries, runtime helpers, launcher scripts, entitlements and other resources.
+It excludes the live renderer bundles, BEAM release, signing timestamps and display
+version fields. A release is fully live only when that identity matches the running
+app, both renderers have actually adopted the expected generations in every slot,
+and the backend handoff committed to the expected runtime. Missing metadata,
+changed host code or deferred/rejected components require restart; publication alone
+never counts as success. UI swaps retain existing interaction and health gates.
+
+Public release preparation explicitly opts into live handoff with `publish ... --live`.
+`backup_required` remains true: the final on-disk app/runtime replacement still waits
+for all data users to quit, takes a verified backup and preserves the previous pair.
+Compatible backend handoffs use the existing checkpoint, journal and rollback
+protocol. Old hosts without live capability and pinned staging hosts refuse the
+handoff. Local full installs remain offline; `bin/install --native-only` remains the
+separate development renderer path.
+
+Changes to the updater or native host itself require restart. The staged full
+bundle is finalized on a normal quit even after a fully live update. Cancellation
+refuses live-enabled updates because components may already be active; finish them
+with a normal quit or the restart offer.
+
+Create a signing key **once on the release signing machine**, outside the repo:
+
+```sh
+bin/sign-update --generate-key /secure/path/bowser-update.key
+# The command prints the PUBLIC key. Keep the private file backed up securely.
+BOWSER_UPDATE_PUBLIC_KEY=PUBLIC_BASE64_KEY bin/install
+bin/package-dmg /path/to/updates/build.ABC123 /tmp/Bowser.dmg
+bin/sign-update /secure/path/bowser-update.key /tmp/Bowser.dmg VERSION BUILD 15 /tmp/stable.json
+```
+
+Use the exact version and build in the packaged app's Info.plist. The installed
+app must contain the public key to verify updates. Builds without that key
+skip background checks and show an unavailable message for manual checks.
+Never place the private key in an image, app, server directory or repository.
+A replacement key must be delivered through an already trusted release.
+
+The manifest names `https://assets.bowser.app/releases/BUILD/Bowser.dmg`.
+The desktop workflow publishes the exact DMG and signed manifest to R2. It
+verifies the uploaded image before updating the feed, and preserves build-specific
+objects. The website downloads `https://assets.bowser.app/Bowser.dmg`.
+See [R2 setup](release-setup.md#r2-assets-setup) for the bucket-scoped credentials.
+No release files are hosted by the Phoenix server.
+
+Manifests expire after 30 days; re-sign the current release before expiry.
+Rollbacks require a **higher build number** signed release. The updater keeps
+`.previous` copies for local recovery.
+
+Validation: `swift test --package-path shell --filter UpdateTests` covers signed
+metadata, wrong-key/tamper rejection, expiry, downgrade prevention and image
+size/hash checks. `tests/test_apply_update.py` covers staged activation/rollback.
+
+## GitHub Actions builds
+
+`.github/workflows/desktop-release.yml` builds on GitHub's Apple Silicon
+`macos-26` runner. Run **Actions → Build desktop release → Run workflow**.
+The workflow tests the release contracts, creates a
+fresh standalone app/runtime, signs and notarizes `Bowser.dmg`, signs `stable.json`, and
+uploads both plus `SHA256SUMS` as workflow artifacts and a **draft GitHub Release**.
+On `main`, the following `publish-assets` job publishes to R2 automatically;
+the GitHub draft does not hold back the public download or update feed.
+Release identities are generated automatically; existing release assets are not overwritten.
+[GitHub runner reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
+
+Create a GitHub environment named `release` and add its secret
+`BOWSER_UPDATE_PRIVATE_KEY_BASE64`. Generate the key once with `bin/sign-update
+--generate-key /secure/path/bowser-update.key`; then set the secret without
+printing its value:
+
+```sh
+base64 < /secure/path/bowser-update.key | tr -d '\n' | gh secret set BOWSER_UPDATE_PRIVATE_KEY_BASE64 --env release
+```
+
+Keep an encrypted backup of that same private key outside GitHub. The workflow
+derives the matching public key and embeds it in every build, restores the private
+key into a mode-0600 temporary file, and removes it afterward. The key is never
+included in artifacts. Restrict the `release` environment to trusted release
+branches. [GitHub Actions secrets](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-secrets).
+
+Run **Build desktop release → Run workflow** with no version input. Each run
+uses its UTC timestamp and source commit hash for the release tag and artifact
+name (for example `build-20260914193000-a067384c1234`). The app version is the
+numeric UTC date, such as `2026.9.14`; the updater compares the timestamp build
+number, so multiple releases on the same day remain ordered. Rebuilding the
+same commit produces a new release identity.
+
+`bin/install --stage-only` is the build entry point. It always uses a new temporary
+home, reads no installed runtime, and does not publish a pending update or register
+LaunchAgents. `BOWSER_VERSION` and `BOWSER_BUILD` supply artifact identity;
+`BOWSER_STAGE_FILE` receives the completed stage path for subsequent packaging.
+
+The release workflow **requires Developer ID signing and notarization**; missing
+credentials, rejection, timeout, stapling failure or Gatekeeper rejection stops
+it before artifacts or a draft release are uploaded. Local packaging without these
+options remains ad-hoc signed. This workflow uploads release assets directly to R2;
+it does not connect to Ubuntu or change DNS. The updater permits only the exact
+build-specific HTTPS URL on `assets.bowser.app` and rejects redirected downloads.
+
+## Apple credentials
+
+Bowser uses bundle ID `com.foxwiseai.bowser`; saved apps use
+`com.foxwiseai.bowser.site.<id>`.
+
+In the same GitHub `release` environment, configure:
+
+| Secret | Value |
+| --- | --- |
+| `APPLE_CERTIFICATE_BASE64` | Base64 of an exported Developer ID Application `.p12`, including its private key |
+| `APPLE_CERTIFICATE_PASSWORD` | Password protecting that `.p12` |
+| `APPLE_SIGN_IDENTITY` | Exact `Developer ID Application: Company or Name (TEAMID)` identity |
+| `APPLE_ID` | Apple Developer account email used for notarization |
+| `APPLE_TEAM_ID` | Team associated with the Developer ID certificate |
+| `APPLE_APP_SPECIFIC_PASSWORD` | App-specific password for notarization; not your Apple account password |
+
+Apple Developer Program membership and a Developer ID Application certificate
+are required. The displayed signing name comes from that certificate; setting
+a company bundle ID alone does not change Apple's displayed developer name.
+Keep credentials in GitHub secrets. The setup script imports into
+a temporary keychain, grants codesign access, stores the notarization profile
+there, and deletes the keychain and certificate file after the job. It does not
+use or modify the login keychain.
+
+Update signing uses the separate `BOWSER_UPDATE_PRIVATE_KEY_BASE64` secret.
+Notarization proves Apple accepted the signed application; Ed25519 authenticates
+the final DMG and update metadata to Bowser. Neither replaces the other.
+
+A notary submission waits up to 25 minutes. On timeout Apple may continue working;
+inspect the submission with `xcrun notarytool info`/`log` using the same account,
+then rerun the workflow after resolving any errors. A timeout never publishes
+an unverified release.
+
+References: [Apple notarization requirements](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution),
+[custom notarization workflows](https://developer.apple.com/documentation/security/customizing-the-notarization-workflow),
+[JIT entitlement](https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.security.cs.allow-jit).
+
+## ModSmith CLI dependency
+
+The desktop bundle includes the browser and BEAM runtime. ModSmith additionally
+requires an installed Claude Code CLI, including when a router endpoint/API key
+is configured. Generation and independent auditing use the same CLI discovery:
+inherited PATH first, then `~/.local/bin`, `/opt/homebrew/bin`, and `/usr/local/bin`.
+This works with Finder launches that omit user-installed commands from PATH.
+Bowser does not bundle or silently install Claude Code. After installing the CLI,
+retry ModSmith; executable discovery happens for each request.

@@ -1,0 +1,402 @@
+[
+{
+  "name": "mod_diagnostics",
+  "description": "Read bounded runtime receipts for an owned Elixir mod: page delivery/callback completion, Jev outcomes, and instrumented application counts. No prompts or page content. New receipts are chronological; compare timestamps and webview for the current run. Empty receipts do not prove failure; all-keep and zero hidden are valid outcomes. Desktop only.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "mod": {
+        "type": "string",
+        "description": "Elixir module name, e.g. AmazonBrandFilter"
+      }
+    },
+    "required": [
+      "mod"
+    ],
+    "additionalProperties": false
+  }
+},
+  {
+    "name": "jev",
+    "description": "Evaluate explicitly supplied state with typed Jev questions through the authenticated Bowser server. Available during desktop ModSmith runs to test classification; installed Elixir mods call BowserBrain.Jev.evaluate/2 at runtime for new content. Not available in saved-app ModSmith runs. Sends that state to TypeSafe; never include secrets or unrelated page data. Uses the account allowance. Up to 16 questions and 32 KiB total. Returns answers keyed by question ID: noul probability; choice/probabilities/confidence; or score/probabilities/confidence. Classification is probabilistic and cannot establish AI authorship.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "type": [
+            "string",
+            "object",
+            "array"
+          ]
+        },
+        "questions": {
+          "type": "object",
+          "minProperties": 1,
+          "maxProperties": 16,
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "noul",
+                  "choice",
+                  "score"
+                ]
+              },
+              "instructions": {
+                "type": [
+                  "string",
+                  "object",
+                  "array"
+                ]
+              },
+              "criteria": {
+                "type": [
+                  "object",
+                  "array"
+                ]
+              }
+            },
+            "required": [
+              "type",
+              "instructions"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "state",
+        "questions"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "website_layout",
+    "description": "Compose a tree of live website views in the selected browser window. get returns same-window tabs, visible panes, active tab, and tree with current divider weights. create_tab opens a background http(s) page and returns created ID. set applies tree atomically: nest row/column containers with webview leaves, relative weights, minimum sizes and per-container resizable dividers. reset retains all tabs and shows the active page. IDs must be unique and belong to this window/profile. Structural budget: 16 levels, 256 total nodes. No saved apps. Runtime changes are not file Undo; durable mods provide apply/reset controls using Surface.layout and Layout builders.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "get",
+            "create_tab",
+            "set",
+            "reset"
+          ]
+        },
+        "url": {
+          "type": "string",
+          "description": "Required for create_tab: http(s) URL."
+        },
+        "tree": {
+          "$ref": "#/$defs/node",
+          "description": "Required for set. A container tree or a single webview leaf."
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "additionalProperties": false,
+      "$defs": {
+        "node": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "const": "webview"
+                },
+                "webview": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "weight": {
+                  "type": "number",
+                  "exclusiveMinimum": 0,
+                  "description": "Relative size within the parent; default 1."
+                },
+                "min_width": {
+                  "type": "number",
+                  "minimum": 0,
+                  "description": "Minimum width in window points; default 0."
+                },
+                "min_height": {
+                  "type": "number",
+                  "minimum": 0,
+                  "description": "Minimum height in window points; default 0."
+                }
+              },
+              "required": [
+                "type",
+                "webview"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "enum": [
+                    "row",
+                    "column"
+                  ]
+                },
+                "children": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": {
+                    "$ref": "#/$defs/node"
+                  }
+                },
+                "resizable": {
+                  "type": "boolean",
+                  "default": true
+                },
+                "weight": {
+                  "type": "number",
+                  "exclusiveMinimum": 0,
+                  "description": "Relative size within the parent; default 1."
+                },
+                "min_width": {
+                  "type": "number",
+                  "minimum": 0,
+                  "description": "Minimum width in window points; default 0."
+                },
+                "min_height": {
+                  "type": "number",
+                  "minimum": 0,
+                  "description": "Minimum height in window points; default 0."
+                }
+              },
+              "required": [
+                "type",
+                "children"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "native_screenshot",
+    "description": "Capture the selected visible browser window including native toolbars. Returns an image and window id; coordinates are points from top-left. Requires macOS screen capture permission; errors are not visual verification.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
+    "name": "native_click",
+    "description": "Click a native browser control using coordinates and window id from the latest screenshot. Website content is excluded. Screenshot again to verify the result; dispatch alone does not prove success.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "x": {
+          "type": "number"
+        },
+        "y": {
+          "type": "number"
+        },
+        "window": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "x",
+        "y",
+        "window"
+      ]
+    }
+  },
+  {
+    "name": "put_asset",
+    "description": "Save self-contained SVG source in this mod's owned assets with Undo history. Returns image_path for View.image(path: image_path, size: 48). No external references or scripts; max 200KB. Reference installed relative path in final files.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "content": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "content"
+      ]
+    }
+  },
+  {
+    "name": "toolbars",
+    "description": "Read effective native edge toolbar definitions recorded by the brain. Confirms state, not rendered pixels.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
+    "name": "put_mod",
+    "description": "Install or update an Elixir mod draft during an active ModSmith run, recording Undo history. Calling this tool automatically runs an independent tool-free source audit before any write or compilation. Submit the draft directly: there is no separate audit tool or prior approval step for the generator. Explicit exact-source approval is required; failure or uncertainty is returned by this tool and blocks installation. Accepted mods retain OS privileges. Returns compilation and startup/reload results; failed compilation or state migration leaves the active mod unchanged. Use state_version/0, pure migrate_state/2 returning {:ok, state} or {:error, reason}, and validate_state/1 returning :ok or {:error, reason} for state-shape changes. Migration runs without browser services and accepts data-only state. Fix errors, then verify runtime behavior. Use shell_theme for native theme state. Not available for saved apps. Reference the installed file by path in the final envelope; omit unchanged content.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Filename only, e.g. og_aol.ex"
+        },
+        "content": {
+          "type": "string",
+          "description": "Elixir source with a direct use BowserBrain.Mod in a top-level defmodule. For site scope, every mod must directly declare the matching literal host; quoted examples do not count. This validation is not an execution sandbox. Use the ModSmith guide for BowserBrain.View builders and native renderer availability. Compose View.state scopes with independent editor, preview, selector, switch, flow and action nodes. command maps (set/toggle/wrap/insert/select/undo/redo/snapshot/submit/reset/discard) target the nearest scope. Actions choose icons/styles/layout; the editor has no bundled toolbar. Private data stays in native state/events, never page scripts. Native View.palette/2,3 scopes semantic colors and light/dark maps with optional high_contrast_light/high_contrast_dark. Native toolbar style also accepts palette and adaptive foreground/background/border/accent. Prefer adaptive colors; fixed hex stays fixed. Side toolbar widths are 16..800 points. profile_avatar(id, badge: true, size: 18) adds a circular backing; its native renderer must support badge. No remote avatar assets are fetched."
+        }
+      },
+      "required": [
+        "name",
+        "content"
+      ]
+    }
+  },
+  {
+    "name": "shell_theme",
+    "description": "Read the effective native browser theme recorded by the brain. Empty means native defaults. The compact notch keeps core navigation and the favicon visible, reveals the title on hover, and places profile identity in its own right notch. The page has no reserved toolbar inset. This confirms theme state, not visual rendering.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
+    "name": "list_tabs",
+    "description": "List open tabs (webview id + url) and which is active.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
+    "name": "page_eval",
+    "description": "Evaluate JavaScript in a loaded tab and return the result. webview 0 = first tab; use list_tabs ids to target. Deferred or memory-unloaded tabs return tab_unloaded; activate the tab and wait for load_status 2 before inspecting it.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "js": {
+          "type": "string"
+        },
+        "webview": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "js"
+      ]
+    }
+  },
+  {
+    "name": "page_html",
+    "description": "outerHTML of the first element matching a CSS selector (truncated at 20kB). Ground truth for what's really in the DOM. Deferred or memory-unloaded tabs return tab_unloaded; activate the tab and wait for load_status 2 before inspecting it.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "selector": {
+          "type": "string"
+        },
+        "webview": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "selector"
+      ]
+    }
+  },
+  {
+    "name": "put_payload",
+    "description": "Install (or overwrite) a persistent site payload at sites/<host>/<name>.css|.js \u2014 applies within ~1s after a page reload. JavaScript defaults to an isolated world; declare // bowser-world: page as the first nonblank line (after any host-managed metadata) only for required website-global access. Native code enforces host targeting. Use to TEST a draft live, then verify with page_eval; page_eval inspects the page world, so isolated mod globals are not visible there.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "host": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "content": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "host",
+        "name",
+        "content"
+      ]
+    }
+  },
+  {
+    "name": "list_mods",
+    "description": "Existing mods and site payloads (available to this ModSmith run): path, on/off, host scope, one line on what it does. Check this BEFORE writing anything \u2014 modify what exists instead of duplicating it.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
+    "name": "read_mod",
+    "description": "Full source of one existing mod or payload by catalog path (mods/<name>.ex or sites/<host>/<name>.css|.js). Disabled (.off) files are found by their plain name too. Only files available to this run can be read.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path"
+      ]
+    }
+  },
+  {
+    "name": "store_get",
+    "description": "Read a mod's durable Store (BowserBrain.Store): mod = the defmodule name; omit key for everything it stored. The module must be an existing mod available to this run.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "mod": {
+          "type": "string"
+        },
+        "key": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "mod"
+      ]
+    }
+  },
+  {
+    "name": "store_put",
+    "description": "Write one key into a mod's durable Store \u2014 SEED state (e.g. a follow with a 4-day-old timestamp) to verify time-based behavior now. value is any JSON. Only data owned by a mod available to this run can be changed.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "mod": {
+          "type": "string"
+        },
+        "key": {
+          "type": "string"
+        },
+        "value": {}
+      },
+      "required": [
+        "mod",
+        "key",
+        "value"
+      ]
+    }
+  }
+]

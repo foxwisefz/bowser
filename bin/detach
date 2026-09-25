@@ -1,0 +1,4 @@
+#!/bin/sh
+# Development entry point. Installed builds contain the signed native executable.
+ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+exec "$ROOT/shell/.build/debug/BowserRuntimeTool" detach "$@"

@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Package the opt-in mod as one self-contained source file for the live loader.
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
+DEST="${BOWSER_HOME:-$HOME/.bowser}/mods/topic_filter.ex"
+if [ "${1:-}" = --output ]; then
+  [ "$#" = 2 ] || { echo 'usage: bin/install-topic-filter [--output path]' >&2; exit 2; }
+  DEST="$2"
+elif [ "$#" != 0 ]; then
+  echo 'usage: bin/install-topic-filter [--output path]' >&2; exit 2
+fi
+python3 - "$ROOT" "$DEST" <<'PY'
+import base64, os, pathlib, sys, tempfile
+root, dest = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+policy = (root / 'beam/lib/bowser_brain/topic_filter.ex').read_text()
+script = base64.b64encode((root / 'beam/priv/topic-filter.js').read_bytes()).decode()
+start = policy.index('    path = Path.join(to_string(:code.priv_dir(:bowser_brain)), "topic-filter.js")')
+policy = policy[:start] + policy[start:].replace('    path = Path.join(to_string(:code.priv_dir(:bowser_brain)), "topic-filter.js")\n', '', 1).replace('File.read!(path)', 'Base.decode64!("' + script + '")', 1)
+source = policy + '\n' + (root / 'beam/example_mods/topic_filter.ex').read_text()
+dest.parent.mkdir(parents=True, exist_ok=True)
+fd, temporary = tempfile.mkstemp(prefix='.topic-filter-', dir=dest.parent)
+try:
+    with os.fdopen(fd, 'w') as output:
+        output.write(source)
+    os.replace(temporary, dest)
+finally:
+    if os.path.exists(temporary):
+        os.unlink(temporary)
+print(f'Installed Topic Filter: {dest}')
+print('Open :topic-filter in Bowser. New installs start disabled; existing preferences are preserved.')
+PY

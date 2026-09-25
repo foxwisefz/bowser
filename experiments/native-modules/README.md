@@ -1,0 +1,164 @@
+# Native module replacement experiment
+
+Run `experiments/native-modules/run` from a logged-in macOS desktop with Xcode
+and ffmpeg. It builds an isolated app and five Swift dylibs under a fresh
+`/tmp/bowser-native-modules.*` directory, generates a local video, opens the
+fixture, runs assertions, and exits. No installed Bowser binary, profile,
+BEAM process, or session store is accessed. Swift and ffmpeg are experiment
+build tools; this adds no shipped helper runtime.
+
+## Boundary under test
+
+The stable host owns NSApplication, NSWindow, WKWebView, and the loaded page.
+Versioned Swift modules own a small AppKit view and its button behavior. V1
+increments by one; V2 changes the label/color and increments by two. A C ABI
+exports version/create/step/read/health/destroy functions. Only scalars, a C callback,
+and an explicitly retained Objective-C view pointer cross the boundary. Library mapping and symbol lookup run on a dedicated serial worker queue.
+UI calls and authority transfers happen on the main actor. Module initializers
+must not touch AppKit or synchronously wait for the main thread.
+
+Before replacement, the host reads the old counter, checks ABI compatibility,
+and prepares a candidate view. Once preparation succeeds it switches the
+active generation and view, then checks candidate health before destroying the
+old view. Explicit health failure restores the previous view and authority.
+Generation IDs are never reused, including after rollback. Deliberately delayed
+callbacks from retired generations are rejected. Dylib handles stay mapped;
+this is object retirement, **not safe unloading of arbitrary Swift code**.
+Each actual build must have a unique Swift module name and immutable path.
+
+A multiline draft and selection are seeded into a textarea without submitting
+or saving them. Both must survive every replacement and rollback.
+
+V2 and the rejection fixtures are first loaded while the video is fullscreen.
+Twelve replacements alternate two compiled implementations; twenty-four
+candidate attempts test incompatible ABI and failed preparation; twelve more
+attempts activate an unhealthy module and roll back to the retained old view. Assertions
+cover changed native button behavior, preserved counter, stale callbacks,
+released retired views, page/player/window identity, JS closure activity,
+scroll, fullscreen focus, advancing playback, interruption events, and video
+frame-callback gaps below 250 ms. `loadMS` measures loading four candidate
+libraries. `swapMS` measures view/authority transfer and old-view destruction,
+excluding loading and candidate preparation; it is not an end-to-end update
+latency claim. `preparationAndSwapMS` includes every complete replacement
+attempt, including preparation, rejection, health checks and retirement.
+
+## What this does not prove
+
+This does not replace the main executable, AppKit, or WebKit, nor migrate
+arbitrary Swift object graphs. It does not hot-patch existing methods. Code in
+the stable owner still needs an ordinary restart to change. Module crashes or
+memory corruption can kill the host; rejection tests cover explicit errors,
+not crash isolation or recovery after corrupting shared state. State migration
+here is one integer, not the entire browser model. There is no production
+update manifest, event journal, signing admission policy, resource migration,
+or BEAM/module compatibility protocol in this fixture.
+
+Retaining old library mappings trades restart avoidance for growth in mapped
+code/metadata as distinct builds accumulate. This run alternates two versions;
+it does not establish a bound for months of updates. The video is local and
+muted, not live X, DRM, a call, or an audible media continuity test.
+
+The fixture is ad hoc signed. A shipped host must validate its own signed
+modules before loading and preserve hardened-runtime library validation.
+Apple documents that enabled library validation accepts Apple code or code
+signed by the same Team ID as the host:
+[Code Signing Tasks](https://developer.apple.com/library/archive/documentation/Security/Conceptual/CodeSigningGuide/Procedures/Procedures.html).
+Developer-ID signing/notarization under Bowser's actual distribution settings
+remains a separate production gate.
+
+## Product direction
+
+Keep common UI changes in live surface trees. For genuinely new native
+behavior, extract a deliberately narrow module API around a small stable
+window/page owner. The experiment only establishes feasibility at that
+boundary; it is not installed as Bowser's updater.
+
+## Recorded results (2026-09-09)
+
+`results/fullscreen-scroll.json` records a passing run: 12 swaps, 24 rejected
+candidates, counter 18, 11 stale events rejected, and 12 old views released.
+The same window/page/player stayed fullscreen and playing. The page scrolled
+to 120 before fullscreen and returned to 120 after exit. There were no media
+interruption events. Individual view transfers were under 1 ms; loading three
+candidate libraries took 1.317 seconds. Loading currently runs on the main
+thread, so native interaction can stall even while WebKit media keeps playing.
+Moving or preparing this work safely is a separate engineering requirement.
+
+`results/fullscreen.json` is the earlier passing continuity run.
+`results/focus-failure.json` preserves an intervening failure of the combined
+window/page/focus assertion. Its cause was not established; it may be fixture,
+desktop interference, or a lifecycle issue. A repeat with expanded diagnostics
+passed without changing the replacement logic. Do not describe these results
+as reliable across all runs. The runner also now explicitly starts playback
+instead of relying on autoplay after one startup timeout.
+
+Production admission, cold-load responsiveness, and the intermittent focus
+failure are tracked in **bowser-browser-kgu9**. The live UI expansion is
+**bowser-browser-6k1a**; this isolated experiment is **bowser-browser-d4lb**.
+
+## Draft and rollback extension (2026-09-13)
+
+`results/draft-rollback.json` records 12 successful replacements, 24 rejected
+preparation/ABI candidates and 12 post-activation health rejections. Each health
+rejection retains and restores the previous native view and counter; candidate
+generation numbers are never reused. The final counter was 18, 23 delayed
+callbacks were rejected, and all 24 retired/rejected views were released.
+The exact page and player survived, with the unsent multiline draft and its
+selection unchanged. Playback advanced without interruption events; the largest
+observed frame callback gap in this run was 51 ms. Successful view-transfer
+measurements were below 1 ms (excluding loading/preparation/rollback).
+
+This is **not yet a reliable seamless updater**. The first run failed the
+250 ms video frame-gap threshold (`results/draft-rollback-frame-gap.json`).
+Its detailed timings were not captured, so the cause is not established.
+The diagnostic rerun passed but loading four libraries still occupied the main
+thread for 1.56 seconds. The runner now writes `measurements.json` before final
+continuity assertions so later failures retain timing and page-state evidence.
+Cold-load responsiveness and repeatability remain production gates under
+`bowser-browser-kgu9`. Rollback covers an explicit immediate health rejection,
+not a crash, arbitrary side effects, or failure long after admission.
+
+Reproduce with `experiments/native-modules/run`. This extension is tracked as
+`bowser-browser-4mnc`; it changes only the isolated experiment, not installed Bowser.
+
+## Background loading experiment (2026-09-13)
+
+The host now awaits `dlopen` and `dlsym` on a dedicated serial worker while
+retaining the old active toolbar. An immutable module record crosses back to
+the main actor; view creation, button actions, health admission, rollback and
+view destruction stay there. Handles remain mapped until exit. This depends on
+the controlled fixture modules having no UI work in load-time initializers;
+it is not permission to load arbitrary Swift/AppKit modules on a worker.
+
+A 10 ms main-actor heartbeat records actual scheduling gaps throughout loading.
+It dispatches the old toolbar's native button action once and checks that the
+same toolbar stays authoritative; the resulting counter must survive later
+swaps and rollback. The button uses normal target/action dispatch instead of
+`performClick`, avoiding that method's artificial highlight delay. This tests
+native action responsiveness, not physical mouse input, typing or dragging.
+The heartbeat must stay below 100 ms; this is an experiment failure threshold,
+not a native-feel latency target. Fullscreen video/draft/selection assertions
+remain enabled, with the existing 250 ms frame-callback gap threshold.
+
+Fresh-process run results are recorded in `results/background-load-*.json`.
+Each run compiles fresh libraries into a distinct temporary directory. This
+exercises first loading into a new process, not a guaranteed cold filesystem
+cache. Timings are local observations, not general performance guarantees.
+
+Tracked as `bowser-browser-7vaw`. No installed browser or updater is changed.
+
+Measured results (three runs):
+
+| Run | Four-library load | Maximum main heartbeat gap | Maximum full replacement attempt | Maximum video frame gap |
+| --- | ---: | ---: | ---: | ---: |
+| 1 | 1640 ms | 12.0 ms | 6.4 ms | 56 ms |
+| 2 | 1551 ms | 11.6 ms | 6.3 ms | 51 ms |
+| 3 | 1546 ms | 11.7 ms | 7.2 ms | 51 ms |
+
+All runs passed 12 swaps, 12 health rollbacks and 24 preparation/ABI rejections,
+with unchanged draft/selection and the same page/player/window. The old toolbar
+accepted one action during loading; final counter 19 includes that increment.
+The full-attempt maximum includes initial view creation. These results support
+the worker-loading boundary for these modules; production signed-module
+admission, real typing/dragging latency and long-lived module retirement remain
+separate gates (`bowser-browser-kgu9`).

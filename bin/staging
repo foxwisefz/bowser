@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Staging is an installed channel of Bowser, with the same identity and data.
+set -euo pipefail
+REPO="$(cd "$(dirname "$0")/.." && pwd -P)"
+STATE="${BOWSER_HOME:-$HOME/.bowser}"
+case "${1:-help}" in
+  prod) exec open -n /Applications/Bowser.app;;
+  start) exec open -n /Applications/Bowser-staging.app;;
+  update) shift; exec "$REPO/bin/install" --staging "$@";;
+  backups) find "$STATE/backups" -mindepth 2 -maxdepth 2 -name snapshot.json -print;;
+  restore|cancel)
+    action="$1"; shift
+    (cd "$REPO/shell" && swift build --product BowserRuntimeTool)
+    tool="$REPO/shell/.build/debug/BowserRuntimeTool"
+    if [ "$action" = restore ]; then
+      [ "$#" = 1 ] || { echo 'usage: bin/staging restore BACKUP_DIRECTORY' >&2; exit 2; }
+      exec "$tool" restore-backup "$1"
+    fi
+    exec "$tool" cancel-update "$STATE";;
+  *) echo 'usage: bin/staging prod | start | update | backups | cancel | restore BACKUP_DIRECTORY';;
+esac

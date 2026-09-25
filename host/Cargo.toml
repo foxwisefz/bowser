@@ -1,0 +1,31 @@
+[package]
+name = "bowser-host"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "bowser_host"
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[[bin]]
+name = "bowser-host"
+path = "src/main.rs"
+
+[dependencies]
+# Pinned exactly: servo's embedding API is pre-1.0 and moves fast.
+servo = "=0.5.0"
+embedder_traits = { package = "servo-embedder-traits", version = "=0.5.0" }
+
+# Versions matched to servo 0.5.0's workspace pins.
+cookie = "=0.18.2"
+dpi = "0.1"
+euclid = "0.22"
+raw-window-handle = "0.6"
+rustls = "0.23"
+serde_json = "1"
+tracing = "0.1"
+url = "2.5"
+webrender_api = "0.70"
+winit = "0.30.13"

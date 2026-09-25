@@ -1,0 +1,146 @@
+defmodule BowserBrain.ProfilesTest do
+  use ExUnit.Case, async: false
+
+  alias BowserBrain.Profiles
+
+  setup do
+    path = Path.join(System.tmp_dir!(), "profiles-#{System.unique_integer([:positive])}.json")
+    previous = Application.get_env(:bowser_brain, :profiles_path)
+    Application.put_env(:bowser_brain, :profiles_path, path)
+    on_exit(fn ->
+      if previous, do: Application.put_env(:bowser_brain, :profiles_path, previous), else: Application.delete_env(:bowser_brain, :profiles_path)
+      File.rm(path)
+    end)
+    :ok
+  end
+
+  test "the default profile always exists and comes first" do
+    assert [%{"id" => "default", "name" => "Default", "character" => "bowser"}] = Profiles.list()
+    {:ok, _} = Profiles.create("Work", tint: "blue", icon: "🧪")
+    assert ["default", "work"] = Enum.map(Profiles.list(), & &1["id"])
+  end
+
+  test "loading preserves a configured default profile" do
+    File.write!(Profiles.path(), JSON.encode!([%{"id" => "default", "name" => "Personal", "uuid" => nil, "tint" => "#ab0500"}]))
+    assert %{"id" => "default", "name" => "Personal", "uuid" => nil, "tint" => "#ab0500"} = Profiles.get("default")
+  end
+
+  test "create slugs the id, normalizes the tint, mints a uuid; duplicates refused" do
+    {:ok, p} = Profiles.create("Side Hustle!", tint: "#ABC", icon: "💼")
+    assert %{"id" => "side-hustle", "name" => "Side Hustle!", "tint" => "#aabbcc", "icon" => "💼"} = p
+    assert String.match?(p["uuid"], ~r/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
+    assert {:error, _} = Profiles.create("side hustle!")
+    assert {:error, _} = Profiles.create("   ")
+    assert Profiles.by_name("SIDE HUSTLE!")["id"] == "side-hustle"
+    assert Profiles.by_name("side-hustle")["id"] == "side-hustle"
+  end
+
+  test "normalize_tint: hex, short hex, names, garbage" do
+    assert Profiles.normalize_tint("#3E63DD") == "#3e63dd"
+    assert Profiles.normalize_tint("#fff") == "#ffffff"
+    assert Profiles.normalize_tint("Blue") == "#3e63dd"
+    assert Profiles.normalize_tint("chartreuse-ish") == nil
+    assert Profiles.normalize_tint(nil) == nil
+  end
+
+  test "character form preserves literal names and persists identity across reloads" do
+    {:ok, profile} = Profiles.create_from_form(%{"name" => " Blue Team ", "character" => "luigi", "tint" => "#30a46c"})
+    assert profile["name"] == "Blue Team"
+    assert profile["icon"] == nil
+    assert Profiles.get(profile["id"])["character"] == "luigi"
+    assert {:error, _} = Profiles.create_from_form(%{"name" => "blue team", "character" => "mario", "tint" => "red"})
+    assert length(Profiles.list()) == 2
+  end
+
+  test "profile creation ignores unstructured surface messages" do
+    event = %{"event" => "surface", "surface" => "profiles", "id" => "new", "value" => "Work blue"}
+    assert {:noreply, %{}} = Profiles.handle_info({:browser_event, event}, %{})
+    assert length(Profiles.list()) == 1
+  end
+
+  test "character form refuses missing, malformed and unknown choices without creating profiles" do
+    for attrs <- [
+      %{},
+      %{"name" => 123, "character" => "mario", "tint" => "red"},
+      %{"name" => " ", "character" => "mario", "tint" => "red"},
+      %{"name" => "Work", "character" => "../../external", "tint" => "red"},
+      %{"name" => "Work", "character" => "mario", "tint" => "unknown"}
+    ] do
+      assert {:error, _} = Profiles.create_from_form(attrs)
+    end
+    assert length(Profiles.list()) == 1
+  end
+
+  test "all additional supplied characters can be created and restored" do
+    for character <- ~w(wario waluigi daisy donkey-kong diddy-kong rosalina captain-toad toadette birdo bowser-jr kamek shy-guy) do
+      assert {:ok, profile} = Profiles.create_from_form(%{"name" => character, "character" => character, "tint" => "blue"})
+      assert Profiles.get(profile["id"])["character"] == character
+    end
+  end
+
+  test "choosing a character replaces a legacy emoji without changing its login store" do
+    {:ok, legacy} = Profiles.create("Work", icon: "🧪", tint: "blue")
+    assert Profiles.edit_event("character|work") == {"character", "work"}
+    {:ok, updated} = Profiles.edit("work", "character", "bowser")
+    assert updated["character"] == "bowser"
+    assert updated["icon"] == nil
+    assert updated["uuid"] == legacy["uuid"]
+    assert updated["tint"] == legacy["tint"]
+    assert {:error, _} = Profiles.edit("work", "character", "unknown")
+    assert Profiles.get("work")["character"] == "bowser"
+  end
+
+  test "parse_new pulls tint and emoji out of the words" do
+    assert Profiles.parse_new("work blue 🧪") == {"work", "#3e63dd", "🧪"}
+    assert Profiles.parse_new("🎮 gaming #ff0000") == {"gaming", "#ff0000", "🎮"}
+    assert Profiles.parse_new("just a name") == {"just a name", nil, nil}
+  end
+
+  test "update and delete; the default cannot be deleted" do
+    {:ok, _} = Profiles.create("Work")
+    {:ok, p} = Profiles.update("work", %{"tint" => "green", "icon" => "🏢"})
+    assert p["tint"] == "#30a46c" and p["icon"] == "🏢"
+    assert {:error, _} = Profiles.delete("default")
+    :ok = Profiles.delete("work")
+    assert Enum.map(Profiles.list(), & &1["id"]) == ["default"]
+  end
+
+  test "edit_event parses field|id" do
+    assert Profiles.edit_event("tint|work") == {"tint", "work"}
+    assert Profiles.edit_event("name|default") == {"name", "default"}
+    assert Profiles.edit_event("open") == nil
+    assert Profiles.edit_event("bogus|x") == nil
+  end
+
+  test "settings saves are atomic and keep the same website store" do
+    {:ok, original} = Profiles.create("Work", tint: "blue", icon: "🧪")
+    {:ok, _} = Profiles.create("Play")
+    attrs = %{"name" => "Renamed", "character" => "bowser", "tint" => "invalid"}
+    assert {:error, _} = Profiles.save_from_form("work", attrs)
+    assert Profiles.get("work") == original
+    assert {:error, _} = Profiles.save_from_form("work", %{attrs | "name" => "Play", "tint" => "red"})
+    assert Profiles.get("work") == original
+    assert {:ok, updated} = Profiles.save_from_form("work", %{attrs | "tint" => "red"})
+    assert updated["name"] == "Renamed"
+    assert updated["character"] == "bowser"
+    assert updated["icon"] == nil
+    assert updated["uuid"] == original["uuid"]
+    assert updated["id"] == original["id"]
+  end
+
+  test "edit validates: unknown color refused, duplicate/empty name refused, empty clears" do
+    {:ok, _} = Profiles.create("Work", tint: "blue", icon: "🧪")
+    {:ok, _} = Profiles.create("Play")
+    assert {:error, msg} = Profiles.edit("work", "tint", "chartreuse-ish")
+    assert msg =~ "unknown color"
+    assert Profiles.get("work")["tint"] == "#3e63dd"
+    assert {:ok, %{"tint" => "#30a46c"}} = Profiles.edit("work", "tint", "green")
+    assert {:ok, %{"tint" => nil}} = Profiles.edit("work", "tint", "")
+    assert {:ok, %{"icon" => nil}} = Profiles.edit("work", "icon", " ")
+    assert {:error, _} = Profiles.edit("work", "name", "")
+    assert {:error, _} = Profiles.edit("work", "name", "play")
+    assert {:ok, %{"name" => "Work"}} = Profiles.edit("work", "name", "Work")
+    assert {:ok, %{"name" => "Werk"}} = Profiles.edit("work", "name", "Werk")
+    assert {:error, _} = Profiles.edit("nope", "name", "x")
+  end
+end

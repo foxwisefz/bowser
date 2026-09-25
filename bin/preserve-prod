@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# Preserve the currently installed production build, never a checkout build.
+set -euo pipefail
+[ "$#" = 3 ] || { echo 'usage: preserve-prod HOME SOURCE.app DESTINATION.app' >&2; exit 2; }
+repo="$(cd "$(dirname "$0")/.." && pwd -P)"
+state="$1"; source="$2"; destination="$3"
+if [ -e "$destination" ]; then
+  [ "$(/usr/libexec/PlistBuddy -c 'Print :BowserPreservedProduction' "$destination/Contents/Info.plist" 2>/dev/null || true)" = true ] && [ -x "$state/prod-runtime/brain/bin/bowser_brain" ] || {
+    echo "Existing $destination is not a complete preserved production build; refusing to overwrite it." >&2; exit 1;
+  }
+  exit 0
+fi
+[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$source/Contents/Info.plist")" = com.foxwiseai.bowser ] || exit 1
+[ "$(/usr/libexec/PlistBuddy -c 'Print :BowserChannel' "$source/Contents/Info.plist" 2>/dev/null || true)" != staging ] || { echo 'Source must be production' >&2; exit 1; }
+tool="$repo/shell/.build/debug/BowserRuntimeTool"
+runtime="$source/Contents/Resources/runtime"
+pointer="$state/backend/active.json"
+if [ -f "$pointer" ]; then runtime="$("$tool" active-runtime "$pointer")"; fi
+[ -x "$runtime/brain/bin/bowser_brain" ] || runtime="$state/app"
+[ -x "$runtime/brain/bin/bowser_brain" ] || { echo 'Production runtime unavailable' >&2; exit 1; }
+work="$(mktemp -d "$(dirname "$destination")/.bowser-prod.XXXXXX")"
+trap 'rm -rf "$work"' EXIT
+ditto "$source" "$work/Bowser-prod.app"
+mkdir -p "$work/runtime"
+for entry in bin brain HANDOFF.json VERSION; do ditto "$runtime/$entry" "$work/runtime/$entry"; done
+if [ -f "$pointer" ]; then
+  [ "$("$tool" active-runtime "$pointer")" = "$runtime" ] || { echo 'Production backend changed while copying; retry.' >&2; exit 1; }
+fi
+plist="$work/Bowser-prod.app/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c 'Set :CFBundleExecutable BowserProdLauncher' "$plist"
+/usr/libexec/PlistBuddy -c 'Set :CFBundleName Bowser Prod' "$plist"
+/usr/libexec/PlistBuddy -c 'Set :CFBundleDisplayName Bowser Prod' "$plist"
+/usr/libexec/PlistBuddy -c 'Add :BowserPreservedProduction bool true' "$plist"
+# This is the preserved prod version; the ordinary Bowser.app retains its feed.
+/usr/libexec/PlistBuddy -c 'Delete :BowserUpdatePublicKey' "$plist" 2>/dev/null || true
+cp -f "$tool" "$work/Bowser-prod.app/Contents/MacOS/BowserProdLauncher"
+identity="${BOWSER_SIGN_IDENTITY:--}"
+codesign --force --sign "$identity" --options runtime --entitlements "$repo/bin/shell-entitlements.plist" "$work/Bowser-prod.app/Contents/MacOS/Bowser"
+codesign --force --sign "$identity" --options runtime --entitlements "$repo/bin/shell-entitlements.plist" "$work/Bowser-prod.app"
+codesign --verify --deep --strict "$work/Bowser-prod.app"
+[ ! -e "$state/prod-runtime" ] || { echo 'Production runtime already exists without its app; refusing to overwrite it.' >&2; exit 1; }
+mv -f "$work/runtime" "$state/prod-runtime"
+mv -f "$work/Bowser-prod.app" "$destination"
+echo "Preserved production: $destination"
