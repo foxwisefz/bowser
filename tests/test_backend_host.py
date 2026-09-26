@@ -10,6 +10,7 @@ import signal
 import subprocess
 import struct
 import tempfile
+import time
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -102,11 +103,13 @@ class ReleaseTests(unittest.IsolatedAsyncioTestCase):
         if pinned:
             (self.home/'backend').mkdir(exist_ok=True)
             (self.home/'backend/active.json').write_text(json.dumps({'runtime': str(self.home/'missing-production-runtime')}))
+        started = time.monotonic()
         self.process = await asyncio.create_subprocess_exec(str(HOST), str(self.home), str(self.runtime),
             env={**os.environ, 'BOWSER_X_PORT': '0', 'BOWSER_RUNTIME_PINNED': '1' if pinned else '0', 'PATH': '/usr/bin:/bin:/usr/sbin:/sbin'}, stdout=self.log, stderr=self.log)
         await until(lambda: (self.home / 'agent.sock').exists() or self.process.returncode is not None)
         self.assertIsNone(self.process.returncode, (self.home / 'host.log').read_text())
         await until(lambda: (self.home / 'init-count').exists())
+        self.launch_seconds = time.monotonic() - started
         await asyncio.sleep(.1)
 
     async def test_staging_pins_its_runtime_instead_of_production_pointer(self):
