@@ -542,7 +542,7 @@ struct MagnifyStripView: View {
                     .padding(.vertical, 8)
                     .frame(maxWidth: .infinity)
                   }
-                  .scrollIndicators(.hidden)
+                  .scrollIndicators(.never)
                   .scrollDisabled(!overflowing)
                   .scrollClipDisabled(!overflowing)
                   .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, offset in

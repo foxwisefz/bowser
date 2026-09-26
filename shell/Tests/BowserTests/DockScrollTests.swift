@@ -22,6 +22,8 @@ import XCTest
             return view.subviews.compactMap { findScroll($0) }.first
         }
         let scroll = try XCTUnwrap(findScroll(hosting))
+        XCTAssertFalse(scroll.hasVerticalScroller, "Dock tabs must never show a vertical scrollbar")
+        XCTAssertFalse(scroll.hasHorizontalScroller, "Dock tabs must never show a horizontal scrollbar")
         let document = try XCTUnwrap(scroll.documentView)
         XCTAssertLessThan(scroll.frame.height, 600 - 82)
         XCTAssertGreaterThan(document.frame.height, 2300)
