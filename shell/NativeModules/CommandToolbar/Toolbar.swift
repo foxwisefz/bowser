@@ -190,8 +190,8 @@ struct CommandToolbar: View {
         }
         .animation(.easeOut(duration: 0.15), value: model.revealed)
         .frame(maxHeight: .infinity)
-        .contentShape(Rectangle())
         .frame(maxWidth: .infinity, alignment: .leading)
+        .background(ToolbarWindowDragHandle())
         .onHover { onHoverChanged($0) }
     }
 

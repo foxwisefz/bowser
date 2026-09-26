@@ -1049,8 +1049,8 @@ struct CmdCluster: View {
         }
         .animation(.easeOut(duration: 0.15), value: reveal.lights)
         .frame(maxHeight: .infinity)
-        .contentShape(Rectangle())
         .frame(maxWidth: .infinity, alignment: .leading)
+        .background(ToolbarWindowDragHandle())
         .onHover { onHoverChanged($0) }
     }
 
