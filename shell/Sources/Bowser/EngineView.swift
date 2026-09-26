@@ -87,6 +87,10 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
     private var urlObservation: NSKeyValueObservation?
     private var mediaObservations: [NSKeyValueObservation] = []
     private var titleObservation: NSKeyValueObservation?
+    private var loadingCover: PageLoadingView?
+    private(set) var hasRenderedContent = false
+    private(set) var observesRenderingProgress = false
+    var isShowingLoadingCover: Bool { loadingCover != nil }
     private var currentScripts: [ModScript] = []
     private var currentStyles: [String] = []
 
@@ -207,6 +211,17 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
         webView.customUserAgent = SafariUserAgent.current
         webView.frame = bounds
         addSubview(webView)
+        hasRenderedContent = false
+        showLoadingCover(loading: false)
+        // WebKit's first visually nonempty layout is earlier than didFinish:
+        // a slow image must not hide an otherwise usable page. Guard this SPI
+        // and use didFinish as the fallback; never call primitive setters via KVC.
+        let selector = NSSelectorFromString("_setObservedRenderingProgressEvents:")
+        if webView.responds(to: selector), let implementation = webView.method(for: selector) {
+            typealias Setter = @convention(c) (AnyObject, Selector, UInt) -> Void
+            unsafeBitCast(implementation, to: Setter.self)(webView, selector, 1 << 1)
+            observesRenderingProgress = true
+        }
 
         urlObservation = webView.observe(\.url) { [weak self] view, _ in
             MainActor.assumeIsolated {
@@ -354,6 +369,30 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
         tabPreview = nil
     }
 
+    private func showLoadingCover(loading: Bool = true) {
+        if loadingCover == nil {
+            let cover = PageLoadingView(frame: bounds)
+            cover.autoresizingMask = [.width, .height]
+            addSubview(cover, positioned: .above, relativeTo: webView)
+            loadingCover = cover
+        }
+        loadingCover?.loading = loading
+    }
+
+    @objc(_webView:renderingProgressDidChange:)
+    func renderingProgress(_ sender: WKWebView, didChange events: UInt) {
+        guard sender === webView, events & (1 << 1) != 0, sender.url != nil else { return }
+        revealPageContent()
+    }
+
+    private func revealPageContent() {
+        hasRenderedContent = true
+        loadingCover?.removeFromSuperview()
+        loadingCover = nil
+        dismissTabPreview()
+        BrowserWindowController.host(of: webviewId)?.engineDidPaint(self)
+    }
+
     func noteUserEdit() { hasUnsavedInteraction = true }
 
     private var canSleep: Bool {
@@ -409,6 +448,7 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
         sleepingTitle = nil
         pendingRestoreURL = nil
         requestedURL = url.absoluteString
+        if !hasRenderedContent { showLoadingCover() }
         failedNavigationURL = nil
         showCachedFavicon(for: url)
         // file:// needs explicit read access to the containing directory or
@@ -555,6 +595,8 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
     }
 
     func tearDown() {
+        loadingCover?.removeFromSuperview()
+        loadingCover = nil
         dismissTabPreview()
         TabPreviewCache.shared.remove(webviewId)
         stopMediaCapture()
@@ -789,6 +831,7 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
     }
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        if !hasRenderedContent { showLoadingCover() }
         if failedNavigationURL == nil, let navigation {
             navigationDiagnosticTrace.start(navigation, now: ProcessInfo.processInfo.systemUptime,
                 network: navigationNetwork.snapshot, revision: navigationNetwork.revision)
@@ -807,6 +850,8 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
     }
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        hasRenderedContent = false
+        showLoadingCover()
         hasUnsavedInteraction = false
         SiteAppBadge.shared.clear(id: webviewId)
         didWarmMediaRecovery = false
@@ -815,7 +860,7 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        dismissTabPreview()
+        revealPageContent()
         guard failedNavigationURL == nil else {
             BrowserWindowController.host(of: webviewId)?.engineDidPaint(self)
             return
