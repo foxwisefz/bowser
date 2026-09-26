@@ -2,6 +2,11 @@ name: Build desktop release
 
 on:
   workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the signed build to the official update feed
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -28,7 +33,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Check R2 publication configuration
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' && inputs.publish
         env:
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
@@ -171,6 +176,7 @@ jobs:
           if-no-files-found: error
           retention-days: 14
       - name: Create draft GitHub release
+        if: inputs.publish
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -197,7 +203,7 @@ jobs:
 
   publish-assets:
     needs: build
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' && inputs.publish
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     environment: release

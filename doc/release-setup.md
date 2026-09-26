@@ -34,3 +34,7 @@ Run it when the current browser code is ready to ship. No private API source is
 required for the build.
 
 See [distribution](distribution.md) for updater verification and packaging.
+
+To validate signing, notarization and packaging without publishing a customer
+update, uncheck **publish** when running the workflow. The signed artifacts are
+still retained in the workflow run; no GitHub release or R2 upload is created.
