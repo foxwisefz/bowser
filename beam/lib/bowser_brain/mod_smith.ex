@@ -416,6 +416,22 @@ defmodule BowserBrain.ModSmith do
     Compose the user's requested layout with these primitives; do not defer
     resizable website-layout requests to a resident agent.
 
+    NATIVE DEPENDENCIES: discover_native_tools(names: ["tool-name", "companion-tool"])
+    locates executables without running or installing them. Inspect maintained tools
+    before rebuilding complex protocols in page JavaScript or claiming they are missing.
+    Native mods resolve with BowserBrain.NativeTools.find_executable(name), returning
+    an absolute path or nil, and use System.cmd(path, args,
+      env: BowserBrain.NativeTools.environment(), stderr_to_stdout: true).
+    The environment adds standard macOS/Homebrew/user-local bin locations so companion
+    executables can be found too; no browser restart is needed after installing a tool.
+    Use argument arrays, validate untrusted URLs/paths against the feature's scope,
+    separate options from operands with -- where supported, and bound runtime/output
+    with cleanup and cancellation. These helpers do not sandbox execution or replace
+    put_mod security review. Discovery alone does not verify the requested outcome.
+    If tools are absent, offer an explicit installation choice; never invent a service
+    endpoint from browser settings. A failed browser fetch does not prove a local
+    service is down. Honor saved-app limits: native mods are desktop-only.
+
     OWNER CHOICES: ask_user(question:, detail:, options: [%{label:, description:}])
     presents 2–5 distinct choices plus a custom reply in ModSmith. Use it only when
     a necessary owner decision blocks progress. After success end the turn immediately;
@@ -668,9 +684,9 @@ defmodule BowserBrain.ModSmith do
     CONTEXT:
     Current URL: #{url}
     Page digest: #{digest}
-    Existing settings (REUSE these key names where relevant instead of
-    inventing new ones; declare + prompt for anything missing):
-    #{BowserBrain.Settings.summary()}
+    Settings: browser/provider configuration is private plumbing, not a feature
+    dependency catalog. Reuse feature settings referenced in this mod's existing
+    source; declare new feature-specific settings with a clear purpose if needed.
     Existing payloads for #{host} (full content):
     #{existing_block}
     EXISTING MODS AND PAYLOADS, all sites (read_mod for full source):
@@ -1116,7 +1132,7 @@ defmodule BowserBrain.ModSmith do
   # The live-browser toolbox (bowser-browser-4uw): an MCP bridge relaying to
   # AgentPort at ~/.bowser/agent.sock, so the model can inspect the page,
   # install a draft, and verify — a dialog, not a blind one-shot.
-  @mcp_tools "mcp__bowser__ask_user,mcp__bowser__page_screenshot,mcp__bowser__website_layout,mcp__bowser__native_screenshot,mcp__bowser__native_click,mcp__bowser__put_asset,mcp__bowser__toolbars,mcp__bowser__put_mod,mcp__bowser__shell_theme,mcp__bowser__list_tabs,mcp__bowser__page_eval," <>
+  @mcp_tools "mcp__bowser__discover_native_tools,mcp__bowser__ask_user,mcp__bowser__page_screenshot,mcp__bowser__website_layout,mcp__bowser__native_screenshot,mcp__bowser__native_click,mcp__bowser__put_asset,mcp__bowser__toolbars,mcp__bowser__put_mod,mcp__bowser__shell_theme,mcp__bowser__list_tabs,mcp__bowser__page_eval," <>
                "mcp__bowser__page_html,mcp__bowser__put_payload,mcp__bowser__list_mods,mcp__bowser__read_mod,mcp__bowser__store_get,mcp__bowser__store_put"
 
   defp mcp_args(app) do

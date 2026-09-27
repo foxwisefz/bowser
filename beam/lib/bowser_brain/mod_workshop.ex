@@ -29,6 +29,9 @@ defmodule BowserBrain.ModWorkshop do
           tool == "ask_user" ->
             GenServer.call(__MODULE__, {:ask_user, token, args})
 
+          tool == "discover_native_tools" and run.app == nil ->
+            BowserBrain.NativeTools.discover(args)
+
           tool == "put_payload" ->
             GenServer.call(__MODULE__, {:draft, token, args}, 15_000)
 
@@ -510,7 +513,7 @@ defmodule BowserBrain.ModWorkshop do
         target = List.first(tabs)
         run = if target, do: %{run | webview: target.webview}, else: run
         state = %{state | run: run}
-        safe = tool in ["ask_user", "list_tabs", "list_mods", "read_mod", "mod_diagnostics"]
+        safe = tool in ["ask_user", "discover_native_tools", "list_tabs", "list_mods", "read_mod", "mod_diagnostics"]
         if target || safe do
           {:reply, {:ok, Map.merge(run, %{tabs: tabs, target_available: target != nil, capture_host: if(p["scope"] == "site", do: URI.parse(run.url).host)})}, state}
         else

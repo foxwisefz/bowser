@@ -2,6 +2,28 @@ import Foundation
 let toolCatalogJSON = #"""
 [
   {
+    "name": "discover_native_tools",
+    "description": "Read-only discovery of 1–8 native executable names on this Mac. Checks the browser PATH plus standard macOS/Homebrew and user-local bin directories; returns available and absolute path. Runs nothing, installs nothing, and does not verify versions or successful feature execution. Use before claiming a dependency is missing or asking for a restart. Not available in saved-app ModSmith runs.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "names": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._+-]{0,79}$"
+          }
+        }
+      },
+      "required": [
+        "names"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
     "name": "ask_user",
     "description": "Ask the owner one necessary question in ModSmith with 2–5 selectable options and a custom reply. Saves the question and pauses work: end this turn immediately after success; the answer resumes the same mod conversation. Requires a scoped ModSmith run. Do not use for routine implementation choices or invent permissions. Options are plain text, never executable actions.",
     "inputSchema": {

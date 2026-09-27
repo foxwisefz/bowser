@@ -324,6 +324,23 @@ defmodule BowserBrain.ModWorkshopTest do
     assert prompt =~ "Use the system appearance instead"
   end
 
+  test "prompt excludes internal and unrelated settings and tools remain discoverable off-page", %{root: root} do
+    previous = Application.get_env(:bowser_brain, :settings_path)
+    Application.put_env(:bowser_brain, :settings_path, Path.join(root, "settings.json"))
+    on_exit(fn ->
+      if previous, do: Application.put_env(:bowser_brain, :settings_path, previous),
+        else: Application.delete_env(:bowser_brain, :settings_path)
+    end)
+    BowserBrain.Settings.put("bowser_api_endpoint", "http://internal-plumbing.invalid:8080")
+    BowserBrain.Settings.put("unrelated_service", "https://unrelated.invalid")
+    event("submit", %{"text" => "Build a converter", "scope" => "site"})
+    assert_receive {:runner, _, token, prompt, _, _}, 1000
+    refute prompt =~ "internal-plumbing.invalid"
+    refute prompt =~ "unrelated.invalid"
+    :sys.replace_state(ModWorkshop, &%{&1 | urls: %{7 => "https://other.example"}})
+    assert %{ok: true, tools: [%{available: false}]} = ModWorkshop.tool(token, "discover_native_tools", %{"names" => ["bowser-nonexistent-fixture"]})
+  end
+
   test "cancel fences late results and retry starts a fresh run" do
     state = event("submit", %{"text" => "Make reading easier", "scope" => "site"})
     assert_receive {:runner, pid, token, _, _, _}, 2000
