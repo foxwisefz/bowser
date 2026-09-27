@@ -240,6 +240,12 @@ defmodule BowserBrain.ModWorkshop do
       ),
       do: {:noreply, %{state | urls: Map.put(state.urls, wv, url)}}
 
+  def handle_info({:browser_event, %{"event" => "modsmith_scope", "request_id" => id} = event}, state)
+      when is_binary(id) and byte_size(id) <= 64 do
+    BowserBrain.ModScopeSuggestion.request(event)
+    {:noreply, state}
+  end
+
   def handle_info({:browser_event, %{"event" => "modsmith"} = event}, state) do
     state = action(state, event) |> Map.put(:error_client, client(event))
     publish(state, client(event), event["action"] == "open")
