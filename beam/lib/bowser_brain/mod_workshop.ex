@@ -17,7 +17,7 @@ defmodule BowserBrain.ModWorkshop do
     case GenServer.call(__MODULE__, {:context, token, tool}) do
       {:ok, run} ->
         cond do
-          Map.get(run, :documentation, false) and tool not in ["list_tabs", "page_html", "read_mod", "list_mods", "mod_diagnostics"] ->
+          Map.get(run, :documentation, false) and tool not in ["list_tabs", "page_html", "page_screenshot", "read_mod", "list_mods", "mod_diagnostics"] ->
             %{ok: false, error: "Writing instructions is read-only. Inspect existing source and page HTML; do not change or execute the mod."}
 
           tool == "put_asset" and run.app == nil ->
@@ -37,6 +37,11 @@ defmodule BowserBrain.ModWorkshop do
                   applies: "File recorded for Undo. Runtime result reports compilation and startup/reload; verify appearance separately."})
               reply -> reply
             end
+
+          tool == "page_screenshot" ->
+            if run.app,
+              do: AppMods.dispatch(tool, args, run.app["id"]),
+              else: BowserBrain.AgentPort.dispatch(%{"tool" => tool, "args" => args |> Map.put("webview", run.webview) |> Map.put("expected_host", run.capture_host) |> Map.put("profile", run.profile)})
 
           tool in ["native_screenshot", "native_click", "website_layout"] and run.app == nil ->
             BowserBrain.AgentPort.dispatch(%{"tool" => tool, "args" => Map.put(args, "webview", run.webview)})
@@ -431,6 +436,10 @@ defmodule BowserBrain.ModWorkshop do
     id = Map.get(run, :receipt_sequence, 0) + 1
     # Source is checked separately; keep bounded observations in memory, not full page transcripts on disk.
     args = Map.drop(args, ["content"])
+    image = Map.get(result, :image) || Map.get(result, "image")
+    result = Map.drop(result, [:image, "image"])
+    run = if is_binary(image) and byte_size(image) <= 5_400_000,
+      do: Map.put(run, :images, Enum.take(Map.get(run, :images, []) ++ [%{id: id, data: image}], -2)), else: run
     receipt = %{id: id, tool: tool, args: String.slice(JSON.encode!(args), 0, 2000),
       result: String.slice(JSON.encode!(result), 0, 3000)}
     run = run |> Map.put(:receipt_sequence, id)
@@ -449,7 +458,7 @@ defmodule BowserBrain.ModWorkshop do
       requests: Enum.filter(p["turns"], &(&1["role"] == "user")) |> Enum.map(& &1["text"]) |> then(fn requests -> Enum.uniq(Enum.take(requests, 1) ++ Enum.take(requests, -12)) end),
       candidate: Map.drop(envelope, ["files"]),
       receipts: Map.get(state.run, :receipts, []), last_write: Map.get(state.run, :last_write, 0),
-      failed_attempts: Map.get(p, "failed_attempts", [])}
+      images: Map.get(state.run, :images, []), failed_attempts: Map.get(p, "failed_attempts", [])}
     {:reply, {:ok, context}, state}
   end
   def handle_call({:verification_context, _, _}, _, state), do: {:reply, {:error, :ended}, state}
@@ -484,7 +493,7 @@ defmodule BowserBrain.ModWorkshop do
         state = %{state | run: run}
         safe = tool in ["list_tabs", "list_mods", "read_mod", "mod_diagnostics"]
         if target || safe do
-          {:reply, {:ok, Map.merge(run, %{tabs: tabs, target_available: target != nil})}, state}
+          {:reply, {:ok, Map.merge(run, %{tabs: tabs, target_available: target != nil, capture_host: if(p["scope"] == "site", do: URI.parse(run.url).host)})}, state}
         else
           {:reply, {:error, "No matching tab is open in this profile. Source and diagnostics remain available; open #{run.url} to verify page behavior."}, state}
         end

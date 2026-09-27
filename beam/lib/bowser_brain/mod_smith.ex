@@ -416,6 +416,12 @@ defmodule BowserBrain.ModSmith do
     Compose the user's requested layout with these primitives; do not defer
     resizable website-layout requests to a resident agent.
 
+    PAGE SCREENSHOTS: page_screenshot(webview:, max_width: 1280) captures the loaded
+    viewport directly from WebKit as an image, with no screen-recording permission.
+    It excludes browser chrome and other apps. Use list_tabs IDs; a scoped run pins
+    its own page. Saved apps capture their own page only. Coordinates are viewport
+    points; point_width/point_height and scale map resized pixels. This is a viewport
+    snapshot, not full-page capture. Protected video may be omitted by WebKit.
     NATIVE VERIFICATION: native_screenshot captures the selected visible browser
     window, including native toolbar pixels, and returns an image and window id.
     Use native_click(x:, y:, window:) on controls visible in that screenshot;
@@ -673,12 +679,16 @@ defmodule BowserBrain.ModSmith do
   def run_audit(prompt) do
     if BowserBrain.AI.route() == :cli, do: run_cli_audit(prompt), else: BowserBrain.DirectAgent.audit(prompt)
   end
-  def run_verification(prompt) do
+  def run_verification(prompt, images \\ []) do
     if BowserBrain.AI.route() == :cli do
       run_cli_audit(prompt, BowserBrain.ModVerification.instructions())
     else
+      content = [%{"type" => "input_text", "text" => prompt}] ++ Enum.flat_map(images, fn image ->
+        [%{"type" => "input_text", "text" => "Image for receipt #{image.id}"},
+         %{"type" => "input_image", "image_url" => "data:image/png;base64," <> image.data}]
+      end)
       with {:ok, output} <- BowserBrain.DirectAgent.completion(BowserBrain.AI.route(),
-        [%{"role" => "user", "content" => prompt}], [], BowserBrain.ModVerification.instructions()) do
+        [%{"role" => "user", "content" => content}], [], BowserBrain.ModVerification.instructions()) do
         {:ok, Enum.flat_map(output, &(&1["content"] || [])) |> Enum.map_join("", &(&1["text"] || ""))}
       end
     end
@@ -1100,7 +1110,7 @@ defmodule BowserBrain.ModSmith do
   # The live-browser toolbox (bowser-browser-4uw): an MCP bridge relaying to
   # AgentPort at ~/.bowser/agent.sock, so the model can inspect the page,
   # install a draft, and verify — a dialog, not a blind one-shot.
-  @mcp_tools "mcp__bowser__website_layout,mcp__bowser__native_screenshot,mcp__bowser__native_click,mcp__bowser__put_asset,mcp__bowser__toolbars,mcp__bowser__put_mod,mcp__bowser__shell_theme,mcp__bowser__list_tabs,mcp__bowser__page_eval," <>
+  @mcp_tools "mcp__bowser__page_screenshot,mcp__bowser__website_layout,mcp__bowser__native_screenshot,mcp__bowser__native_click,mcp__bowser__put_asset,mcp__bowser__toolbars,mcp__bowser__put_mod,mcp__bowser__shell_theme,mcp__bowser__list_tabs,mcp__bowser__page_eval," <>
                "mcp__bowser__page_html,mcp__bowser__put_payload,mcp__bowser__list_mods,mcp__bowser__read_mod,mcp__bowser__store_get,mcp__bowser__store_put"
 
   defp mcp_args(app) do

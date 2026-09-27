@@ -215,7 +215,7 @@ defmodule BowserBrain.AgentPort do
 
   def dispatch(%{"tool" => "toolbars"}), do: %{ok: true, toolbars: BowserBrain.Chrome.toolbars()}
 
-  def dispatch(%{"tool" => tool} = request) when tool in ["native_screenshot", "native_click"] do
+  def dispatch(%{"tool" => tool} = request) when tool in ["page_screenshot", "native_screenshot", "native_click"] do
     try do
       case GenServer.call(Bridge, {:native_verify, tool, Map.get(request, "args", %{})}, 15_000) do
         {:ok, result} -> Map.put(result, "ok", true)

@@ -446,11 +446,11 @@ class UpdateTests(unittest.TestCase):
                 reader.close()
         thread=threading.Thread(target=reply,daemon=True); thread.start()
         try:
-            message=json.dumps(dict(jsonrpc='2.0',id=7,method='tools/call',params=dict(name='native_screenshot',arguments={})))+'\n'
+            message=json.dumps(dict(jsonrpc='2.0',id=7,method='tools/call',params=dict(name='page_screenshot',arguments={'webview': 7})))+'\n'
             result=subprocess.run([str(TOOL),'bowser-mcp-bridge'],input=message,text=True,capture_output=True,timeout=5,env={**os.environ,'PATH':'/nonexistent','BOWSER_HOME':str(self.root),'BOWSER_SITE_APP_ID':'fixture','BOWSER_MODSMITH_RUN':'run1'})
             self.assertEqual(result.returncode,0,result.stderr)
             thread.join(timeout=2)
-            self.assertEqual(received,[dict(tool='native_screenshot',args=dict(site_app='fixture'),run='run1')])
+            self.assertEqual(received,[dict(tool='page_screenshot',args=dict(site_app='fixture', webview=7),run='run1')])
             response=json.loads(result.stdout)['result']
             self.assertFalse(response['isError'])
             self.assertEqual(response['content'][1],dict(type='image',data='YWJj',mimeType='image/png'))
@@ -462,6 +462,10 @@ class UpdateTests(unittest.TestCase):
         self.assertEqual(result.returncode,0,result.stderr)
         names={tool['name'] for tool in json.loads(result.stdout)['result']['tools']}
         self.assertIn('native_screenshot',names)
+        self.assertIn('page_screenshot',names)
+        runtime_tools = {tool['name']: tool for tool in json.loads(result.stdout)['result']['tools']}
+        agent_tools = {tool['name']: tool for tool in json.loads((ROOT/'beam/priv/ai-tools.json').read_text())}
+        self.assertEqual(runtime_tools['page_screenshot'], agent_tools['page_screenshot'])
         self.assertIn('put_mod',names)
 
 if __name__=='__main__': unittest.main()

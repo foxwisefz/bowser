@@ -1290,7 +1290,7 @@ end
     assert %{ok: true, active: nil, target_available: false, tabs: []} = ModWorkshop.tool(token, "list_tabs", %{})
     assert %{ok: true} = ModWorkshop.tool(token, "list_mods", %{})
     assert %{ok: true, content: "body {}"} = ModWorkshop.tool(token, "read_mod", %{"path" => "sites/example.com/owned.css"})
-    for tool <- ["page_eval", "page_html", "native_click", "put_payload", "put_mod", "store_put"] do
+    for tool <- ["page_eval", "page_html", "page_screenshot", "native_click", "put_payload", "put_mod", "store_put"] do
       assert %{ok: false, error: error} = ModWorkshop.tool(token, tool, %{})
       assert error =~ "No matching tab"
     end

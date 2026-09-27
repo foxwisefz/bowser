@@ -184,6 +184,26 @@
     }
   },
   {
+    "name": "page_screenshot",
+    "description": "Capture a loaded tab viewport directly from WebKit as a PNG image, without macOS screen-recording permission. No browser chrome or other apps. Activate deferred/unloaded tabs first. Coordinates are viewport points from top-left; width/height are pixels, point_width/point_height and scale describe resizing. max_width bounds the longest image edge (default 1280, range 320..1920). Captures the viewport, not the full document; protected video may be omitted. In ModSmith the run fixes the target tab; saved-app calls capture only that app.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "webview": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Tab id from list_tabs; 0 selects the first tab. Ignored in scoped ModSmith and saved-app calls."
+        },
+        "max_width": {
+          "type": "integer",
+          "minimum": 320,
+          "maximum": 1920
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
     "name": "native_screenshot",
     "description": "Capture the selected visible browser window including native toolbars. Returns an image and window id; coordinates are points from top-left. Requires macOS screen capture permission; errors are not visual verification.",
     "inputSchema": {

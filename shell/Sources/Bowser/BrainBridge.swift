@@ -276,6 +276,31 @@ final class BrainBridge {
                 send(["op": "js_result", "id": id, "ok": false, "value": error.localizedDescription])
             }
 
+        case "page_screenshot":
+            guard let id = message["id"] as? Int else { return }
+            guard let view = (requested == 0 ? resolve(0) : EngineView.live[requested]), view.inspectionUnavailableReason == nil else {
+                send(["op": "js_result", "id": id, "ok": false, "value": "Activate and load the target tab before capturing it"])
+                return
+            }
+            let maxWidth = message["max_width"] as? Int ?? 1280
+            let initialURL = view.currentURLString
+            let expectedHost = message["expected_host"] as? String
+            Task { @MainActor in
+                do {
+                    guard expectedHost == nil || URL(string: initialURL ?? "")?.host == expectedHost else {
+                        throw NSError(domain: "Bowser", code: 1, userInfo: [NSLocalizedDescriptionKey: "Target tab left this mod's site"])
+                    }
+                    var result = try await BrowserScreenshot.page(view.webView, maxWidth: maxWidth)
+                    guard EngineView.live[view.webviewId] === view, view.currentURLString == initialURL else {
+                        throw NSError(domain: "Bowser", code: 1, userInfo: [NSLocalizedDescriptionKey: "Page changed during capture; request a fresh screenshot"])
+                    }
+                    result["webview"] = view.webviewId
+                    send(["op": "js_result", "id": id, "ok": true, "value": result])
+                } catch {
+                    send(["op": "js_result", "id": id, "ok": false, "value": error.localizedDescription])
+                }
+            }
+
         case "native_screenshot", "native_click":
             guard let id = message["id"] as? Int else { return }
             guard requested != 0, let controller = BrowserWindowController.host(of: requested),
@@ -352,7 +377,7 @@ final class BrainBridge {
         case "refresh_app_icons":
             if SiteAppConfiguration.current == nil { TabAppBundle.upgradeSavedApps() }
 
-        case "site_eval", "site_status":
+        case "site_eval", "site_screenshot", "site_status":
             guard SiteAppConfiguration.current == nil else { return }
             SiteAppHub.shared.route(message)
 

@@ -114,6 +114,16 @@ defmodule BowserBrain.ModVerificationTest do
     assert :ok = ModVerification.assess(repaired)
   end
 
+  test "screenshot receipts need actual post-change images for outcome review" do
+    screenshot = %{id: 5, tool: "page_screenshot", result: "image metadata"}
+    context = %{context() | receipts: [screenshot]}
+    Application.put_env(:bowser_brain, :modsmith_verifier, fn _ ->
+      {:ok, JSON.encode!(%{verified: true, reason: "Observed requested visual change", evidence: [5]})}
+    end)
+    assert {:error, _} = ModVerification.assess(context)
+    assert :ok = ModVerification.assess(Map.put(context, :images, [%{id: 5, data: "fixture"}]))
+  end
+
   test "unavailable and malformed reviewers leave the outcome unverified" do
     for result <- [{:error, :timeout}, {:ok, "not JSON"}, {:ok, "{}"}] do
       Application.put_env(:bowser_brain, :modsmith_verifier, fn _ -> result end)
