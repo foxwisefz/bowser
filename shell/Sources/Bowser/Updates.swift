@@ -340,14 +340,43 @@ final class AppUpdates: NSObject {
     }
     @objc func checkForUpdates(_ sender: Any? = nil) { Task { await check(manual: true) } }
     private func message(_ text: String) { NativeUIHost.alert("message", ["text": text]).runModal() }
-    private func updateFromDevelopment() {
+    nonisolated static func developmentFingerprint(checkout: String) async throws -> String {
+        try await Task.detached {
+            let process = Process(), output = Pipe()
+            process.executableURL = URL(fileURLWithPath: checkout + "/bin/development-fingerprint")
+            process.currentDirectoryURL = URL(fileURLWithPath: checkout)
+            var environment = ProcessInfo.processInfo.environment
+            environment["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+            process.environment = environment
+            process.standardOutput = output
+            process.standardError = FileHandle.nullDevice
+            try process.run()
+            let data = output.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            let fingerprint = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard process.terminationStatus == 0,
+                  fingerprint.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil else {
+                throw UpdateError.unavailable
+            }
+            return fingerprint
+        }.value
+    }
+    private func updateFromDevelopment() async {
         guard developmentBuild?.isRunning != true else { message("A staging build is already in progress."); return }
+        guard !busy else { return }
+        busy = true
+        defer { busy = false }
         guard let checkout = Bundle.main.infoDictionary?["BowserDevelopmentCheckout"] as? String,
               FileManager.default.isExecutableFile(atPath: checkout + "/bin/install") else {
             message("The development checkout is unavailable. Run bin/staging update from your Bowser checkout."); return
         }
         let log = BowserPaths.home.appendingPathComponent("updates/staging-build.log")
         do {
+            let fingerprint = try await Self.developmentFingerprint(checkout: checkout)
+            if fingerprint == Bundle.main.infoDictionary?["BowserDevelopmentFingerprint"] as? String {
+                message("You’re up to date. Staging matches your development checkout.")
+                return
+            }
             try FileManager.default.createDirectory(at: log.deletingLastPathComponent(), withIntermediateDirectories: true)
             FileManager.default.createFile(atPath: log.path, contents: nil)
             let output = try FileHandle(forWritingTo: log)
@@ -372,7 +401,7 @@ final class AppUpdates: NSObject {
             }
             try process.run()
             developmentBuild = process
-            message("Building staging from the current development checkout. You can keep browsing while it builds.")
+            message("Preparing a staging update. You can keep browsing; Bowser will let you know when it’s ready to restart.")
         } catch { message("Couldn’t start the staging build: " + error.localizedDescription) }
     }
     func check(manual: Bool) async {
@@ -381,7 +410,7 @@ final class AppUpdates: NSObject {
         if restartHelper?.isRunning == true { _ = offerPreparedUpdate(manual: manual); return }
         if Bundle.main.infoDictionary?["BowserChannel"] as? String == "staging" {
             if offerPreparedUpdate(manual: manual) { return }
-            if manual { updateFromDevelopment() }
+            if manual { await updateFromDevelopment() }
             return
         }
         guard !busy else { if manual { message("An update check is already in progress.") }; return }

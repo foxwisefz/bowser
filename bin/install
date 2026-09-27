@@ -71,6 +71,8 @@ if [ "$STAGE_ONLY" = 1 ]; then
   BUNDLE="$BOWSER_HOME/Bowser.app"
 fi
 VERSION="${BOWSER_VERSION:-$(cd "$REPO" && (jj log -r @ --no-graph -T 'change_id.short()' 2>/dev/null || git rev-parse --short HEAD 2>/dev/null || echo dev))}"
+SOURCE_FINGERPRINT=""
+if [ "$CHANNEL" = staging ]; then SOURCE_FINGERPRINT="$("$REPO/bin/development-fingerprint")"; fi
 BUILD="${BOWSER_BUILD:-$(date -u +%Y%m%d%H%M%S)}"
 [[ "$VERSION" =~ ^[A-Za-z0-9][A-Za-z0-9.+-]*$ ]] && [ "${#VERSION}" -le 64 ] || { echo "invalid BOWSER_VERSION" >&2; exit 2; }
 [[ "$BUILD" =~ ^[0-9]{1,18}$ ]] || { echo "invalid BOWSER_BUILD" >&2; exit 2; }
@@ -138,6 +140,7 @@ if [ "$BRAIN_ONLY" = 0 ]; then
     /usr/libexec/PlistBuddy -c 'Set :CFBundleName Bowser Staging' "$STAGE/Bowser.app/Contents/Info.plist"
     /usr/libexec/PlistBuddy -c 'Set :CFBundleDisplayName Bowser Staging' "$STAGE/Bowser.app/Contents/Info.plist"
     /usr/libexec/PlistBuddy -c "Add :BowserDevelopmentCheckout string $REPO" "$STAGE/Bowser.app/Contents/Info.plist"
+    /usr/libexec/PlistBuddy -c "Add :BowserDevelopmentFingerprint string $SOURCE_FINGERPRINT" "$STAGE/Bowser.app/Contents/Info.plist"
     "$REPO/bin/build-staging-icon" "$STAGE/Bowser.app/Contents/Resources/AppIcon.icns"
   fi
   printf 'APPL????' > "$STAGE/Bowser.app/Contents/PkgInfo"
@@ -187,6 +190,10 @@ if [ "$SHELL_ONLY" = 0 ]; then
   printf '{"protocol":1,"state_schema":5}\n' > "$APP_DIR/HANDOFF.json"
 fi
 echo "$VERSION $BUILD" > "$APP_DIR/VERSION"
+if [ "$CHANNEL" = staging ] && [ "$("$REPO/bin/development-fingerprint")" != "$SOURCE_FINGERPRINT" ]; then
+  echo 'Checkout changed during the build. Check for updates again to build the latest source.' >&2
+  exit 1
+fi
 say "built $VERSION → $BUILD_STAGE"
 
 if [ "$STAGE_ONLY" = 1 ]; then

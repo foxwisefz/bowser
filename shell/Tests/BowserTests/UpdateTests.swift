@@ -45,6 +45,27 @@ final class UpdateTests: XCTestCase {
         XCTAssertEqual(AppUpdates.latestBuild("100", "invalid"), "100")
     }
 
+    func testDevelopmentCheckReadsFingerprintAndRejectsFailedOrMalformedResults() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let bin = root.appendingPathComponent("bin")
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let script = bin.appendingPathComponent("development-fingerprint")
+        let expected = String(repeating: "a", count: 64)
+        for (output, exitCode) in [(expected, 0), ("", 0), ("not-a-fingerprint", 0), (expected, 1)] {
+            try "#!/bin/sh\nprintf '%s\\n' '\(output)'\nexit \(exitCode)\n".write(to: script, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+            do {
+                let actual = try await AppUpdates.developmentFingerprint(checkout: root.path)
+                XCTAssertEqual(exitCode, 0)
+                XCTAssertEqual(output, expected)
+                XCTAssertEqual(actual, expected)
+            } catch {
+                XCTAssertTrue(exitCode != 0 || output != expected)
+            }
+        }
+    }
+
     func testModulesPublishVerifiedCopiesAndLeavePointerOnVerificationFailure() throws {
         let fm = FileManager.default
         let home = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
