@@ -61,3 +61,11 @@ requests. It investigates implementations and reports observed technical blocker
 not speculative copyright, licensing or service-authorization prerequisites.
 Missing user input must be necessary for a specific action; actual tool/security
 boundaries still apply. Resumed conversations reassess unsupported earlier blockers.
+
+A page-payload limitation triggers investigation of the Elixir mod tier. Site
+scope restricts target pages, not the mod to JavaScript. Media processing and
+multi-request integrations are not automatic handoffs. ModSmith tries feasible
+alternatives, repairs failures, and prefers self-contained mods or verified local
+capabilities over asking the owner to deploy a service. Dependency claims require
+evidence; new installations or consequential actions still need appropriate
+owner authorization. Generated native work remains subject to the code audit.
