@@ -55,7 +55,7 @@ import BowserSurfaceKit
         window.contentView = view
         window.makeKeyAndOrderFront(nil)
         try await Task.sleep(for: .milliseconds(150))
-        for (characters, keyCode) in [("\u{F701}", UInt16(125)), ("\r", UInt16(36))] {
+        for (characters, keyCode) in [("\u{F703}", UInt16(124)), ("\r", UInt16(36))] {
             let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber, context: nil, characters: characters, charactersIgnoringModifiers: characters, isARepeat: false, keyCode: keyCode))
             window.sendEvent(event)
             try await Task.sleep(for: .milliseconds(30))

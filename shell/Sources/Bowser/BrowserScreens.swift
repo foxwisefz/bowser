@@ -1089,59 +1089,56 @@ struct ExternalProfileScreen: View {
     }
     private var model: any ExternalProfilePresentation { context.model as! any ExternalProfilePresentation }
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            HStack(alignment: .center, spacing: 12) {
-                Image(systemName: "arrow.up.right")
-                    .font(.system(size: 19, weight: .semibold))
-                    .foregroundStyle(.tint)
-                    .frame(width: 42, height: 42)
-                    .background(Color.accentColor.opacity(0.09), in: RoundedRectangle(cornerRadius: 12))
-                VStack(alignment: .leading, spacing: 5) {
-                    Text("Open with a profile")
-                        .font(.system(size: 21, weight: .semibold))
-                    HStack(spacing: 5) {
-                        Text(model.destination)
-                            .lineLimit(1).truncationMode(.middle)
-                        if model.linkCount > 1 {
-                            Text("+\(model.linkCount - 1) more").fixedSize()
-                        }
-                    }
-                    .font(.system(size: 12)).foregroundStyle(.secondary)
-                    .help(model.destination)
+        VStack(spacing: 16) {
+            VStack(spacing: 8) {
+                Text("Where to?")
+                    .font(.system(size: 27, weight: .semibold, design: .rounded))
+                HStack(spacing: 6) {
+                    Image(systemName: "arrow.up.right").font(.system(size: 10, weight: .semibold))
+                    Text(model.destination).lineLimit(1).truncationMode(.middle)
+                    if model.linkCount > 1 { Text("+\(model.linkCount - 1)").fixedSize() }
                 }
+                .font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
+                .padding(.horizontal, 12).padding(.vertical, 6)
+                .background(Color.primary.opacity(0.045), in: Capsule())
+                .help(model.destination)
             }
             ScrollViewReader { proxy in
                 ScrollView {
-                    VStack(spacing: 8) {
+                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
                         ForEach(Array(model.choices.enumerated()), id: \.element.id) { index, profile in
                             choice(profile, index: index).id(profile.id)
                         }
-                    }.padding(1)
+                    }.padding(5)
                 }
                 .scrollIndicators(.never)
-                .frame(maxHeight: CGFloat(max(1, model.choices.count)) * 68 - 6)
+                .frame(maxHeight: CGFloat(max(1, (model.choices.count + 1) / 2)) * 160 - 2)
                 .onChange(of: selectedID) { _, id in
                     if let id { proxy.scrollTo(id) }
                 }
             }
             if let error = model.error { Text(error).font(.caption).foregroundStyle(.red) }
-            HStack(spacing: 6) {
-                Image(systemName: "arrow.up.arrow.down")
+            HStack(spacing: 5) {
+                Text("← →")
                 Text("Choose")
-                Text("·")
-                Image(systemName: "return")
-                Text("Open")
+                Text("·").padding(.horizontal, 2)
+                Text("↵ Open")
                 Spacer()
                 Button("Cancel", action: model.cancel).keyboardShortcut(.cancelAction)
                     .buttonStyle(.plain)
-                    .padding(.horizontal, 12).padding(.vertical, 6)
-                    .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 7))
+                    .help("Cancel (Esc)")
             }
             .font(.system(size: 11)).foregroundStyle(.secondary)
-        }.padding(24).padding(.top, 12)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-        .background(Color(nsColor: .windowBackgroundColor))
+            .padding(.horizontal, 5)
+        }.padding(24).padding(.top, 8)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background {
+            Color(nsColor: .windowBackgroundColor)
+            LinearGradient(colors: [Color.accentColor.opacity(0.045), .clear], startPoint: .topLeading, endPoint: .bottomTrailing)
+        }
         .focusable().focusEffectDisabled().focused($keyboardFocused)
+        .onKeyPress(.leftArrow) { move(-1); return .handled }
+        .onKeyPress(.rightArrow) { move(1); return .handled }
         .onKeyPress(.upArrow) { move(-1); return .handled }
         .onKeyPress(.downArrow) { move(1); return .handled }
         .onKeyPress(.return) {
@@ -1153,22 +1150,21 @@ struct ExternalProfileScreen: View {
     }
 
     @ViewBuilder private func choice(_ profile: ProfileDisplay, index: Int) -> some View {
+        let tint = Color(nsColor: screenColor(hex: profile.draft.tint) ?? .controlAccentColor)
         let button = Button { model.choose(profile.id) } label: {
-            HStack(spacing: 14) {
-                ProfileIdentity(draft: profile.draft, size: 30)
-                    .frame(width: 36, height: 36)
-                    .background(Color(nsColor: screenColor(hex: profile.draft.tint) ?? .controlAccentColor).opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
-                Text(profile.name).font(.system(size: 14, weight: .medium)).lineLimit(1)
-                Spacer()
-                if index < 9 {
-                    Text("⌘\(index + 1)")
-                        .font(.system(size: 11, weight: .medium, design: .rounded))
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 6).padding(.vertical, 4)
-                        .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 5))
-                }
-            }.padding(12).contentShape(Rectangle())
-        }.buttonStyle(ProfileChoiceStyle(selected: selectedID == profile.id))
+            VStack(spacing: 10) {
+                ProfileIdentity(draft: profile.draft, size: 52)
+                    .frame(width: 64, height: 64)
+                    .background(tint.opacity(0.12), in: Circle())
+                Text(profile.name).font(.system(size: 15, weight: .semibold)).lineLimit(1)
+                    .frame(maxWidth: .infinity)
+                Text(index < 9 ? "⌘\(index + 1)" : "Open")
+                    .font(.system(size: 10, weight: .medium, design: .rounded))
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity).frame(height: 148)
+            .contentShape(RoundedRectangle(cornerRadius: 18))
+        }.buttonStyle(ProfileChoiceStyle(selected: selectedID == profile.id, tint: tint))
             .accessibilityLabel("Open in \(profile.name)")
             .accessibilityAddTraits(selectedID == profile.id ? [.isSelected] : [])
         if index < 9 { button.keyboardShortcut(KeyEquivalent(Character(String(index + 1))), modifiers: .command) }
@@ -1178,18 +1174,36 @@ struct ExternalProfileScreen: View {
 
 private struct ProfileChoiceStyle: ButtonStyle {
     var selected = false
+    var tint: Color
     func makeBody(configuration: Configuration) -> some View {
-        ProfileChoiceBody(configuration: configuration, selected: selected)
+        ProfileChoiceBody(configuration: configuration, selected: selected, tint: tint)
     }
     private struct ProfileChoiceBody: View {
         let configuration: Configuration
         let selected: Bool
+        let tint: Color
         @State private var hovered = false
+        @Environment(\.accessibilityReduceMotion) private var reduceMotion
         var body: some View {
             configuration.label
                 .foregroundStyle(.primary)
-                .background(selected ? Color.accentColor.opacity(configuration.isPressed ? 0.16 : 0.08) : Color.primary.opacity(hovered || configuration.isPressed ? 0.06 : 0.025), in: RoundedRectangle(cornerRadius: 11))
-                .overlay(RoundedRectangle(cornerRadius: 11).strokeBorder(selected ? Color.accentColor.opacity(0.45) : Color.primary.opacity(hovered ? 0.12 : 0.06)))
+                .background {
+                    RoundedRectangle(cornerRadius: 18)
+                        .fill(Color(nsColor: .controlBackgroundColor))
+                    RoundedRectangle(cornerRadius: 18)
+                        .fill(LinearGradient(colors: [tint.opacity(selected ? 0.14 : 0.04), tint.opacity(selected ? 0.04 : 0.01)], startPoint: .topLeading, endPoint: .bottomTrailing))
+                }
+                .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(selected ? tint.opacity(0.65) : Color.primary.opacity(hovered ? 0.18 : 0.08), lineWidth: selected ? 1.5 : 1))
+                .overlay(alignment: .topTrailing) {
+                    Image(systemName: selected ? "checkmark.circle.fill" : "arrow.up.right")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(selected ? tint : Color.secondary.opacity(0.5))
+                        .padding(12)
+                }
+                .shadow(color: tint.opacity(selected ? 0.1 : 0), radius: 4, y: 2)
+                .scaleEffect(configuration.isPressed ? 0.98 : 1)
+                .offset(y: hovered && !configuration.isPressed ? -2 : 0)
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: hovered)
                 .onHover { hovered = $0 }
         }
     }
