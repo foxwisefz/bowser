@@ -28,13 +28,14 @@ public struct ModSmithProject: Decodable, Identifiable {
     public let summary: String
     public let turns: [ModSmithTurn]
     public let files: [String]
+    public let favicon: String?
     public let enabled: Bool
     public let canUndo: Bool
     public let undoLabel: String?
     public let nextStep: ModSmithNextStep?
     public let repairNotice: String?
     enum CodingKeys: String, CodingKey {
-        case id, name, scope, url, status, summary, turns, files, enabled
+        case id, name, scope, url, status, summary, turns, files, enabled, favicon
         case canUndo = "can_undo", undoLabel = "undo_label"
         case nextStep = "next_step", repairNotice = "repair_notice"
     }
@@ -73,6 +74,7 @@ public struct ModSmithExisting: Decodable, Identifiable {
     public let path: String
     public let name: String
     public let scope: String
+    public let favicon: String?
     public let enabled: Bool
     public var id: String { path }
 }

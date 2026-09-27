@@ -240,6 +240,9 @@ defmodule BowserBrain.ModWorkshop do
       ),
       do: {:noreply, %{state | urls: Map.put(state.urls, wv, url)}}
 
+  def handle_info({:browser_event, %{"event" => "favicon_changed"}}, state),
+    do: {:noreply, tap(state, &publish/1)}
+
   def handle_info({:browser_event, %{"event" => "modsmith_scope", "request_id" => id} = event}, state)
       when is_binary(id) and byte_size(id) <= 64 do
     BowserBrain.ModScopeSuggestion.request(event)
@@ -529,7 +532,8 @@ defmodule BowserBrain.ModWorkshop do
     |> Enum.filter(&(&1.profile == profile))
     |> Enum.map(fn entry ->
       %{path: entry.path, name: Path.basename(BowserBrain.ModCatalog.display(entry.path)),
-        scope: entry.host || "Across Bowser", enabled: entry.enabled}
+        scope: entry.host || "Across Bowser", enabled: entry.enabled,
+        favicon: BowserBrain.ModIcon.cached(entry.host, profile)}
     end)
   end
   defp available_mods(_state, client) do
@@ -1351,6 +1355,7 @@ defmodule BowserBrain.ModWorkshop do
           p
           |> Map.drop(["session", "revisions"])
           |> Map.put("turns", Enum.map(p["turns"], &ModSmithOutcome.visible_turn/1))
+          |> Map.put("favicon", if(p["scope"] != "browser", do: BowserBrain.ModIcon.cached(p["url"], Map.get(p, "profile", "default"))))
           |> Map.put("files", files)
           |> Map.put("enabled", Enum.any?(files, &(not String.ends_with?(&1, ".off"))))
           |> Map.put("can_undo", revision != nil)

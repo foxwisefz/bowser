@@ -223,8 +223,16 @@ final class ModSmithTests: XCTestCase {
         model.targetURL = "https://example.com"
         model.scopeChoice.reset(url: model.targetURL)
         model.targetURL = "https://example.com/article"
+        let icon = NSImage(size: NSSize(width: 32, height: 32), flipped: false) { rect in
+            NSColor.systemTeal.setFill()
+            NSBezierPath(roundedRect: rect, xRadius: 7, yRadius: 7).fill()
+            return true
+        }
+        let iconPath = URL(fileURLWithPath: directory).appendingPathComponent("fixture-favicon.png")
+        let iconData = try XCTUnwrap(NSBitmapImageRep(data: XCTUnwrap(icon.tiffRepresentation))?.representation(using: .png, properties: [:]))
+        try iconData.write(to: iconPath)
         let project: [String: Any] = [
-            "id": "reading", "name": "Comfortable reading", "scope": "site", "url": model.targetURL,
+            "id": "reading", "name": "Comfortable reading", "scope": "site", "url": model.targetURL, "favicon": iconPath.path,
             "status": "partial", "summary": "Larger text and a calmer layout.", "files": ["sites/example.com/reading.css"],
             "enabled": true, "can_undo": true, "undo_label": "Make the text larger",
             "turns": [

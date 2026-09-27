@@ -23,6 +23,8 @@ defmodule BowserBrain.ModControls do
     render(%{state | active: Map.get(hello, "active", state.active)})
   end
 
+  def handle_event(%{"event" => "favicon_changed"}, state), do: render(state)
+
   def handle_event(%{"event" => "settings_opened"}, state), do: render(state)
 
   def handle_event(%{"event" => "tab_activated", "webview" => wv}, state) do
@@ -280,7 +282,7 @@ defmodule BowserBrain.ModControls do
               Path.extname(display(name)) in [".css", ".js"],
               BowserBrain.ModScope.file_profile(Path.join(sites_dir, name)) == BowserBrain.ModScope.profile_of(state.active) do
             info = describe_file(Path.join(sites_dir, name)) || "site payload"
-            row(dot(enabled?(name)) <> " " <> display(name), "site|#{host}|#{name}", info, state)
+            row(dot(enabled?(name)) <> " " <> display(name), "site|#{host}|#{name}", info, state, host)
           end
 
         _ ->
@@ -312,7 +314,7 @@ defmodule BowserBrain.ModControls do
               |> Enum.reject(&is_nil/1)
               |> Enum.join(" · ")
 
-            row(dot(enabled?(name)) <> " " <> display(name), "mod|#{name}", info, state)
+            row(dot(enabled?(name)) <> " " <> display(name), "mod|#{name}", info, state, scope)
           end
 
         _ ->
@@ -345,11 +347,12 @@ defmodule BowserBrain.ModControls do
   defp expanded(state), do: Map.get(state, :info) || MapSet.new()
 
   # icon · name / description · ✎ · switch — the extensions-list pattern.
-  defp row(label, payload, info, _state) do
+  defp row(label, payload, info, state, host) do
     on = enabled?(payload |> String.split("|") |> List.last())
 
     row(String.replace_prefix(String.replace_prefix(label, "● ", ""), "○ ", ""),
       subtitle: String.slice(info, 0, 90),
+      path: BowserBrain.ModIcon.cached(host, BowserBrain.ModScope.profile_of(state.active)),
       symbol: if(String.starts_with?(payload, "site|"), do: "doc.text", else: "puzzlepiece.extension"),
       trailing: [
         button("✎", event: "edit", payload: payload, compact: true),

@@ -476,6 +476,7 @@ struct ModSmithScreen: View {
                                     composerFocused = true
                                 } label: {
                                     HStack {
+                                        modIcon(project.favicon, fallback: project.scope == "browser" ? "macwindow" : "globe")
                                         VStack(alignment: .leading, spacing: 4) {
                                             Text(project.name).font(.headline)
                                             Text(project.scopeLabel).font(.caption).foregroundStyle(.secondary)
@@ -495,6 +496,7 @@ struct ModSmithScreen: View {
                                     composerFocused = true
                                 } label: {
                                     HStack {
+                                        modIcon(mod.favicon, fallback: mod.scope == "Across Bowser" ? "macwindow" : "globe")
                                         VStack(alignment: .leading, spacing: 4) {
                                             Text(mod.name).font(.headline)
                                             Text(mod.scope).font(.caption).foregroundStyle(.secondary)
@@ -513,6 +515,16 @@ struct ModSmithScreen: View {
         }
     }
 
+    @ViewBuilder private func modIcon(_ path: String?, fallback: String, size: CGFloat = 24) -> some View {
+        if let path, let image = ImageCache.load(path) {
+            Image(nsImage: image).resizable().scaledToFit().frame(width: size, height: size)
+                .accessibilityHidden(true)
+        } else {
+            Image(systemName: fallback).frame(width: size, height: size)
+                .foregroundStyle(.secondary).accessibilityHidden(true)
+        }
+    }
+
     private var header: some View {
         VStack(alignment: .leading, spacing: 9) {
             if let project = model.project {
@@ -520,8 +532,10 @@ struct ModSmithScreen: View {
             }
             if let project = model.project {
                 HStack {
-                    Label(project.scopeLabel, systemImage: project.scope == "browser" ? "macwindow" : "globe")
-                        .font(.caption).foregroundStyle(.secondary)
+                    HStack(spacing: 6) {
+                        modIcon(project.favicon, fallback: project.scope == "browser" ? "macwindow" : "globe", size: 16)
+                        Text(project.scopeLabel)
+                    }.font(.caption).foregroundStyle(.secondary)
                     Spacer()
                     Text(project.statusLabel).font(.caption.weight(.medium))
                 }
