@@ -467,7 +467,8 @@ defmodule BowserBrain.ModWorkshop do
       requests: Enum.filter(p["turns"], &(&1["role"] == "user")) |> Enum.map(& &1["text"]) |> then(fn requests -> Enum.uniq(Enum.take(requests, 1) ++ Enum.take(requests, -12)) end),
       candidate: Map.drop(envelope, ["files"]),
       receipts: Map.get(state.run, :receipts, []), last_write: Map.get(state.run, :last_write, 0),
-      images: Map.get(state.run, :images, []), failed_attempts: Map.get(p, "failed_attempts", [])}
+      images: Map.get(state.run, :images, []), audit_failures: Map.keys(Map.get(state.run, :audit_failures, %{})),
+      failed_attempts: Map.get(p, "failed_attempts", [])}
     {:reply, {:ok, context}, state}
   end
   def handle_call({:verification_context, _, _}, _, state), do: {:reply, {:error, :ended}, state}

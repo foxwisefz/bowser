@@ -866,6 +866,33 @@ end
     assert Process.get(:repair_calls) == 1
   end
 
+  test "unsupported external blockers trigger bounded repairs instead of owner restart advice", %{root: root} do
+    File.write!(Path.join(root, "registration.json"), JSON.encode!(%{"telemetryToken" => "fixture-token"}))
+    previous = Application.get_env(:bowser_brain, :ai_transport)
+    on_exit(fn ->
+      if previous, do: Application.put_env(:bowser_brain, :ai_transport, previous),
+        else: Application.delete_env(:bowser_brain, :ai_transport)
+    end)
+    event("submit", %{"text" => "Convert a document", "scope" => "site"})
+    assert_receive {:runner, _, token, _, _, _}, 1000
+    Process.put(:modsmith_run, token)
+    Process.put(:blocker_calls, 0)
+    Application.put_env(:bowser_brain, :ai_transport, fn _, _, body, _ ->
+      Process.put(:blocker_calls, Process.get(:blocker_calls) + 1)
+      if length(body["input"]) > 1, do: assert(List.last(body["input"])["content"] =~ "no observed evidence")
+      envelope = %{status: "needs_help", summary: "The converter works; restart to find its tool",
+        blocker: %{kind: "external_dependency", detail: "Restart the browser"},
+        next_step: %{title: "Restart", detail: "Restart now", action: "resume"}}
+      {:ok, %{"output" => [%{"type" => "message", "content" => [%{"type" => "output_text", "text" => JSON.encode!(envelope)}]}]}}
+    end)
+    assert {nil, {:output, output}} = BowserBrain.DirectAgent.run("fixture", nil, fn _ -> :ok end, nil)
+    result = JSON.decode!(output)
+    assert result["status"] == "partial"
+    assert result["next_step"] == nil
+    refute result["summary"] =~ "works"
+    assert Process.get(:blocker_calls) == 3
+  end
+
   test "repeated needs_help without tool progress is bounded", %{root: root} do
     File.write!(Path.join(root, "registration.json"), JSON.encode!(%{"telemetryToken" => "fixture-token"}))
     previous = Application.get_env(:bowser_brain, :ai_transport)

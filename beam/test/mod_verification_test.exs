@@ -30,6 +30,32 @@ defmodule BowserBrain.ModVerificationTest do
     }
   end
 
+  test "external dependency claims require review, but owner choices do not" do
+    assert ModVerification.external_blocker?(JSON.encode!(%{status: "needs_help", blocker: %{kind: "external_dependency"}}))
+    refute ModVerification.external_blocker?(JSON.encode!(%{status: "needs_help", blocker: %{kind: "owner_decision"}}))
+    refute ModVerification.external_blocker?(JSON.encode!(%{status: "needs_help", blocker: %{kind: "permission"}}))
+  end
+
+  test "blocker review can accept an observed missing tool without requiring installation" do
+    context = context() |> Map.merge(%{assessment: "blocker", installed: false,
+      receipts: [%{id: 4, tool: "discover_native_tools", result: "{available:false}"}]})
+    Application.put_env(:bowser_brain, :modsmith_verifier, fn prompt ->
+      assert JSON.decode!(prompt)["assessment"] == "blocker"
+      {:ok, JSON.encode!(%{verified: true, reason: "Tool is missing; owner must choose installation", evidence: [4]})}
+    end)
+    assert :ok = ModVerification.assess(context)
+    assert {:error, _} = ModVerification.assess(%{context | receipts: []})
+  end
+
+  test "blocked summary claiming success is returned for repair" do
+    context = Map.put(context(), :assessment, "blocker")
+    Application.put_env(:bowser_brain, :modsmith_verifier, fn _ ->
+      {:ok, JSON.encode!(%{verified: false, reason: "The action failed; calling its control working is misleading", evidence: [2]})}
+    end)
+    assert {:error, reason} = ModVerification.assess(context)
+    assert reason =~ "action failed"
+  end
+
   test "failed core action overrides active claim and retains proposed files for repair" do
     Application.put_env(:bowser_brain, :modsmith_verifier, fn prompt ->
       data = JSON.decode!(prompt)

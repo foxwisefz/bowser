@@ -26,6 +26,19 @@ defmodule BowserBrain.ModVerification do
     Saved-app scope supports only CSS/JS; do not recommend unavailable native mods for saved apps.
     Do not assume a dependency exists or declare it unavailable without evidence. Never bypass a
     real security denial. An unavailable review or insufficient evidence means unverified, not success.
+    When assessment is "blocker", verified means the external-dependency claim AND
+    the summary are supported; it does not mean the feature works. Cite receipts
+    showing the actual blocker. A feature that never starts must not be described as
+    working merely because its UI or event bridge works. For missing executables,
+    require discover_native_tools evidence, not just a failed PATH-only lookup.
+    A located executable is not a missing dependency; repair resolution and companion
+    PATH handling through the supported NativeTools API. Browser fetch failure alone
+    does not establish that a local service is absent, and an internal API address is
+    not a configured feature backend. An actionable source-audit finding is a repair
+    task: validate inputs and resubmit changed source, never bypass the audit or move
+    the unsafe action outside it. Check failed_attempts and audit_failures. Reject
+    repeated restart advice unsupported by new evidence. Accept genuinely missing
+    dependencies with a concrete owner action, without requiring installation first.
     Keep reason and next_approach concise, without secrets, signed URLs or copied source.
     """
   end
@@ -41,8 +54,9 @@ defmodule BowserBrain.ModVerification do
   end
 
   def check(output, token) do
-    with true <- active?(output),
+    with true <- active?(output) or external_blocker?(output),
          {:ok, context} <- GenServer.call(ModWorkshop, {:verification_context, token, output}) do
+      context = Map.put(context, :assessment, if(external_blocker?(output), do: "blocker", else: "outcome"))
       verdict = if context.documentation, do: :ok, else: assess(context)
 
       GenServer.call(
@@ -59,23 +73,34 @@ defmodule BowserBrain.ModVerification do
     :exit, _ -> {:error, "Verification is unavailable; the result remains unverified."}
   end
 
+  def external_blocker?(output) do
+    case ModSmith.extract_json(output) do
+      {:ok, %{"status" => status, "blocker" => %{"kind" => "external_dependency"}}}
+          when status in ["needs_help", "partial", "failed"] -> true
+      _ -> false
+    end
+  end
+
   def assess(context) do
+    blocker = Map.get(context, :assessment) == "blocker"
     images = Enum.filter(Map.get(context, :images, []), &(&1.id > context.last_write))
     image_ids = Enum.map(images, & &1.id)
     can_review_images = BowserBrain.AI.route() != :cli
     observations =
       Enum.filter(context.receipts, fn receipt ->
-        receipt.tool in @observations and receipt.id > context.last_write and
+        ((blocker and receipt.tool in ["discover_native_tools", "read_mod", "put_mod", "list_tabs"]) or
+          (receipt.tool in @observations and (blocker or receipt.id > context.last_write))) and
           (receipt.tool not in ["page_screenshot", "native_screenshot"] or (can_review_images and receipt.id in image_ids))
       end)
 
     cond do
-      not context.installed ->
+      not blocker and not context.installed ->
         {:error,
          "Install the proposed files and verify that exact version before reporting success."}
 
       observations == [] ->
-        {:error, "The requested behavior has no live verification after the last change."}
+        {:error, if(blocker, do: "The external dependency claim has no observed evidence. Investigate the actual capability before asking the owner to act.",
+          else: "The requested behavior has no live verification after the last change.")}
 
       true ->
         reviewer =
@@ -132,6 +157,7 @@ defmodule BowserBrain.ModVerification do
     "Completion review found: #{reason}\nContinue implementation and verify the owner's outcome using live tools. " <>
       "Preserve all files in the final envelope. Do not report active based on installation, UI presence or disabling the failed action. " <>
       "Use the retained failed attempts to change strategy after repeated equivalent failures. " <>
-      "Investigate maintained local tools/libraries or an audited Elixir mod when appropriate; check availability instead of requiring the owner to supply a service."
+      "Investigate maintained local tools/libraries or an audited Elixir mod when appropriate; use discover_native_tools before claiming an executable is missing. " <>
+      "Repair concrete security findings and resubmit source for audit; do not bypass a denial. Ask necessary owner choices with ask_user."
   end
 end
