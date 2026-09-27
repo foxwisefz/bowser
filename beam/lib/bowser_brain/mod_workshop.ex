@@ -8,6 +8,12 @@ defmodule BowserBrain.ModWorkshop do
   def modify(path), do: GenServer.cast(__MODULE__, {:modify, path})
 
   def tool(token, tool, args) do
+    result = dispatch_tool(token, tool, args)
+    GenServer.call(__MODULE__, {:tool_receipt, token, tool, args, result})
+    result
+  end
+
+  defp dispatch_tool(token, tool, args) do
     case GenServer.call(__MODULE__, {:context, token, tool}) do
       {:ok, run} ->
         cond do
@@ -419,6 +425,47 @@ defmodule BowserBrain.ModWorkshop do
       error -> {:reply, {:error, Exception.message(error)}, state}
     end
   end
+
+  def handle_call({:tool_receipt, token, tool, args, result}, _, %{run: %{token: token}} = state) do
+    run = state.run
+    id = Map.get(run, :receipt_sequence, 0) + 1
+    # Source is checked separately; keep bounded observations in memory, not full page transcripts on disk.
+    args = Map.drop(args, ["content"])
+    receipt = %{id: id, tool: tool, args: String.slice(JSON.encode!(args), 0, 2000),
+      result: String.slice(JSON.encode!(result), 0, 3000)}
+    run = run |> Map.put(:receipt_sequence, id)
+      |> Map.put(:receipts, Enum.take(Map.get(run, :receipts, []) ++ [receipt], -32))
+      |> Map.delete(:verification)
+    run = if tool in ["put_mod", "put_payload", "put_asset"], do: Map.put(run, :last_write, id), else: run
+    {:reply, :ok, %{state | run: run}}
+  end
+  def handle_call({:tool_receipt, _, _, _, _}, _, state), do: {:reply, :ok, state}
+
+  def handle_call({:verification_context, token, output}, _, %{run: %{token: token}} = state) do
+    p = project(state, state.run.project)
+    {:ok, envelope} = ModSmith.extract_json(output)
+    installed = verification_files_match?(state, envelope)
+    context = %{documentation: Map.get(state.run, :documentation, false), installed: installed, scope: p["scope"],
+      requests: Enum.filter(p["turns"], &(&1["role"] == "user")) |> Enum.map(& &1["text"]) |> then(fn requests -> Enum.uniq(Enum.take(requests, 1) ++ Enum.take(requests, -12)) end),
+      candidate: Map.drop(envelope, ["files"]),
+      receipts: Map.get(state.run, :receipts, []), last_write: Map.get(state.run, :last_write, 0),
+      failed_attempts: Map.get(p, "failed_attempts", [])}
+    {:reply, {:ok, context}, state}
+  end
+  def handle_call({:verification_context, _, _}, _, state), do: {:reply, {:error, :ended}, state}
+
+  def handle_call({:verification_result, token, hash, verdict}, _, %{run: %{token: token}} = state) do
+    state = put_in(state.run[:verification], %{hash: hash, verdict: verdict})
+    state = case verdict do
+      {:error, reason} ->
+        p = project(state, state.run.project)
+        attempt = %{"reason" => reason, "revision" => token}
+        put_project(state, Map.put(p, "failed_attempts", Enum.take(Map.get(p, "failed_attempts", []) ++ [attempt], -8)))
+      _ -> state
+    end
+    {:reply, :ok, state}
+  end
+  def handle_call({:verification_result, _, _, _}, _, state), do: {:reply, :ok, state}
 
   def handle_call({:context, token, tool}, _, state) do
     case state.run do
@@ -861,6 +908,8 @@ defmodule BowserBrain.ModWorkshop do
       returned map to the intended settings. This verifies runtime theme state, not pixels.
       For drafts already installed in this run, return files as [{"path":"mods/example.ex"}] without repeating content. Only unchanged drafts from this run can be referenced. New or changed files still require content. Do not claim the
       installer cannot accept Elixir mods. Saved apps still support only CSS/JS.
+      Original owner request: #{JSON.encode!(Enum.find_value(p["turns"], fn t -> if t["role"] == "user", do: t["text"] end))}
+      Retained failed verification attempts (avoid repeating equivalent failed approaches): #{JSON.encode!(Map.get(p, "failed_attempts", []))}
       Previous conversation and internal action context: #{JSON.encode!(Enum.take(p["turns"], -12))}
       """
   end
@@ -1123,6 +1172,18 @@ defmodule BowserBrain.ModWorkshop do
     _ -> file
   end
 
+  defp verification_files_match?(state, envelope) do
+    files = resolve_drafts(state, envelope["files"] || [])
+    is_list(files) and files != [] and
+      Enum.all?(prepared_files(state, files), fn
+        {:ok, {path, content}} -> is_binary(content) and not String.ends_with?(ModRevision.actual_path(path), ".off") and
+          ModRevision.read(ModRevision.actual_path(path)) == content
+        _ -> false
+      end)
+  rescue
+    _ -> false
+  end
+
   defp finish(%{run: %{documentation: true}} = state, _session, result) do
     Process.demonitor(state.run.ref, [:flush])
     usage = case result do
@@ -1197,6 +1258,14 @@ defmodule BowserBrain.ModWorkshop do
         {:error, reason} ->
           {state, "failed", string(reason), "", [], nil}
       end
+
+    verified = case {result, Map.get(state.run, :verification)} do
+      {{:output, output}, %{hash: hash, verdict: :ok}} -> BowserBrain.ModAuditor.digest(output) == hash and verification_files_match?(state, envelope)
+      _ -> false
+    end
+    {status, summary, notes} = if status == "active" and not verified,
+      do: {"partial", "The requested behavior is not verified yet.", "Live outcome verification is still required. " <> notes},
+      else: {status, summary, notes}
 
     {status, summary} = if Map.get(state.run, :script_fault, false),
       do: {"failed", "A page hook was paused because its observer kept triggering itself. Repair the hook, then run verification again."},

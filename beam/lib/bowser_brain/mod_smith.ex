@@ -154,6 +154,12 @@ defmodule BowserBrain.ModSmith do
     or assume an executable/library exists without checking through supported
     tools or an audited, feature-related mod. Never use a mod to bypass a denied
     tool or security audit.
+    Prefer maintained local tools and libraries for complex protocols rather than
+    rebuilding them from page internals. Inspect availability through supported tools
+    or an audited feature-related mod. After repeated equivalent failures, change
+    implementation strategy; changing presentation or disabling a failed core action
+    does not fulfill the request. Install drafts with tools before verifying them;
+    returning new source in the final envelope cannot verify that source's behavior.
     Try feasible alternative implementations and repair failures before asking
     the owner to solve them. Media processing, multiple network requests and
     external integrations are not automatic handoff categories. Prefer a
@@ -667,11 +673,22 @@ defmodule BowserBrain.ModSmith do
   def run_audit(prompt) do
     if BowserBrain.AI.route() == :cli, do: run_cli_audit(prompt), else: BowserBrain.DirectAgent.audit(prompt)
   end
-  defp run_cli_audit(prompt) do
+  def run_verification(prompt) do
+    if BowserBrain.AI.route() == :cli do
+      run_cli_audit(prompt, BowserBrain.ModVerification.instructions())
+    else
+      with {:ok, output} <- BowserBrain.DirectAgent.completion(BowserBrain.AI.route(),
+        [%{"role" => "user", "content" => prompt}], [], BowserBrain.ModVerification.instructions()) do
+        {:ok, Enum.flat_map(output, &(&1["content"] || [])) |> Enum.map_join("", &(&1["text"] || ""))}
+      end
+    end
+  end
+
+  defp run_cli_audit(prompt, instructions \\ BowserBrain.ModAuditor.instructions()) do
     settings = BowserBrain.Settings.all()
     with claude when is_binary(claude) <- BowserBrain.Paths.claude_executable(),
          route when route == :cli or elem(route, 0) == :router <- auth_route(settings) do
-      args = audit_args(prompt)
+      args = audit_args(prompt, instructions)
       case run_port(claude, args, claude_env(settings), 90_000, fn _ -> :ok end) do
         {:done, 0, events, _raw, _session} ->
           case stream_result(events) do
@@ -688,20 +705,34 @@ defmodule BowserBrain.ModSmith do
   end
 
   @doc false
-  def audit_args(prompt) do
+  def audit_args(prompt, instructions \\ BowserBrain.ModAuditor.instructions()) do
     ["-p", prompt, "--output-format", "stream-json", "--verbose",
         "--tools", "", "--allowedTools", "", "--strict-mcp-config",
         "--mcp-config", JSON.encode!(%{mcpServers: %{}}), "--disable-slash-commands",
         "--no-session-persistence", "--setting-sources", "", "--settings",
         JSON.encode!(%{disableAllHooks: true, autoMemoryEnabled: false, claudeMdExcludes: ["**"]}),
-        "--system-prompt", BowserBrain.ModAuditor.instructions()] ++ model_args()
+        "--system-prompt", instructions] ++ model_args()
   end
 
   def run_claude(prompt, resume, on_progress, app) do
     if BowserBrain.AI.route() == :cli,
-      do: run_cli(prompt, resume, on_progress, app),
+      do: verified_cli(prompt, resume, on_progress, app, 0),
       else: BowserBrain.DirectAgent.run(prompt, resume, on_progress, app)
   end
+  defp verified_cli(prompt, resume, progress, app, retries) do
+    case run_cli(prompt, resume, progress, app) do
+      {session, {:output, output}} = result ->
+        case BowserBrain.ModVerification.check(output, Process.get(:modsmith_run)) do
+          :ok -> result
+          {:error, reason} when retries < 2 ->
+            progress.("Checking the outcome and repairing what remains…")
+            verified_cli(prompt <> "\n" <> BowserBrain.ModVerification.correction(reason), session, progress, app, retries + 1)
+          {:error, reason} -> {session, {:output, BowserBrain.ModVerification.partial(output, reason)}}
+        end
+      result -> result
+    end
+  end
+
   defp run_cli(prompt, resume, on_progress, app) do
     settings = BowserBrain.Settings.all()
 

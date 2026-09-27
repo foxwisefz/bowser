@@ -1,6 +1,6 @@
 defmodule BowserBrain.DirectAgent do
   @moduledoc "Bounded direct-API tool loop using the same scoped ModWorkshop gateway as MCP."
-  alias BowserBrain.{AI, ModAuditor, ModWorkshop}
+  alias BowserBrain.{AI, ModAuditor, ModWorkshop, ModVerification}
   require Logger
 
   def run(prompt, _resume, progress, _app) do
@@ -8,6 +8,7 @@ defmodule BowserBrain.DirectAgent do
     Process.put(:direct_agent_deadline, System.monotonic_time(:millisecond) +
       Application.get_env(:bowser_brain, :modsmith_work_ms, 600_000))
     Process.put(:direct_agent_partial_count, 0)
+    Process.put(:direct_agent_verification_retries, 0)
     progress.("Connecting to your AI provider…")
     tools = tools()
     input = [%{"role" => "user", "content" => prompt}]
@@ -48,7 +49,7 @@ defmodule BowserBrain.DirectAgent do
     with {:ok, output} <- completion(route, input, [],
       "The run stopped because #{reason}. Make no more tool calls. Return the required JSON envelope, preserving all proposed files. Describe actual changes and checks only. If unfinished, name the specific remaining behavior and blocker in the summary and notes; explain the stated stopping reason. Do not call this a provider outage or mark unverified behavior complete.") do
       if Enum.any?(output, &(&1["type"] == "function_call")),
-        do: {:error, :step_limit}, else: {:ok, text(output)}
+        do: {:error, :step_limit}, else: {:ok, verified_or_partial(text(output), Process.get(:modsmith_run))}
     end
   end
 
@@ -76,15 +77,27 @@ defmodule BowserBrain.DirectAgent do
 
       if calls == [] do
         result = text(output)
-        if repairable?(result) and Process.get(:direct_agent_partial_count, 0) < 2 do
-          Process.put(:direct_agent_partial_count, Process.get(:direct_agent_partial_count, 0) + 1)
-          progress.("Finishing the remaining work…")
-          continuation = %{"role" => "user", "content" => "Continue the remaining implementation and verification now using the available tools. Preserve all pending file changes in your eventual final envelope. Clean up test artifacts. Do not stop just because an earlier tool batch ended. A failed check is a repair task, not an external blocker. Inspect mod_diagnostics for the installed module, diagnose the failed stage, repair and verify again. Zero hidden items is valid when all decisions are keep. If progress actually requires owner input, permission, or an unavailable external dependency, return needs_help with blocker: {kind: owner_decision|permission|external_dependency, detail: concrete evidence and required action}. Do not classify your own implementation errors as external blockers. Clean up temporary fixtures; do not repeatedly propose the same unfinished work."}
-          loop(route, input ++ output ++ [continuation], tools, progress, steps + 1, run)
-        else
-          if repairable?(result),
-            do: finish(route, input ++ output, progress, "the model repeatedly returned unfinished work without attempting another tool action"),
-            else: {:ok, result}
+        review = ModVerification.check(result, run)
+        cond do
+          match?({:error, _}, review) and Process.get(:direct_agent_verification_retries, 0) < 2 ->
+            {:error, reason} = review
+            Process.put(:direct_agent_verification_retries, Process.get(:direct_agent_verification_retries, 0) + 1)
+            progress.("Checking the outcome and repairing what remains…")
+            loop(route, input ++ output ++ [%{"role" => "user", "content" => ModVerification.correction(reason)}], tools, progress, steps + 1, run)
+          match?({:error, _}, review) ->
+            {:error, reason} = review
+            {:ok, ModVerification.partial(result, reason)}
+          true ->
+            if repairable?(result) and Process.get(:direct_agent_partial_count, 0) < 2 do
+              Process.put(:direct_agent_partial_count, Process.get(:direct_agent_partial_count, 0) + 1)
+              progress.("Finishing the remaining work…")
+              continuation = %{"role" => "user", "content" => "Continue the remaining implementation and verification now using the available tools. Preserve all pending file changes in your eventual final envelope. Clean up test artifacts. Do not stop just because an earlier tool batch ended. A failed check is a repair task, not an external blocker. Inspect mod_diagnostics for the installed module, diagnose the failed stage, repair and verify again. Zero hidden items is valid when all decisions are keep. If progress actually requires owner input, permission, or an unavailable external dependency, return needs_help with blocker: {kind: owner_decision|permission|external_dependency, detail: concrete evidence and required action}. Do not classify your own implementation errors as external blockers. Clean up temporary fixtures; do not repeatedly propose the same unfinished work."}
+              loop(route, input ++ output ++ [continuation], tools, progress, steps + 1, run)
+            else
+              if repairable?(result),
+                do: finish(route, input ++ output, progress, "the model repeatedly returned unfinished work without attempting another tool action"),
+                else: {:ok, result}
+            end
         end
       else
         Process.put(:direct_agent_partial_count, 0)
@@ -121,6 +134,13 @@ defmodule BowserBrain.DirectAgent do
 
         loop(route, input ++ output ++ results, tools, progress, steps + 1, run)
       end
+    end
+  end
+
+  defp verified_or_partial(result, run) do
+    case ModVerification.check(result, run) do
+      :ok -> result
+      {:error, reason} -> ModVerification.partial(result, reason)
     end
   end
 

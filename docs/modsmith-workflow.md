@@ -90,3 +90,7 @@ boundaries continue to filter which conversations appear. Unsent text is retaine
 when switching conversations in the open window.
 
 When a target tab leaves the mod’s site, ModSmith recovers to another matching tab in the same profile. Tab discovery, mod discovery, source reads and diagnostics remain available when no matching tab is open. Page actions and draft writes wait for a matching tab; discovery reports the current URLs and whether a target is available.
+
+Before calling a result working, ModSmith runs a separate, tool-free outcome review against the original request, later changes and actual tool receipts. The proposed files must already be installed, and the reviewer must cite live observations after the last draft write. Compilation, a visible button or disabling a failed action alone does not establish success. The review can send the generator back for up to two repair attempts; unavailable or inconclusive reviews leave the result unverified. This is model-assisted evidence review, not a guarantee of correctness.
+
+Failed review findings stay with the mod independently of the recent chat window. Refinements use them to investigate different implementations, including maintained local libraries or tools through an audited native mod when appropriate. The review does not bypass the code security audit or grant permission for external actions. Raw tool transcripts remain bounded in run memory; the retained history contains concise review findings.

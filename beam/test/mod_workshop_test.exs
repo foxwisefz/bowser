@@ -318,8 +318,8 @@ defmodule BowserBrain.ModWorkshopTest do
     assert event("continue", %{"project" => id}).run.token == token
     refute_receive {:runner, _, _, _, _, _}, 50
     state = complete(pid, [file("fixed")])
-    assert hd(state.data["projects"])["status"] == "active"
-    assert event("continue", %{"project" => id}).run == nil
+    assert hd(state.data["projects"])["status"] == "partial"
+    assert event("continue", %{"project" => id}).run.project == id
   end
 
   test "enable and test enables once, resumes verification and keeps ownership and Undo" do
@@ -601,6 +601,73 @@ end
     assert ModRevision.read("mods/valid_host.ex") =~ "GenuineScopedDraft"
   end
 
+  test "active claims are independently reviewed, retried, and retained across refinements", %{root: root} do
+    File.write!(Path.join(root, "registration.json"), JSON.encode!(%{"telemetryToken" => "fixture-token"}))
+    on_exit(fn ->
+      Application.delete_env(:bowser_brain, :ai_transport)
+      Application.delete_env(:bowser_brain, :modsmith_verifier)
+      Process.delete(:modsmith_run)
+    end)
+    event("submit", %{"text" => "Export a report", "scope" => "site"})
+    assert_receive {:runner, pid, token, _, _, _}, 1000
+    Process.put(:modsmith_run, token)
+    assert %{ok: true} = ModWorkshop.tool(token, "put_payload", %{"name" => "export.js", "content" => "// fixture"})
+    assert %{ok: true} = ModWorkshop.tool(token, "shell_theme", %{})
+    Application.put_env(:bowser_brain, :modsmith_verifier, fn prompt ->
+      data = JSON.decode!(prompt)
+      assert data["requests"] == ["Export a report"]
+      assert Enum.any?(data["receipts"], &(&1["tool"] == "shell_theme"))
+      {:ok, JSON.encode!(%{verified: false, reason: "Shell appearance does not prove report export works.",
+        evidence: [], next_approach: "Test the export action using a different implementation."})}
+    end)
+    Process.put(:outcome_calls, 0)
+    Application.put_env(:bowser_brain, :ai_transport, fn _, _, body, _ ->
+      count = Process.get(:outcome_calls)
+      Process.put(:outcome_calls, count + 1)
+      if count > 0, do: assert(List.last(body["input"])["content"] =~ "Shell appearance")
+      result = %{status: "active", summary: "Export works", files: [%{path: "sites/example.com/export.js"}]}
+      {:ok, %{"output" => [%{"type" => "message", "content" => [%{"type" => "output_text", "text" => JSON.encode!(result)}]}]}}
+    end)
+    assert {nil, {:output, output}} = BowserBrain.DirectAgent.run("Export a report", nil, fn _ -> :ok end, nil)
+    assert Process.get(:outcome_calls) == 3
+    assert JSON.decode!(output)["status"] == "partial"
+    send(pid, {:result, {nil, {:output, output}}})
+    await(fn -> :sys.get_state(ModWorkshop).run == nil end)
+    [project] = ModRevision.load()["projects"]
+    assert project["status"] == "partial"
+    assert length(project["failed_attempts"]) == 3
+    :sys.replace_state(ModWorkshop, fn state ->
+      turns = project["turns"] ++ Enum.map(1..15, &%{"role" => "user", "text" => "Refinement #{&1}"})
+      put_in(state.data["projects"], [Map.put(project, "turns", turns)])
+    end)
+    event("submit", %{"project" => project["id"], "text" => "Try again"})
+    assert_receive {:runner, _, _, prompt, _, _}, 1000
+    assert prompt =~ "Shell appearance does not prove report export works"
+  end
+
+  test "verification is tied to the exact result and invalidated by subsequent tool activity" do
+    on_exit(fn -> Application.delete_env(:bowser_brain, :modsmith_verifier) end)
+    for changed <- [false, true] do
+      state = event("submit", %{"text" => "Inspect theme", "scope" => "browser"})
+      assert_receive {:runner, pid, token, _, _, _}, 1000
+      name = "verified-#{token}.css"
+      assert %{ok: true} = ModWorkshop.tool(token, "put_payload", %{"host" => "example.com", "name" => name, "content" => "body {}"})
+      assert %{ok: true} = ModWorkshop.tool(token, "shell_theme", %{})
+      Application.put_env(:bowser_brain, :modsmith_verifier, fn prompt ->
+        data = JSON.decode!(prompt)
+        receipt = List.last(data["receipts"])
+        {:ok, JSON.encode!(%{verified: true, reason: "Observed requested theme state", evidence: [receipt["id"]]})}
+      end)
+      output = JSON.encode!(%{status: "active", summary: "Verified", files: [%{path: "sites/example.com/#{name}"}]})
+      assert :ok = BowserBrain.ModVerification.check(output, token)
+      if changed, do: ModWorkshop.tool(token, "put_payload", %{"host" => "example.com", "name" => name, "content" => "body {color:red}"})
+      send(pid, {:result, {nil, {:output, output}}})
+      await(fn -> :sys.get_state(ModWorkshop).run == nil end)
+      p = Enum.find(:sys.get_state(ModWorkshop).data["projects"], &(&1["id"] == state.run.project))
+      assert p["status"] == if(changed, do: "partial", else: "active")
+    end
+  end
+
   test "direct agent continues after audited mod installation", %{root: root} do
     File.write!(Path.join(root, "registration.json"), JSON.encode!(%{"telemetryToken" => "fixture-token"}))
     previous = Application.get_env(:bowser_brain, :ai_transport)
@@ -683,8 +750,8 @@ end
         {:ok, %{"output" => [%{"type" => "message", "content" => [%{"type" => "output_text", "text" => JSON.encode!(envelope)}]}]}}
       end)
       assert {nil, {:output, result}} = BowserBrain.DirectAgent.run("fixture", nil, fn _ -> :ok end, nil)
-      assert JSON.decode!(result)["status"] == "active"
-      assert Process.get(:repair_calls) == 2
+      assert JSON.decode!(result)["status"] == "partial"
+      assert Process.get(:repair_calls) == 4
     end
     Process.put(:repair_calls, 0)
     Application.put_env(:bowser_brain, :ai_transport, fn _, _, _, _ ->
@@ -987,7 +1054,7 @@ end
       ModWorkshop.tool(token, "put_mod", %{"name" => "draft_skin.ex", "content" => content})
     assert ModRevision.read("mods/draft_skin.ex") == BowserBrain.ModScope.tag(content, "default")
     state = complete(pid, [%{"path" => "mods/draft_skin.ex"}], %{"notes" => "Use the toolbar."})
-    assert hd(state.data["projects"])["status"] == "active"
+    assert hd(state.data["projects"])["status"] == "partial"
     [project] = state.data["projects"]
     assert hd(project["revisions"])["files"]["mods/draft_skin.ex"]["before"] == nil
     assert %{ok: false} = ModWorkshop.tool(token, "put_mod", %{"name" => "late.ex", "content" => content})
@@ -1081,7 +1148,7 @@ end
     assert %{ok: false} = ModWorkshop.tool(token, "put_asset", %{"name" => "bad.svg", "content" => "<svg><script/></svg>"})
     state = complete(pid, [%{"path" => path}])
     [p] = state.data["projects"]
-    assert p["status"] == "active"
+    assert p["status"] == "partial"
     event("undo", %{"project" => p["id"]})
     refute File.exists?(absolute)
   end
