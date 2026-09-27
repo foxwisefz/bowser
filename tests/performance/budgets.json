@@ -1,0 +1,97 @@
+{
+  "startup_shell_ready_ms": {
+    "min_samples": 3,
+    "max_p95": 3000,
+    "noise_floor": 100
+  },
+  "startup_backend_ready_ms": {
+    "min_samples": 3,
+    "max_p95": 5000,
+    "noise_floor": 200
+  },
+  "backend_upgrade_total_ms": {
+    "min_samples": 3,
+    "max_p95": 4000,
+    "noise_floor": 200
+  },
+  "backend_upgrade_pause_ms": {
+    "min_samples": 3,
+    "max_p95": 800,
+    "noise_floor": 50
+  },
+  "offline_upgrade_backup_apply_ms": {
+    "min_samples": 3,
+    "max_p95": 3000,
+    "noise_floor": 150
+  },
+  "new_tab_ms": {
+    "min_samples": 5,
+    "max_p95": 50,
+    "noise_floor": 5
+  },
+  "restore_100_tabs_ms": {
+    "min_samples": 3,
+    "max_p95": 1000,
+    "noise_floor": 50
+  },
+  "host_rss_100_tabs_mb": {
+    "min_samples": 3,
+    "max_p95": 400,
+    "noise_floor": 25
+  },
+  "cold_navigation_first_content_ms": {
+    "min_samples": 5,
+    "max_p95": 750,
+    "noise_floor": 25
+  },
+  "cached_tab_first_content_ms": {
+    "min_samples": 5,
+    "max_p95": 500,
+    "noise_floor": 25
+  },
+  "loaded_tab_switch_ms": {
+    "min_samples": 30,
+    "max_p95": 16,
+    "noise_floor": 2
+  },
+  "sleeping_tab_mount_ms": {
+    "min_samples": 5,
+    "max_p95": 50,
+    "noise_floor": 5
+  },
+  "sleeping_tab_first_content_ms": {
+    "min_samples": 5,
+    "max_p95": 750,
+    "noise_floor": 25
+  },
+  "omnibar_query_1000_tabs_ms": {
+    "min_samples": 30,
+    "max_p95": 16,
+    "noise_floor": 1
+  },
+  "scroll_frame_interval_ms": {
+    "min_samples": 120,
+    "max_p95": 40,
+    "noise_floor": 5
+  },
+  "native_toolbar_upgrade_ms": {
+    "min_samples": 5,
+    "max_p95": 750,
+    "noise_floor": 50
+  },
+  "startup_browser_1_tabs_ms": {
+    "min_samples": 3,
+    "max_p95": 8000,
+    "noise_floor": 300
+  },
+  "startup_browser_100_tabs_ms": {
+    "min_samples": 3,
+    "max_p95": 10000,
+    "noise_floor": 400
+  },
+  "native_toolbar_adopt_ms": {
+    "min_samples": 5,
+    "max_p95": 16.67,
+    "noise_floor": 2
+  }
+}
