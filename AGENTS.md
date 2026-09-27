@@ -165,6 +165,18 @@ bd prime                # Refresh Beads context
 **Architecture in one line:** issues live in a local Dolt DB; sync uses `refs/dolt/data` on your git remote; `.beads/issues.jsonl` is a passive export. See https://github.com/gastownhall/beads/blob/main/docs/SYNC_CONCEPTS.md for details and anti-patterns.
 <!-- END BEADS CODEX SETUP -->
 
+## Scope of mod fixes
+
+When discussing or fixing mods, improve **mod creation and management for all
+mods**: ModSmith's workflow, runtime contracts, verification, state, and UI.
+Treat a reported mod as a reproduction case for a general problem. Do not
+hard-code its website, behavior, prompts, or next actions into the product,
+or repair that user's generated mod as the task's solution.
+
+Target a specific mod only when the user explicitly requests it **and** that
+mod is shipped as part of Bowser core. Apply this rule when reviewing past
+fixes as well as when making new ones.
+
 ## ModSmith API documentation
 
 When changing APIs exposed to mods, audit the ModSmith guide and MCP schemas
