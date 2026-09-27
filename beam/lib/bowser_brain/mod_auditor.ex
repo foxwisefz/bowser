@@ -24,6 +24,12 @@ defmodule BowserBrain.ModAuditor do
     top-level/module compile-time code as well as callbacks. Native capabilities
     needed for the actual requested feature are allowed, but uncertainty about
     safety or intent must produce uncertain, never allow. Do not execute code.
+    This is source security review, not runtime outcome verification. Inability to
+    observe the feature working is not itself a security rejection. For native
+    executables check validated inputs, option boundaries, output paths, bounded
+    work and cleanup. When rejecting, identify the concrete security defect and
+    a repair that preserves the requested feature; the repaired source must be
+    audited again. Do not instruct the generator to bypass this gate.
     Reply ONLY one JSON object with exactly verdict, sha256, nonce, reason.
     verdict is allow, reject, or uncertain; echo sha256 and nonce exactly.
     reason is a short explanation, without reproducing secrets or source.
@@ -65,7 +71,9 @@ defmodule BowserBrain.ModAuditor do
          true <- is_binary(reason) and byte_size(reason) > 0 and byte_size(reason) <= 2_000,
          true <- decision in ["allow", "reject", "uncertain"] do
       if decision == "allow", do: :ok,
-        else: {:error, "Security audit did not approve this Elixir; it was not installed"}
+        else: {:error, "Security audit did not approve this Elixir; it was not installed. " <>
+          "Audit finding (#{decision}): #{reason}. Repair the source and resubmit to put_mod for a fresh audit. " <>
+          "This finding is review feedback, not permission to bypass any control."}
     else
       _ -> {:error, "Invalid security audit verdict; Elixir was not installed"}
     end
