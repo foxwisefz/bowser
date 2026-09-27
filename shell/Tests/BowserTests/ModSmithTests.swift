@@ -25,6 +25,23 @@ final class ModSmithTests: XCTestCase {
         XCTAssertEqual(model.draft, "Refinement idea")
     }
 
+    @MainActor func testDeletingConversationClearsItsDraftAfterAcknowledgement() {
+        let model = ModSmithModel()
+        model.connected = { true }
+        var sent: [String: Any] = [:]
+        model.send = { sent = $0 }
+        model.draft = "Keep new idea"
+        model.receive(snapshot(selected: "deleted"))
+        model.draft = "Private refinement"
+        model.action("delete")
+        XCTAssertEqual(sent["project"] as? String, "deleted")
+        XCTAssertEqual(sent["action"] as? String, "delete")
+        model.receive(snapshot())
+        XCTAssertEqual(model.draft, "Keep new idea")
+        model.receive(snapshot(selected: "deleted"))
+        XCTAssertEqual(model.draft, "")
+    }
+
     @MainActor func testOnlyAcceptedSubmissionClearsDraft() {
         let model = ModSmithModel()
         model.targetURL = "https://example.com"

@@ -410,6 +410,7 @@ struct ModSmithScreen: View {
     @ObservedObject var context: BrowserScreenContext
     private var model: any ModSmithPresentation { context.model as! any ModSmithPresentation }
     @FocusState private var composerFocused: Bool
+    @State private var deletingProject: String?
     private var showDetails: Bool {
         get { context.binding("showDetails", default: false).wrappedValue }
         nonmutating set { context.binding("showDetails", default: false).wrappedValue = newValue }
@@ -442,6 +443,17 @@ struct ModSmithScreen: View {
             Color(nsColor: .windowBackgroundColor)
             LinearGradient(colors: [Color.purple.opacity(0.045), .clear], startPoint: .topLeading, endPoint: .bottomTrailing)
         }
+        .alert("Delete this mod?", isPresented: Binding(
+            get: { deletingProject != nil }, set: { if !$0 { deletingProject = nil } }
+        )) {
+            Button("Delete mod", role: .destructive) {
+                if let id = deletingProject { model.action("delete", project: id, path: nil) }
+                deletingProject = nil
+            }
+            Button("Cancel", role: .cancel) { deletingProject = nil }
+        } message: {
+            Text("This removes the mod’s files and all its ModSmith conversation and undo history. This can’t be undone. Website actions and saved mod data stay as they are.")
+        }
         .onChange(of: model.draft) { _, text in
             if model.project == nil && !model.isSiteApp { model.scopeChoice.update(text) }
         }
@@ -451,7 +463,7 @@ struct ModSmithScreen: View {
         .sheet(isPresented: context.binding("showExisting", default: false)) {
             VStack(alignment: .leading, spacing: 16) {
                 Text("Your mods").font(.title2.weight(.semibold))
-                Text("Edit a mod to refine it or turn it on and off.").foregroundStyle(.secondary)
+                Text("Open a mod to edit it, turn it on or off, or delete it.").foregroundStyle(.secondary)
                 if (model.snapshot.available_mods ?? []).isEmpty && model.snapshot.projects.isEmpty {
                     Text("No installed mods are available in this window yet.").padding(.vertical, 24)
                 } else {
@@ -514,6 +526,9 @@ struct ModSmithScreen: View {
                     Text(project.statusLabel).font(.caption.weight(.medium))
                 }
                 HStack {
+                    Button("Delete mod", systemImage: "trash", role: .destructive) {
+                        deletingProject = project.id
+                    }.help("Delete this mod and its ModSmith history")
                     if project.canUndo {
                         Button("Undo last change", systemImage: "arrow.uturn.backward") { model.action("undo") }
                             .help("Restore mod files before: \(project.undoLabel ?? "last change"). Website actions and stored mod data are not reversed.")

@@ -14,6 +14,7 @@ final class ModSmithModel: ObservableObject, ModSmithPresentation {
     @Published var connectionError: String?
     @Published var targetURL = ""
     var targetWebview: UInt64?
+    private var deletingProjects: Set<String> = []
     private var drafts: [String: String] = [:]
     private var projectTargets: [String: UInt64] = [:]
     private var pending: (id: String, key: String, text: String)?
@@ -48,7 +49,12 @@ final class ModSmithModel: ObservableObject, ModSmithPresentation {
             if let project = incoming.selected, let targetWebview { projectTargets[project] = targetWebview }
             self.pending = nil
         }
-        if incoming.error != nil { pending = nil }
+        for id in deletingProjects where !incoming.projects.contains(where: { $0.id == id }) {
+            drafts.removeValue(forKey: id)
+            projectTargets.removeValue(forKey: id)
+        }
+        deletingProjects = deletingProjects.filter { id in incoming.projects.contains { $0.id == id } }
+        if incoming.error != nil { pending = nil; deletingProjects.removeAll() }
         LearnGuideProgress.shared.receive(incoming)
         snapshot = incoming
         draft = drafts[key] ?? ""
@@ -76,6 +82,7 @@ final class ModSmithModel: ObservableObject, ModSmithPresentation {
         var message: [String: Any] = ["op": "event", "event": "modsmith", "action": action]
         if let id = id ?? snapshot.selected { message["project"] = id }
         if let path { message["path"] = path }
+        if action == "delete", let id = id ?? snapshot.selected { deletingProjects.insert(id) }
         send(message)
     }
 

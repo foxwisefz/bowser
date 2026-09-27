@@ -35,3 +35,12 @@ result also asks for input. A later approved revision for the same file clears
 that run's review failure. Enabling a mod does not establish verification.
 Testing respects existing authorization and asks for additional choices or
 permissions only when needed, regardless of the mod's website or behavior.
+
+Open a mod from **Your mods**, then choose **Delete mod**. Confirmation removes
+its active and disabled files, assets, and the entire ModSmith project (requests,
+agent session reference, conversation, and undo revisions). Empty or failed
+projects can also be deleted. Deletion is unavailable during a build, respects
+profile and saved-app ownership, and refuses to delete files referenced by
+another project. A failed history save restores removed files. Existing runtime
+watchers unload deleted mods. Website actions and persistent mod data are not
+reversed or erased.

@@ -588,6 +588,12 @@ defmodule BowserBrain.ModWorkshop do
       action == "select" and valid ->
         select(state, client, id)
 
+      action == "delete" and valid and state.run == nil ->
+        delete_project(state, project)
+
+      action == "delete" ->
+        %{state | error: if(valid, do: "Stop the current build before deleting a mod.", else: "That mod is unavailable in this window.")}
+
       action in ["undo", "toggle"] and valid and state.run == nil ->
         revision_action(state, project, action)
 
@@ -1180,6 +1186,42 @@ defmodule BowserBrain.ModWorkshop do
     end)
     |> Enum.uniq()
     |> Enum.filter(&(ModRevision.read(&1) != nil))
+  end
+
+  defp delete_project(state, project) do
+    files = live_paths(project)
+    canonical = &String.replace_suffix(&1, ".off", "")
+    others = Enum.reject(state.data["projects"], &(&1["id"] == project["id"]))
+    shared = others |> Enum.flat_map(&paths/1) |> Enum.map(canonical) |> MapSet.new()
+
+    if Enum.any?(files, &MapSet.member?(shared, canonical.(&1))),
+      do: raise("This mod shares files with another ModSmith project. Resolve the shared files before deleting it.")
+
+    originals = Map.new(files, &{&1, ModRevision.read(&1)})
+    Enum.each(originals, fn {path, source} ->
+      owned = cond do
+        String.starts_with?(path, "assets/") -> String.starts_with?(path, "assets/#{project["id"]}/")
+        app = project["app"] -> String.starts_with?(path, "app-mods/#{app["id"]}/")
+        true -> not String.starts_with?(path, "app-mods/") and
+          BowserBrain.ModScope.source_profile(source) == Map.get(project, "profile", "default")
+      end
+      unless owned, do: raise("A mod file now belongs to another profile or app. Nothing was deleted.")
+    end)
+
+    data = state.data
+      |> Map.put("projects", others)
+      |> Map.update!("selected", fn selections ->
+        Map.reject(selections, fn {_, id} -> id == project["id"] end)
+      end)
+
+    try do
+      Enum.each(files, &ModRevision.write(&1, nil))
+      %{state | data: ModRevision.save(data), error: nil}
+    rescue
+      error ->
+        Enum.each(originals, fn {path, source} -> ModRevision.write(path, source) end)
+        %{state | error: "Could not delete the mod: #{Exception.message(error)}. Its history has been kept."}
+    end
   end
 
   defp revision_action(state, p, "undo") do

@@ -57,6 +57,103 @@ defmodule BowserBrain.ModWorkshopTest do
     {:ok, root: root}
   end
 
+  test "delete removes active and disabled files, project history and all selections", %{root: root} do
+    File.mkdir_p!(Path.join(root, "mods"))
+    File.write!(Path.join(root, "mods/reader.ex.off"), "# Reader")
+    state = event("edit_existing", %{"path" => "mods/reader.ex.off"})
+    [project] = state.data["projects"]
+    File.write!(Path.join(root, "mods/reader.ex"), "# Reader")
+    :sys.replace_state(ModWorkshop, fn state ->
+      put_in(state.data["selected"]["another-window"], project["id"])
+    end)
+    state = event("delete", %{"project" => project["id"]})
+    assert state.error == nil
+    assert state.data["projects"] == []
+    assert state.data["selected"] == %{}
+    assert ModRevision.load() == state.data
+    refute File.exists?(Path.join(root, "mods/reader.ex"))
+    refute File.exists?(Path.join(root, "mods/reader.ex.off"))
+  end
+
+  test "delete clears generated files, assets, requests and revisions" do
+    state = event("submit", %{"text" => "Make reading easier", "scope" => "site"})
+    assert_receive {:runner, pid, _, _, _, _}, 2000
+    id = state.run.project
+    state = event("delete", %{"project" => id})
+    assert state.run != nil
+    assert state.error =~ "Stop the current build"
+    complete(pid, [file("body { color: red }")])
+    asset = "assets/#{id}/icon.svg"
+    ModRevision.write(asset, "<svg/>")
+    :sys.replace_state(ModWorkshop, fn state ->
+      [project] = state.data["projects"]
+      [revision | rest] = project["revisions"]
+      revision = put_in(revision["files"][asset], %{"before" => nil, "after" => "<svg/>"})
+      put_in(state.data["projects"], [Map.put(project, "revisions", [revision | rest])])
+    end)
+    state = event("delete", %{"project" => id})
+    assert state.error == nil
+    assert state.data["projects"] == []
+    assert ModRevision.read(asset) == nil
+    assert ModRevision.read("sites/example.com/reading.css") == nil
+    assert ModRevision.load()["projects"] == []
+  end
+
+  test "failed history save restores deleted files and keeps the conversation", %{root: root} do
+    File.mkdir_p!(Path.join(root, "mods"))
+    File.write!(Path.join(root, "mods/reader.ex"), "# Reader")
+    state = event("edit_existing", %{"path" => "mods/reader.ex"})
+    [project] = state.data["projects"]
+    File.mkdir_p!(Path.join(root, "history.json.tmp"))
+    state = event("delete", %{"project" => project["id"]})
+    assert state.error =~ "Could not delete"
+    assert state.data["projects"] == [project]
+    assert ModRevision.read("mods/reader.ex") == "# Reader"
+    assert ModRevision.load()["projects"] == [project]
+  end
+
+  test "saved-app deletion rejects other clients and removes its own history", %{root: root} do
+    id = "com.foxwiseai.bowser.site.0123456789abcdef"
+    app = %{"id" => id, "url" => "https://example.com", "name" => "Example"}
+    path = "app-mods/#{id}/reader.css.off"
+    File.mkdir_p!(Path.dirname(Path.join(root, path)))
+    File.write!(Path.join(root, path), "body {}")
+    state = event("edit_existing", %{"app" => app, "path" => path})
+    [project] = state.data["projects"]
+    state = event("delete", %{"project" => project["id"]})
+    assert state.data["projects"] == [project]
+    assert ModRevision.read(path) == "body {}"
+    state = event("delete", %{"app" => app, "project" => project["id"]})
+    assert state.data["projects"] == []
+    assert ModRevision.read(path) == nil
+  end
+
+  test "delete preserves shared files and their histories", %{root: root} do
+    File.mkdir_p!(Path.join(root, "mods"))
+    File.write!(Path.join(root, "mods/reader.ex"), "# Reader")
+    state = event("edit_existing", %{"path" => "mods/reader.ex"})
+    [project] = state.data["projects"]
+    :sys.replace_state(ModWorkshop, fn state ->
+      put_in(state.data["projects"], [project, Map.put(project, "id", "other")])
+    end)
+    state = event("delete", %{"project" => project["id"]})
+    assert state.error =~ "shares files"
+    assert length(state.data["projects"]) == 2
+    assert ModRevision.read("mods/reader.ex") == "# Reader"
+  end
+
+  test "delete rejects files reassigned to another profile", %{root: root} do
+    File.mkdir_p!(Path.join(root, "mods"))
+    File.write!(Path.join(root, "mods/reader.ex"), "# Reader")
+    state = event("edit_existing", %{"path" => "mods/reader.ex"})
+    [project] = state.data["projects"]
+    File.write!(Path.join(root, "mods/reader.ex"), "# bowser-profile: other\n")
+    state = event("delete", %{"project" => project["id"]})
+    assert state.error =~ "another profile"
+    assert length(state.data["projects"]) == 1
+    assert File.exists?(Path.join(root, "mods/reader.ex"))
+  end
+
   test "existing disabled mods reopen one conversation and reject foreign paths", %{root: root} do
     File.mkdir_p!(Path.join(root, "mods"))
     File.write!(Path.join(root, "mods/reader.ex.off"), "# Existing reader\n")
