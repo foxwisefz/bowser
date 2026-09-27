@@ -7,6 +7,7 @@ import Combine
     @Published public private(set) var suggested: String?
     @Published public private(set) var checking = false
     @Published public private(set) var host: String?
+    @Published public private(set) var faviconPath: String?
     public private(set) var manual = false
     public var request: (String, String, String) -> Void = { _, _, _ in }
     private var generation: String?
@@ -15,10 +16,11 @@ import Combine
     private var frozen = false
     public init() {}
     public var valid: Bool { selected == "browser" || host != nil }
-    public func reset(url: String, selected: String = "site", manual: Bool = false) {
+    public func reset(url: String, selected: String = "site", manual: Bool = false, faviconPath: String? = nil) {
         cancel()
         let parsed = URL(string: url)
         host = ["http", "https"].contains(parsed?.scheme?.lowercased() ?? "") ? parsed?.host : nil
+        self.faviconPath = host == nil ? nil : faviconPath
         self.selected = selected; self.manual = manual; suggested = nil; prompt = ""; frozen = false
     }
     public func choose(_ value: String) {

@@ -231,6 +231,7 @@ final class ModSmithTests: XCTestCase {
         let iconPath = URL(fileURLWithPath: directory).appendingPathComponent("fixture-favicon.png")
         let iconData = try XCTUnwrap(NSBitmapImageRep(data: XCTUnwrap(icon.tiffRepresentation))?.representation(using: .png, properties: [:]))
         try iconData.write(to: iconPath)
+        model.scopeChoice.reset(url: model.targetURL, faviconPath: iconPath.path)
         let project: [String: Any] = [
             "id": "reading", "name": "Comfortable reading", "scope": "site", "url": model.targetURL, "favicon": iconPath.path,
             "status": "partial", "summary": "Larger text and a calmer layout.", "files": ["sites/example.com/reading.css"],

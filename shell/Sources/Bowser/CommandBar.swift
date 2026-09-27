@@ -19,7 +19,7 @@ import BowserSurfaceKit
         target = controller
         let panel = ensurePanel()
         targetURL = controller.activeTab?.currentURLString ?? ""
-        state.modScope.reset(url: targetURL)
+        state.modScope.reset(url: targetURL, faviconPath: controller.activeTab?.faviconPath)
         state.query = ""; state.selected = 0
         state.profile = controller.profile.id; state.active = controller.activeTab?.webviewId
         state.placeholder = "Search the web, enter a URL, or find a tab"

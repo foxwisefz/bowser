@@ -384,7 +384,12 @@ struct ModScopeCards: View {
         return Button { choice.choose(scope); onChoose() } label: {
             VStack(alignment: .leading, spacing: compact ? 5 : 9) {
                 HStack {
-                    Image(systemName: icon).font(.system(size: compact ? 16 : 22)).foregroundStyle(tint)
+                    if scope == "site", let path = choice.faviconPath, let favicon = ImageCache.load(path) {
+                        Image(nsImage: favicon).resizable().scaledToFit()
+                            .frame(width: compact ? 18 : 24, height: compact ? 18 : 24)
+                    } else {
+                        Image(systemName: icon).font(.system(size: compact ? 16 : 22)).foregroundStyle(tint)
+                    }
                     Spacer()
                     if choice.suggested == scope { Text("Suggested").font(.system(size: 9, weight: .medium)).foregroundStyle(tint) }
                     Image(systemName: selected ? "checkmark.circle.fill" : "circle")

@@ -13,6 +13,7 @@ final class ModSmithModel: ObservableObject, ModSmithPresentation {
     }
     @Published var connectionError: String?
     @Published var targetURL = ""
+    var targetFavicon: String? { targetWebview.flatMap { EngineView.live[$0]?.faviconPath } }
     var targetWebview: UInt64?
     private var deletingProjects: Set<String> = []
     private var drafts: [String: String] = [:]
@@ -77,7 +78,7 @@ final class ModSmithModel: ObservableObject, ModSmithPresentation {
             }
             return
         }
-        if action == "new" { scopeChoice.reset(url: targetURL) }
+        if action == "new" { scopeChoice.reset(url: targetURL, faviconPath: targetFavicon) }
         guard connected() else { connectionError = "Connecting to Bowser. Your draft is saved here; try again shortly."; return }
         var message: [String: Any] = ["op": "event", "event": "modsmith", "action": action]
         if let id = id ?? snapshot.selected { message["project"] = id }
@@ -91,12 +92,12 @@ final class ModSmithModel: ObservableObject, ModSmithPresentation {
         snapshot.selected = nil
         drafts["new"] = text
         draft = text
-        scopeChoice.reset(url: targetURL, selected: scope, manual: start)
+        scopeChoice.reset(url: targetURL, selected: scope, manual: start, faviconPath: targetFavicon)
         if start && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             submit()
         } else {
             action("new")
-            scopeChoice.reset(url: targetURL, selected: scope, manual: scope == "browser")
+            scopeChoice.reset(url: targetURL, selected: scope, manual: scope == "browser", faviconPath: targetFavicon)
             scopeChoice.update(text)
         }
     }
@@ -138,7 +139,7 @@ final class ModSmithWindow: NSObject {
         model.targetURL = SiteAppConfiguration.current?.url.absoluteString
             ?? BrowserWindowController.all.first(where: { $0.window?.isMainWindow == true })?.activeTab?.currentURLString
             ?? EngineView.live[(NSApp.delegate as? AppDelegate)?.currentWebviewId ?? 0]?.currentURLString ?? ""
-            if model.project == nil { model.scopeChoice.reset(url: model.targetURL) }
+            if model.project == nil { model.scopeChoice.reset(url: model.targetURL, faviconPath: model.targetFavicon) }
         }
         if window == nil {
             let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 660),
