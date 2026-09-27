@@ -73,3 +73,54 @@ python3 -m unittest discover -s tests/performance -p test_report.py
 Treat budget changes as reviewed product decisions. Investigate the workload and
 artifact before increasing a threshold; shared CI runners have noise, but a
 missing readiness signal must never be replaced with a fixed successful sleep.
+
+## Safari comparison
+
+Run the same local rendering fixture in Safari and the complete Bowser release:
+
+```sh
+bin/compare-safari --stage PATH --output /tmp/safari-comparison-$(date +%s)
+```
+
+Safari must have **Settings → Developer → Allow remote automation** enabled.
+The runner does not change that setting. If enabled temporarily, turn it off
+when testing finishes. Safari uses its isolated WebDriver windows; Bowser uses
+a uniquely identified disposable app and home with the shipped backend. Neither
+adapter closes personal browser windows or connects to the installed Bowser.
+
+The default order is Safari, Bowser, Bowser, Safari, with one unmeasured warmup
+and five measured navigations per batch: ten runs per browser. Both load the
+same no-store HTML from one loopback server. All compared intervals come from
+`performance.now()` or Navigation Timing inside the page, so WebDriver/IPC
+round-trip latency is excluded. The scrolling/layout surface has identical
+1000×650 CSS-pixel bounds; the report also checks matching inner content sizes
+(scrollbars may consume space), display scale, visibility, and scroll distance.
+A hidden page, clipped viewport, missing result, or incomplete sample set fails.
+
+The report compares:
+
+- Navigation start to two animation callbacks (not physical screen presentation).
+- DOMContentLoaded completion.
+- Forced layout after updating 1,000 rows, 20 iterations per navigation.
+- Animation-frame intervals during 120 programmatic scroll steps.
+- Percentage of scroll intervals longer than 50 ms.
+
+Each navigation is one replicate. The comparison uses the median of per-run
+p95s, retaining each run and its range in the artifacts. Adjacent frames are not
+treated as independent benchmark runs. `safari-budgets.json` enforces a 25%
+Safari-relative allowance plus a metric-specific absolute noise allowance;
+long-frame rate may exceed Safari by at most two percentage points. Both
+thresholds must be exceeded to fail a timing metric. These initial allowances
+are explicit reviewable budgets, not statistical confidence intervals.
+
+The CI performance job runs the comparison on the same hosted Mac after the
+Bowser-only gates, enabling WebDriver on that disposable runner and uploading
+both reports. Raw data, browser/build/OS/CPU details and logs stay in the output
+directory.
+
+This is a **page-rendering comparison**. It does not compare native cold launch,
+tab-switch input-to-frame latency, or omnibar keystroke latency. Bowser's internal
+timings and Safari WebDriver command timings have different boundaries and
+must not be divided to claim a browser speed ratio. Those native UI acceptance
+items remain tracked in `bowser-browser-ehu`; the existing Bowser-only CI gates
+continue to cover their internal workloads.

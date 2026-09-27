@@ -20,6 +20,7 @@ jobs:
     env:
       HOMEBREW_NO_AUTO_UPDATE: '1'
       BOWSER_TELEMETRY_DISABLED: '1'
+      BOWSER_STAGE_FILE: ${{ runner.temp }}/performance-stage
     steps:
       - uses: actions/checkout@v4
         with:
@@ -27,15 +28,23 @@ jobs:
       - name: Install Elixir
         run: brew install elixir
       - name: Test budget enforcement
-        run: python3 -m unittest discover -s tests/performance -p test_report.py
+        run: python3 -m unittest discover -s tests/performance -p 'test*report.py'
       - name: Restore trusted main baseline
         uses: actions/cache/restore@v4
         with:
           path: .performance-baseline/report.json
           key: performance-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
           restore-keys: performance-v1-${{ runner.os }}-${{ runner.arch }}-
+      - name: Build the shared release stage
+        env:
+          BOWSER_SIGN_IDENTITY: '-'
+        run: bin/install --stage-only
       - name: Run release performance budgets
-        run: bin/check-performance --output "$RUNNER_TEMP/performance" --baseline .performance-baseline/report.json
+        run: bin/check-performance --stage "$(cat "$BOWSER_STAGE_FILE")" --output "$RUNNER_TEMP/performance" --baseline .performance-baseline/report.json
+      - name: Enable Safari testing on the disposable runner
+        run: sudo /usr/bin/safaridriver --enable
+      - name: Compare identical rendering workloads with Safari
+        run: bin/compare-safari --stage "$(cat "$BOWSER_STAGE_FILE")" --output "$RUNNER_TEMP/safari-comparison"
       - name: Save passing main baseline
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         run: |
@@ -51,5 +60,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: browser-performance-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/performance/
+          path: |
+            ${{ runner.temp }}/performance/
+            ${{ runner.temp }}/safari-comparison/
           retention-days: 14
