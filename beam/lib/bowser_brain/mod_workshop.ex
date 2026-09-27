@@ -802,7 +802,19 @@ defmodule BowserBrain.ModWorkshop do
     end
   end
 
-  defp prepare_file(_, _), do: {:error, "Invalid or oversized generated file"}
+  defp prepare_file(_, %{"path" => path, "content" => content})
+       when is_binary(path) and is_binary(content),
+       do: {:error, "Generated file #{path} is #{byte_size(content)} bytes; the limit is 200000 bytes"}
+
+  defp prepare_file(_, %{"path" => path} = file) when is_binary(path) do
+    cond do
+      not ModRevision.allowed?(path) -> {:error, "Invalid mod file path: #{inspect(path)}"}
+      Map.has_key?(file, "content") -> {:error, "Generated file #{path} requires text content"}
+      true -> {:error, "Generated file #{path} has no content or unchanged draft from this run"}
+    end
+  end
+
+  defp prepare_file(_, _), do: {:error, "Generated file must be an object with a text path and content"}
 
   defp validate_code(_, "assets/" <> _, content) do
     if String.contains?(content, "<svg") and not Regex.match?(~r/<!DOCTYPE|<!ENTITY|<script|<foreignObject|\b(?:href|src)\s*=\s*["'](?!#)|\burl\s*\(/i, content),
@@ -983,18 +995,29 @@ defmodule BowserBrain.ModWorkshop do
 
   # References may only name an unchanged draft captured by THIS run.
   defp resolve_drafts(state, files) when is_list(files) do
-    [revision | _] = project(state, state.run.project)["revisions"]
+    p = project(state, state.run.project)
+    [revision | _] = p["revisions"]
     Enum.map(files, fn
       %{"path" => path} = file when not is_map_key(file, "content") ->
-        case revision["files"][path] do
-          %{"after" => content} when is_binary(content) ->
-            if ModRevision.read(path) == content, do: Map.put(file, "content", content), else: file
-          _ -> file
-        end
+        resolve_draft(p, revision, path, file)
       file -> file
     end)
   end
   defp resolve_drafts(_, files), do: files
+
+  defp resolve_draft(p, revision, path, file) do
+    with true <- is_binary(path),
+         {:ok, scoped} <- scoped_path(p, path),
+         actual <- ModRevision.actual_path(scoped),
+         %{"after" => content} when is_binary(content) <- revision["files"][actual],
+         ^content <- ModRevision.read(actual) do
+      Map.merge(file, %{"path" => actual, "content" => content})
+    else
+      _ -> file
+    end
+  rescue
+    _ -> file
+  end
 
   defp finish(state, session, result) do
     Process.demonitor(state.run.ref, [:flush])

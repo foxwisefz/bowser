@@ -718,6 +718,69 @@ end
       do: DynamicSupervisor.terminate_child(BowserBrain.ModSupervisor, mod_pid)
   end
 
+  for reference <- ["mods/disabled_draft.ex", "mods/disabled_draft.ex.off"] do
+    test "final reference #{reference} resolves the disabled draft and preserves Undo" do
+      path = "mods/disabled_draft.ex.off"
+      original = "defmodule DisabledDraft do use BowserBrain.Mod end"
+      ModRevision.write(path, original)
+      event("submit", %{"text" => "Refine it", "scope" => "browser"})
+      assert_receive {:runner, pid, token, _, _, _}, 1000
+      source = original <> "\n# refined"
+      assert %{ok: true, runtime: %{status: "disabled"}} =
+        ModWorkshop.tool(token, "put_mod", %{"name" => "disabled_draft.ex", "content" => source})
+      state = complete(pid, [%{"path" => unquote(reference)}], %{"status" => "needs_help"})
+      [project] = state.data["projects"]
+      assert project["status"] == "needs_help"
+      assert Map.keys(hd(project["revisions"])["files"]) == [path]
+      assert ModRevision.read(path) == BowserBrain.ModScope.tag(source, "default")
+      assert ModRevision.read("mods/disabled_draft.ex") == nil
+      event("undo", %{"project" => project["id"]})
+      assert ModRevision.read(path) == original
+      assert ModRevision.read("mods/disabled_draft.ex") == nil
+    end
+  end
+
+  test "disabled draft references cannot adopt an external edit or an older run" do
+    path = "sites/example.com/reading.css.off"
+    ModRevision.write(path, "original")
+    event("submit", %{"text" => "Reading mode"})
+    assert_receive {:runner, pid, token, _, _, _}, 1000
+    assert %{ok: true} = ModWorkshop.tool(token, "put_payload", %{
+      "host" => "example.com", "name" => "reading.css", "content" => "draft"
+    })
+    ModRevision.write(path, "owner edit")
+    [project] = complete(pid, [%{"path" => "sites/example.com/reading.css"}]).data["projects"]
+    assert project["status"] == "failed"
+    assert ModRevision.read(path) == "owner edit"
+    ModRevision.write(path, BowserBrain.ModScope.tag("draft", "default", ".css"))
+    event("submit", %{"project" => project["id"], "text" => "Try again"})
+    assert_receive {:runner, pid, _, _, _, _}, 1000
+    [project] = complete(pid, [%{"path" => "sites/example.com/reading.css"}]).data["projects"]
+    assert project["status"] == "failed"
+    assert hd(project["revisions"])["files"] == %{}
+  end
+
+  test "file validation identifies missing content, malformed paths and actual size limits" do
+    for {entry, detail} <- [
+      {%{"path" => "mods/missing.ex"}, "unchanged draft from this run"},
+      {%{"path" => "mods/nil.ex", "content" => nil}, "requires text content"},
+      {%{"path" => "../outside.ex"}, "Invalid mod file path"},
+      {%{"path" => nil}, "text path"},
+      {"not a file", "object"},
+      {%{"path" => "sites/example.com/huge.css", "content" => String.duplicate("x", 200_001)},
+       "200001 bytes; the limit is 200000 bytes"}
+    ] do
+      event("submit", %{"text" => "Reading mode"})
+      assert_receive {:runner, pid, _, _, _, _}, 1000
+      state = complete(pid, [entry])
+      project = Enum.find(state.data["projects"], &(&1["id"] == state.data["selected"]["main"]))
+      assert project["status"] == "failed"
+      assert project["summary"] =~ detail
+      assert hd(project["revisions"])["files"] == %{}
+      assert Process.alive?(Process.whereis(ModWorkshop))
+    end
+  end
+
   test "draft reports init failures without losing Undo history" do
     event("submit", %{"text" => "AOL shell", "scope" => "browser"})
     assert_receive {:runner, pid, token, _, nil, nil}, 1000
