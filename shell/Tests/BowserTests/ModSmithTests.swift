@@ -13,6 +13,8 @@ final class ModSmithTests: XCTestCase {
 
     @MainActor func testDraftsSurviveSwitchingConversations() {
         let model = ModSmithModel()
+        model.targetURL = "https://example.com"
+        model.scopeChoice.reset(url: model.targetURL)
         model.draft = "New mod idea"
         model.receive(snapshot(selected: "existing"))
         XCTAssertEqual(model.draft, "")
@@ -25,6 +27,8 @@ final class ModSmithTests: XCTestCase {
 
     @MainActor func testOnlyAcceptedSubmissionClearsDraft() {
         let model = ModSmithModel()
+        model.targetURL = "https://example.com"
+        model.scopeChoice.reset(url: model.targetURL)
         model.connected = { true }
         var sent: [String: Any] = [:]
         model.send = { sent = $0 }
@@ -38,6 +42,8 @@ final class ModSmithTests: XCTestCase {
 
     @MainActor func testNewTypingIsNotLostBySubmissionAcknowledgement() {
         let model = ModSmithModel()
+        model.targetURL = "https://example.com"
+        model.scopeChoice.reset(url: model.targetURL)
         model.connected = { true }
         var sent: [String: Any] = [:]
         model.send = { sent = $0 }
@@ -50,6 +56,8 @@ final class ModSmithTests: XCTestCase {
 
     @MainActor func testDisconnectedSubmissionKeepsDraftAndDoesNotSend() {
         let model = ModSmithModel()
+        model.targetURL = "https://example.com"
+        model.scopeChoice.reset(url: model.targetURL)
         model.connected = { false }
         model.send = { _ in XCTFail("Must not send while disconnected") }
         model.draft = "Keep this"
@@ -59,6 +67,8 @@ final class ModSmithTests: XCTestCase {
     }
     @MainActor func testExistingPickerUsesExplicitPathAndKeepsNewDraft() {
         let model = ModSmithModel()
+        model.targetURL = "https://example.com"
+        model.scopeChoice.reset(url: model.targetURL)
         model.connected = { true }
         var sent: [String: Any] = [:]
         model.send = { sent = $0 }
@@ -74,6 +84,8 @@ final class ModSmithTests: XCTestCase {
 
     @MainActor func testStopRunningProjectWhileDraftingAnotherConversation() {
         let model = ModSmithModel()
+        model.targetURL = "https://example.com"
+        model.scopeChoice.reset(url: model.targetURL)
         model.connected = { true }
         model.receive(snapshot(selected: "other"))
         model.draft = "Keep this next idea"
@@ -88,6 +100,8 @@ final class ModSmithTests: XCTestCase {
 
     @MainActor func testContinueEligibilityAndActionPreserveDraft() {
         let model = ModSmithModel()
+        model.targetURL = "https://example.com"
+        model.scopeChoice.reset(url: model.targetURL)
         model.connected = { true }
         var sent: [String: Any] = [:]
         model.send = { sent = $0 }
@@ -108,12 +122,42 @@ final class ModSmithTests: XCTestCase {
         XCTAssertEqual(model.draft, "Keep this next idea")
     }
 
+    @MainActor func testOmnibarStartsNewProjectOnceAndPreservesCapturedTarget() {
+        let model = ModSmithModel()
+        model.connected = { true }
+        model.targetURL = "https://example.com/article"
+        model.targetWebview = 42
+        model.receive(snapshot(selected: "existing"))
+        var messages: [[String: Any]] = []
+        model.send = { messages.append($0) }
+        model.prepareNewDraft("Hide distractions", scope: "site", start: true)
+        model.submit()
+        XCTAssertEqual(messages.count, 1)
+        XCTAssertEqual(messages.first?["action"] as? String, "submit")
+        XCTAssertNil(messages.first?["project"])
+        XCTAssertEqual(messages.first?["url"] as? String, "https://example.com/article")
+        XCTAssertEqual(messages.first?["webview"] as? UInt64, 42)
+        XCTAssertEqual(model.draft, "Hide distractions")
+    }
+
+    @MainActor func testBusyOmnibarKeepsRequestWithoutStartingAnotherBuild() {
+        let model = ModSmithModel()
+        model.connected = { true }
+        model.receive(["projects": [], "busy": true, "progress": [], "stage": "Building"])
+        model.send = { _ in XCTFail("Busy must not submit") }
+        model.prepareNewDraft("Organize tabs", scope: "browser", start: true)
+        XCTAssertEqual(model.draft, "Organize tabs")
+        XCTAssertNotNil(model.connectionError)
+    }
+
     @MainActor func testRenderNativeWorkspace() throws {
         guard let directory = ProcessInfo.processInfo.environment["BOWSER_MODSMITH_RENDER"] else {
             throw XCTSkip("Set BOWSER_MODSMITH_RENDER for native visual verification")
         }
         _ = NSApplication.shared
         let model = ModSmithModel()
+        model.targetURL = "https://example.com"
+        model.scopeChoice.reset(url: model.targetURL)
         model.targetURL = "https://example.com/article"
         let project: [String: Any] = [
             "id": "reading", "name": "Comfortable reading", "scope": "site", "url": model.targetURL,
@@ -125,9 +169,14 @@ final class ModSmithTests: XCTestCase {
                  "notes": "The sticky navigation still needs work.", "checks": ["Confirmed the paragraph font is 20px.", "Checked that the article stays scrollable."]]
             ]
         ]
-        for (name, width, filled) in [("empty", 760, false), ("result", 760, true), ("compact", 620, true), ("running-other", 620, true)] {
+        for (name, width, filled) in [("empty", 760, false), ("result", 760, true), ("compact", 620, true), ("success", 760, true), ("running-other", 620, true)] {
             if filled {
                 model.receive(["projects": [project], "selected": "reading", "busy": false, "progress": [], "stage": "Ready"])
+            }
+            if name == "success" {
+                var success = project
+                success["status"] = "active"
+                model.receive(["projects": [success], "selected": "reading", "busy": false, "progress": [], "stage": "Ready"])
             }
             if name == "running-other" {
                 var running = project

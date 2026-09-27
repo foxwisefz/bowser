@@ -369,6 +369,43 @@ struct OnboardingTermsWebView: NSViewRepresentable {
     }
 }
 
+struct ModScopeCards: View {
+    @ObservedObject var choice: ModScopeChoice
+    var compact = false
+    var onChoose: () -> Void = {}
+    var body: some View {
+        HStack(spacing: 12) {
+            card("site", title: "This website", detail: choice.host ?? "Open a website first", icon: "globe", tint: .blue)
+            card("browser", title: "Across Bowser", detail: "Browser-wide customization", icon: "macwindow", tint: .purple)
+        }
+    }
+    private func card(_ scope: String, title: String, detail: String, icon: String, tint: Color) -> some View {
+        let selected = choice.selected == scope
+        return Button { choice.choose(scope); onChoose() } label: {
+            VStack(alignment: .leading, spacing: compact ? 5 : 9) {
+                HStack {
+                    Image(systemName: icon).font(.system(size: compact ? 16 : 22)).foregroundStyle(tint)
+                    Spacer()
+                    if choice.suggested == scope { Text("Suggested").font(.system(size: 9, weight: .medium)).foregroundStyle(tint) }
+                    Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                        .foregroundStyle(selected ? tint : Color.secondary.opacity(0.35))
+                }
+                Text(title).font(.system(size: 13, weight: .semibold))
+                Text(detail + (compact && scope == "site" && choice.host != nil ? " · includes subdomains" : "")).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                if !compact && scope == "site" { Text("Includes subdomains").font(.system(size: 10)).foregroundStyle(.secondary) }
+                if !compact && scope == "browser" { Text("Across websites and browser UI").font(.system(size: 10)).foregroundStyle(.secondary) }
+            }
+            .padding(compact ? 12 : 16).frame(maxWidth: .infinity, alignment: .leading)
+            .background(tint.opacity(selected ? 0.10 : 0.025), in: RoundedRectangle(cornerRadius: 14))
+            .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(selected ? tint.opacity(0.6) : Color.primary.opacity(0.08)))
+            .contentShape(RoundedRectangle(cornerRadius: 14))
+        }.buttonStyle(.plain)
+            .disabled(scope == "site" && choice.host == nil)
+            .accessibilityLabel("\(title), \(detail)\(scope == "site" ? ", includes subdomains" : "")")
+            .accessibilityAddTraits(selected ? [.isSelected] : [])
+    }
+}
+
 struct ModSmithScreen: View {
     @ObservedObject var context: BrowserScreenContext
     private var model: any ModSmithPresentation { context.model as! any ModSmithPresentation }

@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import BowserSurfaceKit
 
 enum PaletteSuggestions {
@@ -61,6 +62,7 @@ enum PaletteSuggestions {
     private let createMod = NSButton(title: "Create a mod…", target: nil, action: nil)
     private let footer = NSTextField(labelWithString: "↑ ↓  Navigate      ↵  Open      esc  Dismiss")
     private let scroll = NSScrollView()
+    private var scopeCards: NSHostingView<ModScopeCards>!
     private var results: [Result] = []
     private var inputHeight: NSLayoutConstraint!
     private var resultsTop: NSLayoutConstraint!
@@ -122,6 +124,20 @@ enum PaletteSuggestions {
     scroll.hasVerticalScroller = true
     scroll.translatesAutoresizingMaskIntoConstraints = false
     effect.addSubview(scroll)
+    scopeCards = NSHostingView(rootView: ModScopeCards(choice: model.modScope, compact: true, onChoose: { [weak self] in
+        guard let self else { return }
+        self.window?.makeFirstResponder(self.field)
+        self.updateFooter()
+    }))
+    scopeCards.translatesAutoresizingMaskIntoConstraints = false
+    scopeCards.isHidden = true
+    effect.addSubview(scopeCards)
+    NSLayoutConstraint.activate([
+        scopeCards.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 18),
+        scopeCards.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -18),
+        scopeCards.topAnchor.constraint(equalTo: field.bottomAnchor, constant: 14),
+        scopeCards.heightAnchor.constraint(equalToConstant: 100)
+    ])
     resultsTop = scroll.topAnchor.constraint(equalTo: field.bottomAnchor, constant: 16)
     NSLayoutConstraint.activate([
       scroll.leadingAnchor.constraint(equalTo: effect.leadingAnchor, constant: 8),
@@ -188,7 +204,16 @@ enum PaletteSuggestions {
     else { model.choose(Result(tab: nil, query: text)) }
   }
 
-  func controlTextDidChange(_ obj: Notification) { model.selected = 0; updateMode() }
+  func controlTextDidChange(_ obj: Notification) {
+    model.selected = 0
+    if let prompt = modPrompt { model.modScope.update(prompt) } else { model.modScope.cancel() }
+    updateMode()
+  }
+  private var modPrompt: String? {
+    let parts = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: " ", maxSplits: 1)
+    guard let command = parts.first, [":do", ":do+"].contains(String(command)) else { return nil }
+    return parts.count == 2 ? String(parts[1]) : ""
+  }
 
   func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
     if selector == #selector(NSResponder.cancelOperation(_:)) {
@@ -221,17 +246,19 @@ enum PaletteSuggestions {
 
 
     private func refreshResults() {
-        results = PaletteSuggestions.results(query: field.stringValue, tabs: model.tabs(), profile: model.profile, active: model.active, commands: model.commands())
+        results = modPrompt != nil ? [] : PaletteSuggestions.results(query: field.stringValue, tabs: model.tabs(), profile: model.profile, active: model.active, commands: model.commands())
         model.results = results
         table.reloadData()
         if !results.isEmpty { table.selectRowIndexes(IndexSet(integer: min(model.selected, results.count - 1)), byExtendingSelection: false) }
         scroll.isHidden = results.isEmpty
+        scopeCards.isHidden = modPrompt == nil
+        createMod.isHidden = modPrompt != nil
         let width = max(200, bounds.width > 0 ? bounds.width - 70 : 570)
         let text = field.stringValue.isEmpty ? " " : field.stringValue
         let measured = (text as NSString).boundingRect(with: NSSize(width: width, height: .greatestFiniteMagnitude), options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: [.font: NSFont.systemFont(ofSize: 17)])
         let height = max(24, min(240, ceil(measured.height) + 6))
         inputHeight.constant = height
-        model.resize(70 + height + CGFloat(min(results.count, 8)) * 52)
+        model.resize(70 + height + (modPrompt != nil ? 110 : CGFloat(min(results.count, 8)) * 52))
         updateFooter()
         needsLayout = true
     }
@@ -242,6 +269,10 @@ enum PaletteSuggestions {
     private func updateFooter() {
         let selected = results.indices.contains(table.selectedRow) ? results[table.selectedRow] : nil
         let action = selected?.tab != nil ? "Switch tab" : selected?.query.hasPrefix(":") == true ? "Run action" : "Open"
+        if modPrompt != nil {
+            footer.stringValue = model.modScope.valid ? "Choose where it applies · ↵ Create mod" : "Choose Across Bowser, or open a website"
+            return
+        }
         footer.stringValue = "↑ ↓  Navigate      ↵  \(action)      esc  Dismiss"
     }
     @objc private func createModClicked() {

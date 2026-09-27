@@ -74,6 +74,7 @@ public struct ModSmithSnapshot: Decodable {
     var snapshot: ModSmithSnapshot { get }
     var draft: String { get set }
     var scope: String { get set }
+    var scopeChoice: ModScopeChoice { get }
     var connectionError: String? { get }
     var targetURL: String { get }
     var project: ModSmithProject? { get }

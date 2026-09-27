@@ -95,10 +95,33 @@ final class CommandBarTests: XCTestCase {
       state.command = { command = $0 }
       let renderer = CommandPaletteRenderer(state: state)
       renderer.activateScreen()
-      XCTAssertEqual(state.results.first?.query, query)
+      XCTAssertTrue(state.results.isEmpty) // The scope cards replace command suggestions.
       let field = try XCTUnwrap(renderer.subviews.compactMap { $0 as? NSTextField }.first { $0.isEditable })
       XCTAssertTrue(field.sendAction(field.action, to: field.target))
       XCTAssertEqual(command, String(query.dropFirst()))
+    }
+  }
+
+  @MainActor func testModPromptSubmitsVisibleScopeWithoutWaitingForSuggestion() throws {
+    let state = CommandPaletteState()
+    state.modScope.reset(url: "https://example.com")
+    state.modScope.choose("browser")
+    state.query = ":do Add a tab organizer"
+    var submitted: String?
+    state.command = { submitted = $0 }
+    state.dismiss = { state.modScope.freeze() }
+    let renderer = CommandPaletteRenderer(state: state)
+    renderer.frame.size = NSSize(width: 640, height: 204)
+    renderer.activateScreen()
+    let field = try XCTUnwrap(renderer.subviews.compactMap { $0 as? NSTextField }.first { $0.isEditable })
+    XCTAssertTrue(field.sendAction(field.action, to: field.target))
+    XCTAssertEqual(submitted, "do Add a tab organizer")
+    XCTAssertEqual(state.modScope.selected, "browser")
+    if let directory = ProcessInfo.processInfo.environment["BOWSER_MODSMITH_RENDER"],
+       let bitmap = renderer.bitmapImageRepForCachingDisplay(in: renderer.bounds) {
+      renderer.layoutSubtreeIfNeeded()
+      renderer.cacheDisplay(in: renderer.bounds, to: bitmap)
+      try bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: directory).appendingPathComponent("omnibar-scope.png"))
     }
   }
 

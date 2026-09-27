@@ -356,6 +356,12 @@ final class BrainBridge {
             guard SiteAppConfiguration.current == nil else { return }
             SiteAppHub.shared.route(message)
 
+        case "modsmith_scope":
+            let id = message["request_id"] as? String ?? ""
+            let choice = message["choice"] as? String ?? "unclear"
+            CommandBar.shared.receiveScope(id: id, choice: choice)
+            ModSmithWindow.shared.model.scopeChoice.receive(id: id, choice: choice)
+
         case "modsmith_state":
             if SiteAppConfiguration.current == nil, message["app"] is String {
                 SiteAppHub.shared.route(message)

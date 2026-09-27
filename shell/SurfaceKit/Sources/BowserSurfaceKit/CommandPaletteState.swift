@@ -27,6 +27,7 @@ public struct Result: Equatable {
   }
 
 
+    public let modScope = ModScopeChoice()
     public var results: [Result] = []
     public var query = ""
     public var placeholder = "Search, address, or :command"
