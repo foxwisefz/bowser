@@ -87,6 +87,34 @@ defmodule BowserBrain.ModControls do
     render(state)
   end
 
+  def handle_event(%{"event" => "surface", "surface" => "mods", "id" => "delete", "value" => value}, state) do
+    case edit_path(value) do
+      nil -> state
+      path -> state
+        |> Map.put(:pending_delete, {path, BowserBrain.ModScope.profile_of(state.active)})
+        |> Map.put(:delete_error, nil) |> render()
+    end
+  end
+
+  def handle_event(%{"event" => "surface", "surface" => "mods", "id" => "cancel_delete"}, state),
+    do: state |> Map.put(:pending_delete, nil) |> Map.put(:delete_error, nil) |> render()
+
+  def handle_event(%{"event" => "surface", "surface" => "mods", "id" => "confirm_delete"}, state) do
+    case Map.get(state, :pending_delete) do
+      {path, profile} ->
+        result = if profile == BowserBrain.ModScope.profile_of(state.active),
+          do: BowserBrain.ModWorkshop.delete_existing(path, profile),
+          else: {:error, "The active profile changed. Choose the mod again."}
+        next = case result do
+          :ok -> state |> Map.put(:pending_delete, nil) |> Map.put(:delete_error, nil)
+          {:error, reason} -> Map.put(state, :delete_error, reason)
+        end
+        publish_toolbar_catalog()
+        render(next)
+      _ -> state
+    end
+  end
+
   # ⓘ click: expand/collapse this row's description (bowser-browser-ft0
   # refinement — compact rows, info on demand).
   def handle_event(
@@ -324,7 +352,7 @@ defmodule BowserBrain.ModControls do
     Surface.show(
       :mods,
       vstack(
-        [section(if(global?, do: "Global mods", else: "This tab#{if host, do: " · #{host}", else: ""}"))] ++
+        deletion_prompt(state) ++ [section(if(global?, do: "Global mods", else: "This tab#{if host, do: " · #{host}", else: ""}"))] ++
           (if site_rows ++ mod_rows == [],
              do: [text(if(global?, do: "No global mods in this profile.", else: "No mods for this tab."), style: :caption)],
              else: site_rows ++ mod_rows) ++
@@ -338,6 +366,17 @@ defmodule BowserBrain.ModControls do
     )
 
     state
+  end
+
+  defp deletion_prompt(state) do
+    case Map.get(state, :pending_delete) do
+      {path, _} ->
+        [section("Delete #{Path.basename(path)}?"),
+         text("Removes this mod’s files and all its ModSmith conversation and undo history. This can’t be undone. Website actions and saved mod data stay as they are.", style: :caption)] ++
+          (if reason = Map.get(state, :delete_error), do: [text(reason)], else: []) ++
+          [hstack([button("Cancel", event: "cancel_delete"), button("Delete mod", event: "confirm_delete")])]
+      _ -> []
+    end
   end
 
   # A freshly hot-swapped process still carries the previous code's state
@@ -356,6 +395,7 @@ defmodule BowserBrain.ModControls do
       symbol: if(String.starts_with?(payload, "site|"), do: "doc.text", else: "puzzlepiece.extension"),
       trailing: [
         button("✎", event: "edit", payload: payload, compact: true),
+        button("Delete…", event: "delete", payload: payload, compact: true),
         toggle("toggle", on: on, payload: payload)
       ]
     )

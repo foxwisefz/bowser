@@ -128,13 +128,44 @@ defmodule BowserBrain.ModWorkshopTest do
     assert ModRevision.read(path) == nil
   end
 
+  test "settings deletion confirms first and removes duplicate histories", %{root: root} do
+    File.mkdir_p!(Path.join(root, "mods"))
+    File.write!(Path.join(root, "mods/reader.ex.off"), "# Reader")
+    state = event("edit_existing", %{"path" => "mods/reader.ex.off"})
+    [project] = state.data["projects"]
+    duplicate = project |> Map.put("id", "duplicate") |> Map.put("existing_path", "mods/reader.ex.off")
+    :sys.replace_state(ModWorkshop, fn state -> put_in(state.data["projects"], [project, duplicate]) end)
+    controls = BowserBrain.ModControls.initial_state() |> Map.put(:active, 7)
+    request = %{"event" => "surface", "surface" => "mods", "id" => "delete", "value" => "mod|reader.ex.off"}
+    controls = BowserBrain.ModControls.handle_event(request, controls)
+    assert ModRevision.read("mods/reader.ex.off") == "# Reader"
+    cancelled = BowserBrain.ModControls.handle_event(Map.put(request, "id", "cancel_delete"), controls)
+    assert cancelled.pending_delete == nil
+    assert ModRevision.read("mods/reader.ex.off") == "# Reader"
+    controls = BowserBrain.ModControls.handle_event(Map.put(request, "id", "confirm_delete"), controls)
+    assert controls.pending_delete == nil
+    assert controls.delete_error == nil
+    assert ModRevision.load()["projects"] == []
+    assert ModRevision.read("mods/reader.ex.off") == nil
+  end
+
+  test "settings deletes mods without history and rejects foreign ownership", %{root: root} do
+    File.mkdir_p!(Path.join(root, "mods"))
+    File.write!(Path.join(root, "mods/reader.ex"), "# bowser-profile: work\n")
+    assert {:error, _} = ModWorkshop.delete_existing("mods/reader.ex", "default")
+    assert ModRevision.read("mods/reader.ex") != nil
+    assert :ok = ModWorkshop.delete_existing("mods/reader.ex", "work")
+    assert ModRevision.read("mods/reader.ex") == nil
+    assert ModRevision.load()["projects"] == []
+  end
+
   test "delete preserves shared files and their histories", %{root: root} do
     File.mkdir_p!(Path.join(root, "mods"))
     File.write!(Path.join(root, "mods/reader.ex"), "# Reader")
     state = event("edit_existing", %{"path" => "mods/reader.ex"})
     [project] = state.data["projects"]
     :sys.replace_state(ModWorkshop, fn state ->
-      put_in(state.data["projects"], [project, Map.put(project, "id", "other")])
+      put_in(state.data["projects"], [project, project |> Map.put("id", "other") |> Map.put("revisions", [%{"files" => %{"mods/different.ex" => %{}}}])])
     end)
     state = event("delete", %{"project" => project["id"]})
     assert state.error =~ "shares files"

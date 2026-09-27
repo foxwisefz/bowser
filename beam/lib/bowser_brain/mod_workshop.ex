@@ -3,6 +3,8 @@ defmodule BowserBrain.ModWorkshop do
   use GenServer
   alias BowserBrain.{ModRevision, ModSmith, ModSmithOutcome, Bridge, AppMods}
   def start_link(_), do: GenServer.start_link(__MODULE__, nil, name: __MODULE__)
+  def delete_existing(path, profile),
+    do: GenServer.call(__MODULE__, {:delete_existing, path, profile}, 15_000)
   def modify(path), do: GenServer.cast(__MODULE__, {:modify, path})
 
   def tool(token, tool, args) do
@@ -392,6 +394,27 @@ defmodule BowserBrain.ModWorkshop do
   end
 
   @impl true
+  def handle_call({:delete_existing, path, profile}, _, state) do
+    try do
+      if state.run, do: raise("Stop the current build before deleting a mod.")
+      canonical = BowserBrain.ModCatalog.display(path)
+      entry = Enum.find(BowserBrain.ModCatalog.catalog(), fn entry ->
+        entry.profile == profile and BowserBrain.ModCatalog.display(entry.path) == canonical
+      end)
+      unless entry, do: raise("That mod is no longer available in this profile.")
+      project = Enum.find(state.data["projects"], fn p ->
+        p["app"] == nil and Map.get(p, "profile", "default") == profile and
+          Enum.any?(paths(p), &(BowserBrain.ModCatalog.display(&1) == canonical))
+      end) || (new_project(Path.basename(canonical), "site", "", nil)
+        |> Map.put("existing_path", canonical) |> Map.put("profile", profile))
+      next = delete_project(state, project)
+      publish(next)
+      {:reply, if(next.error, do: {:error, next.error}, else: :ok), next}
+    rescue
+      error -> {:reply, {:error, Exception.message(error)}, state}
+    end
+  end
+
   def handle_call({:context, token}, _, state) do
     reply =
       case state.run do
@@ -1193,9 +1216,21 @@ defmodule BowserBrain.ModWorkshop do
   end
 
   defp delete_project(state, project) do
-    files = live_paths(project)
     canonical = &String.replace_suffix(&1, ".off", "")
-    others = Enum.reject(state.data["projects"], &(&1["id"] == project["id"]))
+    identity = fn p ->
+      paths(p) |> Enum.reject(&String.starts_with?(&1, "assets/"))
+      |> Enum.map(canonical) |> MapSet.new()
+    end
+    target = identity.(project)
+    duplicates = Enum.filter(state.data["projects"], fn p ->
+      p["id"] == project["id"] or
+        (MapSet.size(target) > 0 and identity.(p) == target and p["app"] == project["app"] and
+          Map.get(p, "profile", "default") == Map.get(project, "profile", "default"))
+    end)
+    deleting = Enum.uniq_by([project | duplicates], & &1["id"])
+    ids = Enum.map(deleting, & &1["id"])
+    files = deleting |> Enum.flat_map(&live_paths/1) |> Enum.uniq()
+    others = Enum.reject(state.data["projects"], &(&1["id"] in ids))
     shared = others |> Enum.flat_map(&paths/1) |> Enum.map(canonical) |> MapSet.new()
 
     if Enum.any?(files, &MapSet.member?(shared, canonical.(&1))),
@@ -1204,7 +1239,7 @@ defmodule BowserBrain.ModWorkshop do
     originals = Map.new(files, &{&1, ModRevision.read(&1)})
     Enum.each(originals, fn {path, source} ->
       owned = cond do
-        String.starts_with?(path, "assets/") -> String.starts_with?(path, "assets/#{project["id"]}/")
+        String.starts_with?(path, "assets/") -> Enum.any?(ids, &String.starts_with?(path, "assets/#{&1}/"))
         app = project["app"] -> String.starts_with?(path, "app-mods/#{app["id"]}/")
         true -> not String.starts_with?(path, "app-mods/") and
           BowserBrain.ModScope.source_profile(source) == Map.get(project, "profile", "default")
@@ -1215,7 +1250,7 @@ defmodule BowserBrain.ModWorkshop do
     data = state.data
       |> Map.put("projects", others)
       |> Map.update!("selected", fn selections ->
-        Map.reject(selections, fn {_, id} -> id == project["id"] end)
+        Map.reject(selections, fn {_, id} -> id in ids end)
       end)
 
     try do
