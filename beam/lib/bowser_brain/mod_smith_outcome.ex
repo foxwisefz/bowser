@@ -4,6 +4,7 @@ defmodule BowserBrain.ModSmithOutcome do
   def activity("enable_and_test"), do: "Mod enabled. Testing it now…"
   def activity("continue"), do: "Resuming testing and fixes…"
   def activity("retry"), do: "Trying your request again…"
+  def activity("document"), do: "Writing usage instructions…"
   def activity("clarify"), do: "Checking what’s needed next…"
   def activity(_), do: nil
 
@@ -19,6 +20,17 @@ defmodule BowserBrain.ModSmithOutcome do
   end
 
   def revision_label(revision), do: revision["label"] || legacy_activity(revision["request"]) || revision["request"]
+
+  def usage(%{"usage" => %{"entry_point" => entry, "steps" => steps} = guide})
+      when is_binary(entry) and is_list(steps) do
+    steps = steps |> Enum.filter(&(is_binary(&1) and String.trim(&1) != ""))
+      |> Enum.take(10) |> Enum.map(&String.slice(&1, 0, 1000))
+    if String.trim(entry) != "" and steps != [] do
+      %{"entry_point" => String.slice(entry, 0, 1000), "steps" => steps,
+        "tips" => if(is_binary(guide["tips"]), do: String.slice(guide["tips"], 0, 1500), else: "")}
+    end
+  end
+  def usage(_), do: nil
 
   def next_step(envelope, status) when status in ["needs_help", "partial", "failed"] do
     case envelope["next_step"] do

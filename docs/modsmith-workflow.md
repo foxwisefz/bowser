@@ -69,3 +69,15 @@ alternatives, repairs failures, and prefers self-contained mods or verified loca
 capabilities over asking the owner to deploy a service. Dependency claims require
 evidence; new installations or consequential actions still need appropriate
 owner authorization. Generated native work remains subject to the code audit.
+
+Installed mod results include `usage`: `entry_point` identifies the exact control,
+command, shortcut or automatic trigger; `steps` contains ordered instructions;
+`tips` covers relevant configuration and limitations. Guides describe implemented
+behavior, refresh after changes, and appear above the conversation in **How to
+use**. The UI supplies management directions. Guides stay with the mod and Undo
+restores the guide captured before that revision.
+
+**Generate instructions** and **Update instructions** inspect existing source
+and page HTML without changing or executing the mod. The tool gateway restricts
+these runs to read tools, and completion preserves the mod’s prior status and
+undo revisions. Missing or malformed guide output shows a retryable error.

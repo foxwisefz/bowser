@@ -660,6 +660,33 @@ struct ModSmithScreen: View {
                                 .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(Color.green.opacity(0.2)))
                                 .id("completion")
                         }
+                        if !project.files.isEmpty {
+                            VStack(alignment: .leading, spacing: 12) {
+                                Label("How to use", systemImage: "book")
+                                    .font(.system(size: 20, weight: .semibold, design: .rounded))
+                                if let guide = project.usage {
+                                    Text(guide.entryPoint).font(.headline)
+                                    ForEach(Array(guide.steps.enumerated()), id: \.offset) { index, step in
+                                        HStack(alignment: .top, spacing: 10) {
+                                            Text("\(index + 1).").foregroundStyle(.secondary)
+                                            Text(step).frame(maxWidth: .infinity, alignment: .leading)
+                                        }
+                                    }
+                                    if !guide.tips.isEmpty { Text(guide.tips).font(.callout).foregroundStyle(.secondary) }
+                                    Button("Update instructions", systemImage: "arrow.clockwise") { model.action("document") }
+                                        .disabled(model.snapshot.busy)
+                                } else {
+                                    Text("Get a guide to this mod’s controls and how to use them.").foregroundStyle(.secondary)
+                                    Button("Generate instructions", systemImage: "book") { model.action("document") }
+                                        .buttonStyle(.borderedProminent).disabled(model.snapshot.busy)
+                                }
+                                Divider()
+                                Text("Turn this mod on or off using Enabled above or Settings → Mods. To change it, describe what you want below. Find this guide again in Your mods.")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }.padding(20).frame(maxWidth: .infinity, alignment: .leading)
+                                .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 18))
+                                .textSelection(.enabled)
+                        }
                         ForEach(project.turns) { turn in turnView(turn) }
                         if project.status == "interrupted" || project.status == "restored" {
                             Text(project.summary).font(.callout).foregroundStyle(.secondary)

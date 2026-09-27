@@ -19,6 +19,13 @@ public struct ModSmithNextStep: Decodable {
     public let action: String
 }
 
+public struct ModSmithUsage: Decodable {
+    public let entryPoint: String
+    public let steps: [String]
+    public let tips: String
+    enum CodingKeys: String, CodingKey { case entryPoint = "entry_point", steps, tips }
+}
+
 public struct ModSmithProject: Decodable, Identifiable {
     public let id: String
     public let name: String
@@ -34,8 +41,9 @@ public struct ModSmithProject: Decodable, Identifiable {
     public let undoLabel: String?
     public let nextStep: ModSmithNextStep?
     public let repairNotice: String?
+    public let usage: ModSmithUsage?
     enum CodingKeys: String, CodingKey {
-        case id, name, scope, url, status, summary, turns, files, enabled, favicon
+        case id, name, scope, url, status, summary, turns, files, enabled, favicon, usage
         case canUndo = "can_undo", undoLabel = "undo_label"
         case nextStep = "next_step", repairNotice = "repair_notice"
     }

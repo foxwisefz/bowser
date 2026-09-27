@@ -236,6 +236,8 @@ final class ModSmithTests: XCTestCase {
             "id": "reading", "name": "Comfortable reading", "scope": "site", "url": model.targetURL, "favicon": iconPath.path,
             "status": "partial", "summary": "Larger text and a calmer layout.", "files": ["sites/example.com/reading.css"],
             "enabled": true, "can_undo": true, "undo_label": "Make the text larger",
+            "usage": ["entry_point": "Reading mode runs automatically on this website.",
+                      "steps": ["Open an article on example.com.", "Read with larger text and a narrower column."], "tips": "Reload an already-open article if needed."],
             "turns": [
                 ["id": "u", "role": "user", "text": "Make this page easier to read. Hide distractions and make the text larger."],
                 ["id": "a", "role": "assistant", "text": "Added a warm background, a narrower reading column, and larger text.",

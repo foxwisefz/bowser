@@ -2,6 +2,16 @@ defmodule BowserBrain.ModSmithOutcomeTest do
   use ExUnit.Case, async: true
   alias BowserBrain.ModSmithOutcome, as: Outcome
 
+  test "usage guides require an entry point and useful bounded steps" do
+    assert Outcome.usage(%{}) == nil
+    assert Outcome.usage(%{"usage" => %{"entry_point" => "", "steps" => ["Click"]}}) == nil
+    assert Outcome.usage(%{"usage" => %{"entry_point" => "Toolbar", "steps" => [nil, " "]}}) == nil
+    guide = Outcome.usage(%{"usage" => %{"entry_point" => "Toolbar", "steps" => List.duplicate(String.duplicate("x", 1200), 12)}})
+    assert length(guide["steps"]) == 10
+    assert String.length(hd(guide["steps"])) == 1000
+    assert guide["tips"] == ""
+  end
+
   test "structured next steps work for arbitrary choices and external prerequisites" do
     for {title, detail, action} <- [
       {"Choose a color", "Which highlight color do you prefer?", "reply"},

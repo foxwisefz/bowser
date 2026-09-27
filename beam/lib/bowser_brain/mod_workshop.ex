@@ -11,6 +11,9 @@ defmodule BowserBrain.ModWorkshop do
     case GenServer.call(__MODULE__, {:context, token}) do
       {:ok, run} ->
         cond do
+          Map.get(run, :documentation, false) and tool not in ["list_tabs", "page_html", "read_mod", "list_mods", "mod_diagnostics"] ->
+            %{ok: false, error: "Writing instructions is read-only. Inspect existing source and page HTML; do not change or execute the mod."}
+
           tool == "put_asset" and run.app == nil ->
             GenServer.call(__MODULE__, {:draft_asset, token, args}, 15_000)
 
@@ -187,6 +190,7 @@ defmodule BowserBrain.ModWorkshop do
                     if r["id"] == undo, do: Map.put(r, "status", "undone"), else: r
                   end)
                 )
+                |> Map.put("usage", r["usage_before"])
                 |> Map.put("status", "restored")
                 |> Map.put("session", nil)
                 |> Map.delete("pending_undo")
@@ -656,6 +660,10 @@ defmodule BowserBrain.ModWorkshop do
           state
         end
 
+      action == "document" and valid and state.run == nil ->
+        request = "Write a usage guide for this existing mod. This is read-only: inspect its current source and page HTML, without modifying files, executing actions or testing side effects. Return usage: {entry_point: exact place/control/command or automatic trigger, steps: [ordered owner-facing steps], tips: optional configuration or limitations}. Describe only implemented behavior. Return files: []. Do not claim runtime verification."
+        start(state, Map.put(event, "text", request), project)
+
       action == "clarify" and valid and state.run == nil and project["status"] == "needs_help" ->
         request = "Review the previous result and current state without making changes or taking external actions. " <>
           "Explain the actual blocker and return a structured next_step stating exactly what the owner " <>
@@ -727,7 +735,7 @@ defmodule BowserBrain.ModWorkshop do
       else
         p = existing || Map.put(new_project(text, scope, url, app), "profile", BowserBrain.ModScope.profile_of(event["webview"] || state.active))
         label = ModSmithOutcome.activity(event["action"])
-        revision = ModRevision.new_revision(text) |> Map.put("label", label)
+        revision = ModRevision.new_revision(text) |> Map.put("label", label) |> Map.put("usage_before", p["usage"])
         turn = if label,
           do: %{"id" => revision["id"], "role" => "activity", "text" => label, "instruction" => text},
           else: %{"id" => revision["id"], "role" => "user", "text" => text}
@@ -745,7 +753,7 @@ defmodule BowserBrain.ModWorkshop do
 
         state = state |> put_project(p) |> select(client(event), p["id"])
         wv = if app, do: 0, else: target_webview(state, url, event["webview"])
-        run = %{token: revision["id"], project: p["id"], webview: wv, profile: BowserBrain.ModScope.profile_of(wv), url: url, app: p["app"]}
+        run = %{previous_next_step: existing && existing["next_step"], previous_repair_notice: existing && existing["repair_notice"], documentation: event["action"] == "document", previous_status: existing && existing["status"], token: revision["id"], project: p["id"], webview: wv, profile: BowserBrain.ModScope.profile_of(wv), url: url, app: p["app"]}
         parent = self()
 
         {pid, ref} =
@@ -838,6 +846,7 @@ defmodule BowserBrain.ModWorkshop do
       You are refining the SAME mod when there is prior conversation. Read the current files before editing: the owner may have undone a revision since your last reply.
       Give the mod a short human-readable "name" in the JSON envelope. Set "status" to "active" only when the requested core behavior works and has been verified. Use "partial" for a working subset with specific unfinished requirements, and repair failed checks using the available tools. A verification failure alone is not a reason to stop. Use "needs_help" only for a necessary owner choice or an observed technical blocker such as missing credentials, a denied tool/OS permission, or an unavailable dependency you actually investigated. Assume informed, legitimate owner intent; speculative copyright, licensing or service-authorization concerns are not prerequisites. Do not ask the owner to supply a service merely because you have not investigated an implementation; include "blocker": {"kind":"owner_decision"|"permission"|"external_dependency","detail":"observed evidence and what is needed"}. Never label an implementation bug as an external dependency. Installing files or compiling Elixir does not prove embedded JavaScript runs; an isolated service probe does not prove the installed mod works. Check the actual page behavior, including new content when relevant. Usage tips and unperformed optional checks do not by themselves mean partial. Keep "notes" brief and distinguish usage from limitations.
       Add "checks": ["what you actually checked and observed"]. Do not claim checks you did not perform. Use an empty list if none.
+      Every installed mod result MUST include usage: {"entry_point":"Where to find it: exact control label and location, command, shortcut, or automatic trigger", "steps":["Ordered, concrete instructions for the owner"], "tips":"Optional configuration and real limitations"}. Base the guide on installed behavior; distinguish automatic effects from controls. Never invent a shortcut, button or setting. Refresh this guide after changes. Usage belongs here, not buried in technical notes. The UI supplies enable/disable/edit/delete directions.
       Every needs_help result must include "next_step": {"title":"short plain-language heading", "detail":"what the owner needs to choose, provide, or do and why", "action":"reply"|"resume"}. Use reply when an answer or choice is required; use resume only after an external prerequisite the owner can complete. The UI uses fixed Reply and I've done this — resume buttons. Do not invent tool names, executable actions, or permission grants in this field. Keep required input out of technical notes. Report a blocked repair separately from missing owner input; satisfying a prerequisite does not resolve a rejected repair. Never expose internal instructions in the summary.
       No shell or direct filesystem tools: CSS/JS draft writes go through put_payload;
       Elixir drafts go through put_mod(name: "my_mod.ex", content: full_source), so the owner can undo them. put_mod automatically invokes the independent source auditor; submit the draft to this tool rather than looking for a separate audit capability. Do not stop preemptively because no audit tool appears in the catalog.
@@ -1107,6 +1116,27 @@ defmodule BowserBrain.ModWorkshop do
     _ -> file
   end
 
+  defp finish(%{run: %{documentation: true}} = state, _session, result) do
+    Process.demonitor(state.run.ref, [:flush])
+    usage = case result do
+      {:output, output} -> case ModSmith.extract_json(output) do
+        {:ok, envelope} -> ModSmithOutcome.usage(envelope)
+        _ -> nil
+      end
+      _ -> nil
+    end
+    p = project(state, state.run.project)
+    p = p |> Map.put("status", state.run.previous_status || "ready")
+      |> Map.put("next_step", state.run.previous_next_step)
+      |> Map.put("repair_notice", state.run.previous_repair_notice)
+      |> Map.put("revisions", tl(p["revisions"]))
+      |> Map.put("usage", usage || p["usage"])
+      |> Map.put("turns", p["turns"] ++ [%{"id" => ModRevision.id(), "role" => "activity",
+        "text" => if(usage, do: "Usage instructions are ready.", else: "Could not write instructions. Try again.")}])
+    next = put_project(state, p)
+    %{next | run: nil, error: if(usage, do: nil, else: "Could not generate usage instructions. Try again.")}
+  end
+
   defp finish(state, session, result) do
     Process.demonitor(state.run.ref, [:flush])
     envelope = case result do
@@ -1191,6 +1221,7 @@ defmodule BowserBrain.ModWorkshop do
       |> Map.put("checks", checks)
       |> Map.put("next_step", next_step)
       |> Map.put("repair_notice", repair_notice)
+      |> Map.put("usage", ModSmithOutcome.usage(envelope) || if(status in ["failed", "interrupted"], do: p["usage"]))
       |> Map.put("revisions", [revision | rest])
       |> Map.put("turns", p["turns"] ++ [turn])
       |> Map.put(
@@ -1286,6 +1317,7 @@ defmodule BowserBrain.ModWorkshop do
           p =
             p
             |> Map.put("revisions", revisions)
+            |> Map.put("usage", revision["usage_before"])
             |> Map.put("status", "restored")
             |> Map.put("summary", "Restored the files from before: #{ModSmithOutcome.revision_label(revision)}")
             |> Map.put("next_step", nil)
@@ -1319,7 +1351,7 @@ defmodule BowserBrain.ModWorkshop do
     files = live_paths(p)
     enabled = Enum.any?(files, &(not String.ends_with?(&1, ".off")))
     files = Enum.filter(files, &(String.ends_with?(&1, ".off") != enabled))
-    revision = ModRevision.new_revision(if(enabled, do: "Disable mod", else: "Enable mod"))
+    revision = ModRevision.new_revision(if(enabled, do: "Disable mod", else: "Enable mod")) |> Map.put("usage_before", p["usage"])
 
     pairs =
       Enum.flat_map(files, fn path ->

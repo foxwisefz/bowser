@@ -128,6 +128,34 @@ defmodule BowserBrain.ModWorkshopTest do
     assert ModRevision.read(path) == nil
   end
 
+  test "usage docs persist, update read-only, and follow file undo" do
+    first = %{"entry_point" => "Open an article; reading mode is automatic.", "steps" => ["Open the website.", "Read the restyled article."], "tips" => ""}
+    second = %{first | "steps" => ["Open an article.", "Use the new layout."]}
+    event("submit", %{"text" => "Reading mode"})
+    assert_receive {:runner, pid, _, _, _, _}, 2000
+    [p] = complete(pid, [file("original")], %{"usage" => first}).data["projects"]
+    assert p["usage"] == first
+    id = p["id"]
+    event("document", %{"project" => id})
+    assert_receive {:runner, pid, token, _, _, _}, 2000
+    for tool <- ["put_payload", "put_mod", "page_eval", "store_put", "native_click"] do
+      assert %{ok: false, error: message} = ModWorkshop.tool(token, tool, %{})
+      assert message =~ "read-only"
+    end
+    assert %{ok: true} = ModWorkshop.tool(token, "list_mods", %{})
+    [documented] = complete(pid, [file("must not install")], %{"usage" => second}).data["projects"]
+    assert documented["status"] == p["status"]
+    assert documented["revisions"] == p["revisions"]
+    assert documented["usage"] == second
+    assert ModRevision.read("sites/example.com/reading.css") =~ "original"
+    assert hd(ModRevision.load()["projects"])["usage"] == second
+    event("submit", %{"project" => id, "text" => "Refine it"})
+    assert_receive {:runner, pid, _, _, _, _}, 2000
+    complete(pid, [file("updated")], %{"usage" => first})
+    state = event("undo", %{"project" => id})
+    assert hd(state.data["projects"])["usage"] == second
+  end
+
   test "a new creation cannot claim files already tied to another mod" do
     event("submit", %{"text" => "Reader"})
     assert_receive {:runner, pid, _, _, _, _}, 2000
