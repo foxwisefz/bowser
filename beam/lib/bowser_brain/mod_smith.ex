@@ -416,6 +416,12 @@ defmodule BowserBrain.ModSmith do
     Compose the user's requested layout with these primitives; do not defer
     resizable website-layout requests to a resident agent.
 
+    OWNER CHOICES: ask_user(question:, detail:, options: [%{label:, description:}])
+    presents 2–5 distinct choices plus a custom reply in ModSmith. Use it only when
+    a necessary owner decision blocks progress. After success end the turn immediately;
+    do not continue tools or assume an answer. The saved choice resumes this same mod
+    conversation. Options are plain language, never code or implicit permission grants.
+
     PAGE SCREENSHOTS: page_screenshot(webview:, max_width: 1280) captures the loaded
     viewport directly from WebKit as an image, with no screen-recording permission.
     It excludes browser chrome and other apps. Use list_tabs IDs; a scoped run pins
@@ -1110,7 +1116,7 @@ defmodule BowserBrain.ModSmith do
   # The live-browser toolbox (bowser-browser-4uw): an MCP bridge relaying to
   # AgentPort at ~/.bowser/agent.sock, so the model can inspect the page,
   # install a draft, and verify — a dialog, not a blind one-shot.
-  @mcp_tools "mcp__bowser__page_screenshot,mcp__bowser__website_layout,mcp__bowser__native_screenshot,mcp__bowser__native_click,mcp__bowser__put_asset,mcp__bowser__toolbars,mcp__bowser__put_mod,mcp__bowser__shell_theme,mcp__bowser__list_tabs,mcp__bowser__page_eval," <>
+  @mcp_tools "mcp__bowser__ask_user,mcp__bowser__page_screenshot,mcp__bowser__website_layout,mcp__bowser__native_screenshot,mcp__bowser__native_click,mcp__bowser__put_asset,mcp__bowser__toolbars,mcp__bowser__put_mod,mcp__bowser__shell_theme,mcp__bowser__list_tabs,mcp__bowser__page_eval," <>
                "mcp__bowser__page_html,mcp__bowser__put_payload,mcp__bowser__list_mods,mcp__bowser__read_mod,mcp__bowser__store_get,mcp__bowser__store_put"
 
   defp mcp_args(app) do

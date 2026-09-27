@@ -466,6 +466,7 @@ class UpdateTests(unittest.TestCase):
         runtime_tools = {tool['name']: tool for tool in json.loads(result.stdout)['result']['tools']}
         agent_tools = {tool['name']: tool for tool in json.loads((ROOT/'beam/priv/ai-tools.json').read_text())}
         self.assertEqual(runtime_tools['page_screenshot'], agent_tools['page_screenshot'])
+        self.assertEqual(runtime_tools['ask_user'], agent_tools['ask_user'])
         self.assertIn('put_mod',names)
 
 if __name__=='__main__': unittest.main()

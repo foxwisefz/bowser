@@ -284,9 +284,15 @@ final class ModSmithTests: XCTestCase {
                 blocked["enabled"] = name != "disabled"
                 blocked["turns"] = [["id": "activity", "role": "activity", "text": "Checking what’s needed next…"]]
                 if name != "disabled" {
-                    blocked["next_step"] = ["title": name == "input" ? "Choose a reading style" : "Open the document",
+                    var nextStep: [String: Any] = ["title": name == "input" ? "Choose a reading style" : "Open the document",
                         "detail": name == "input" ? "Would you prefer a warm background or the website’s original colors?" : "Open the document you want to format, then resume testing.",
                         "action": name == "input" ? "reply" : "resume"]
+                    if name == "input" {
+                        nextStep["options"] = [
+                            ["id": "q|0", "label": "Warm background", "description": "Use soft colors for longer reading sessions."],
+                            ["id": "q|1", "label": "Original colors", "description": "Keep the website’s appearance and adjust the layout."]]
+                    }
+                    blocked["next_step"] = nextStep
                     blocked["repair_notice"] = "A proposed change could not pass security review and was not installed. Any earlier saved changes remain."
                 }
                 model.receive(["projects": [blocked], "selected": "reading", "busy": false, "progress": [], "stage": "Ready"])

@@ -1,6 +1,56 @@
 import Foundation
 let toolCatalogJSON = #"""
 [
+  {
+    "name": "ask_user",
+    "description": "Ask the owner one necessary question in ModSmith with 2–5 selectable options and a custom reply. Saves the question and pauses work: end this turn immediately after success; the answer resumes the same mod conversation. Requires a scoped ModSmith run. Do not use for routine implementation choices or invent permissions. Options are plain text, never executable actions.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "question": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "detail": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1500
+        },
+        "options": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 5,
+          "items": {
+            "type": "object",
+            "properties": {
+              "label": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80
+              },
+              "description": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 300
+              }
+            },
+            "required": [
+              "label",
+              "description"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "question",
+        "detail",
+        "options"
+      ],
+      "additionalProperties": false
+    }
+  },
 {
   "name": "mod_diagnostics",
   "description": "Read bounded runtime receipts for an owned Elixir mod: page delivery/callback completion, Jev outcomes, instrumented application counts, and script_paused with observer_loop when native protection disconnects runaway mod observers. A paused hook is a failed performance check. No prompts or page content. New receipts are chronological; compare timestamps and webview for the current run. Empty receipts do not prove failure; all-keep and zero hidden are valid outcomes. Desktop only.",

@@ -621,8 +621,25 @@ struct ModSmithScreen: View {
                                     .font(.callout).foregroundStyle(.secondary)
                                 if let step = project.nextStep {
                                     if step.action == "reply" {
-                                        Button("Reply", systemImage: "text.bubble") { composerFocused = true }
-                                            .buttonStyle(.borderedProminent)
+                                        if let options = step.options {
+                                            ForEach(options) { option in
+                                                Button {
+                                                    model.action("answer", project: project.id, path: option.id)
+                                                } label: {
+                                                    HStack(spacing: 12) {
+                                                        VStack(alignment: .leading, spacing: 4) {
+                                                            Text(option.label).font(.callout.weight(.semibold))
+                                                            Text(option.description).font(.caption).foregroundStyle(.secondary)
+                                                        }.frame(maxWidth: .infinity, alignment: .leading)
+                                                        Image(systemName: "arrow.right").foregroundStyle(.secondary)
+                                                    }.padding(12).contentShape(Rectangle())
+                                                }.buttonStyle(.plain)
+                                                    .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 10))
+                                                    .disabled(model.snapshot.busy)
+                                            }
+                                        }
+                                        Button(step.options == nil ? "Reply" : "Answer another way", systemImage: "text.bubble") { composerFocused = true }
+                                            .buttonStyle(.bordered).disabled(model.snapshot.busy)
                                     } else if step.action == "resume" {
                                         Button("I’ve done this — resume", systemImage: "play.fill") { model.action("continue", project: project.id) }
                                             .buttonStyle(.borderedProminent).disabled(model.snapshot.busy)
@@ -641,7 +658,7 @@ struct ModSmithScreen: View {
                                 .padding(14).frame(maxWidth: .infinity, alignment: .leading)
                                 .background(Color.orange.opacity(0.06), in: RoundedRectangle(cornerRadius: 12))
                         }
-                        if project.canEnableAndTest {
+                        if project.canEnableAndTest && project.nextStep?.options == nil {
                             VStack(alignment: .leading, spacing: 12) {
                                 Label("Enable your mod to test it", systemImage: "power")
                                     .font(.system(size: 20, weight: .semibold, design: .rounded))

@@ -13,10 +13,17 @@ public struct ModSmithTurn: Decodable, Identifiable {
     }
 }
 
+public struct ModSmithChoice: Decodable, Identifiable {
+    public let id: String
+    public let label: String
+    public let description: String
+}
+
 public struct ModSmithNextStep: Decodable {
     public let title: String
     public let detail: String
     public let action: String
+    public let options: [ModSmithChoice]?
 }
 
 public struct ModSmithUsage: Decodable {
@@ -61,7 +68,7 @@ public struct ModSmithProject: Decodable, Identifiable {
         status != "working" && !enabled && !files.isEmpty
     }
     public var needsNextStep: Bool {
-        (status == "needs_help" && !canEnableAndTest) || (canContinue && nextStep != nil)
+        nextStep?.options != nil || (status == "needs_help" && !canEnableAndTest) || (canContinue && nextStep != nil)
     }
     public var statusLabel: String {
         if canEnableAndTest && ["needs_help", "disabled"].contains(status) { return "Disabled" }

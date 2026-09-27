@@ -25,7 +25,10 @@ defmodule BowserBrain.DirectAgent do
         "#{inspect(m)}.#{f}/#{if is_integer(a), do: a, else: length(a)}:#{Keyword.get(loc, :line, 0)}"
       end)
       Logger.error("modsmith event=exception phase=#{Process.get(:direct_agent_phase)} exception=#{inspect(error.__struct__)} frames=#{frames}")
-      {nil, {:error, AI.message(:local_agent_error)}}
+    {nil, {:error, AI.message(:local_agent_error)}}
+  catch
+    :throw, :owner_question ->
+      {nil, {:output, JSON.encode!(%{"status" => "needs_help", "summary" => "Waiting for your answer.", "files" => []})}}
   end
 
   defp safe_error(value) when is_atom(value) or is_integer(value), do: to_string(value)
@@ -117,6 +120,7 @@ defmodule BowserBrain.DirectAgent do
                 _ -> %{ok: false, error: "Tool was not executed: unavailable or this batch reached its execution budget. Request deferred work in a later batch."}
               end
 
+            if result[:waiting_for_user] == true, do: throw(:owner_question)
             tool_output(call["call_id"], result)
 
           end)

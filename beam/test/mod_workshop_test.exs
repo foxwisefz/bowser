@@ -285,6 +285,45 @@ defmodule BowserBrain.ModWorkshopTest do
     assert ModWorkshop.snapshot(state, "main").projects == []
   end
 
+  test "owner choices persist, fence tool work and resume the same mod only after a current answer", %{root: root} do
+    state = event("submit", %{"text" => "Make reading easier", "scope" => "site"})
+    assert_receive {:runner, pid, token, _, _, _}, 1000
+    id = state.run.project
+    args = %{"question" => "Which appearance?", "detail" => "Choose the reading background.",
+      "options" => [%{"label" => "Warm", "description" => "Use a warm background."},
+        %{"label" => "Original", "description" => "Keep the website colors."}]}
+    assert %{ok: false} = ModWorkshop.tool(token, "ask_user", Map.put(args, "options", []))
+    assert %{ok: true, waiting_for_user: true, question: question} = ModWorkshop.tool(token, "ask_user", args)
+    assert File.read!(Path.join(root, "history.json")) =~ "Which appearance?"
+    assert %{waiting_for_user: true} = ModWorkshop.tool(token, "put_payload", %{"path" => "sites/example.com/blocked.css", "content" => "body {}"})
+    refute File.exists?(Path.join(root, "sites/example.com/blocked.css"))
+    state = complete(pid, [], %{"status" => "active"})
+    [project] = state.data["projects"]
+    assert project["status"] == "needs_help"
+    assert project["next_step"] == question
+    assert event("answer", %{"project" => id, "path" => "stale"}).run == nil
+    assert event("answer", %{"project" => id, "path" => hd(question["options"])["id"], "app" => %{"id" => "other-app"}}).run == nil
+    state = event("answer", %{"project" => id, "path" => hd(question["options"])["id"]})
+    assert state.run.project == id
+    assert_receive {:runner, _, _, prompt, _, _}, 1000
+    assert prompt =~ "Warm — Use a warm background."
+    assert hd(state.data["projects"])["next_step"] == nil
+    assert length(state.data["projects"]) == 1
+  end
+
+  test "custom replies resume a saved owner question" do
+    event("submit", %{"text" => "Make reading easier", "scope" => "site"})
+    assert_receive {:runner, pid, token, _, _, _}, 1000
+    assert %{ok: true} = ModWorkshop.tool(token, "ask_user", %{"question" => "Which style?", "detail" => "Pick a style.",
+      "options" => [%{"label" => "Light", "description" => "Light colors"}, %{"label" => "Dark", "description" => "Dark colors"}]})
+    state = complete(pid, [])
+    id = hd(state.data["projects"])["id"]
+    state = event("submit", %{"project" => id, "text" => "Use the system appearance instead"})
+    assert state.run.project == id
+    assert_receive {:runner, _, _, prompt, _, _}, 1000
+    assert prompt =~ "Use the system appearance instead"
+  end
+
   test "cancel fences late results and retry starts a fresh run" do
     state = event("submit", %{"text" => "Make reading easier", "scope" => "site"})
     assert_receive {:runner, pid, token, _, _, _}, 2000
@@ -687,6 +726,32 @@ end
       p = Enum.find(:sys.get_state(ModWorkshop).data["projects"], &(&1["id"] == state.run.project))
       assert p["status"] == if(changed, do: "partial", else: "active")
     end
+  end
+
+  test "direct agent stops its batch immediately after asking the owner", %{root: root} do
+    File.write!(Path.join(root, "registration.json"), JSON.encode!(%{"telemetryToken" => "fixture-token"}))
+    previous = Application.get_env(:bowser_brain, :ai_transport)
+    on_exit(fn ->
+      if previous, do: Application.put_env(:bowser_brain, :ai_transport, previous),
+        else: Application.delete_env(:bowser_brain, :ai_transport)
+    end)
+    event("submit", %{"text" => "Create fixture", "scope" => "site"})
+    assert_receive {:runner, pid, token, _, _, _}, 1000
+    Process.put(:modsmith_run, token)
+    Application.put_env(:bowser_brain, :ai_transport, fn _, _, body, _ ->
+      assert length(body["input"]) == 1
+      args = %{"question" => "Which appearance?", "detail" => "Choose the colors.",
+        "options" => [%{"label" => "Warm", "description" => "Warm background"}, %{"label" => "Cool", "description" => "Cool background"}]}
+      {:ok, %{"output" => [
+        %{"type" => "function_call", "name" => "ask_user", "call_id" => "one", "arguments" => JSON.encode!(args)},
+        %{"type" => "function_call", "name" => "put_payload", "call_id" => "two", "arguments" => JSON.encode!(%{"path" => "sites/example.com/unanswered.css", "content" => "body {}"})}]}}
+    end)
+    assert {nil, {:output, output}} = BowserBrain.DirectAgent.run("fixture", nil, fn _ -> :ok end, nil)
+    assert JSON.decode!(output)["status"] == "needs_help"
+    refute File.exists?(Path.join(root, "sites/example.com/unanswered.css"))
+    send(pid, {:result, {nil, {:output, output}}})
+    await(fn -> :sys.get_state(ModWorkshop).run == nil end)
+    assert hd(:sys.get_state(ModWorkshop).data["projects"])["next_step"]["title"] == "Which appearance?"
   end
 
   test "direct agent continues after audited mod installation", %{root: root} do
