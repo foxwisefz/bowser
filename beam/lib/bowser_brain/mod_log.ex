@@ -32,10 +32,10 @@ defmodule BowserBrain.ModLog do
   @doc "Record bounded pipeline metadata, never page text. Counts may be zero."
   def stage(mod, stage, count \\ 1, opts \\ []) do
     if stage in [:page_received, :page_handled, :page_error, :jev_started, :jev_ok,
-                 :jev_error, :applied, :apply_error] and is_integer(count) and count >= 0 do
+                 :jev_error, :applied, :apply_error, :script_paused] and is_integer(count) and count >= 0 do
       error = Keyword.get(opts, :error)
       error = if error in [:timeout, :unavailable, :rate_limited, :unauthorized,
-                           :request_too_large, :invalid_request, :invalid_response], do: error,
+                           :request_too_large, :invalid_request, :invalid_response, :observer_loop], do: error,
                 else: if(is_nil(error), do: nil, else: :other)
       webview = Keyword.get(opts, :webview)
       entry = %{mod: normalize_mod(mod), stage: stage, count: count,
@@ -123,6 +123,12 @@ defmodule BowserBrain.ModLog do
     {:noreply, state}
   end
 
+  def handle_info({:browser_event, %{"event" => "mod_script_fault", "mod" => mod,
+      "reason" => "observer_loop", "webview" => webview}}, state) when is_binary(mod) do
+    stage(mod, :script_paused, 1, webview: webview, error: :observer_loop)
+    log(mod, "Paused a runaway page observer. Fix the hook and reload to test again.")
+    {:noreply, state}
+  end
   def handle_info(_other, state), do: {:noreply, state}
 
   defp render(state) do

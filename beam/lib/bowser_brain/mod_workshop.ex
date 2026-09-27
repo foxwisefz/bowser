@@ -297,6 +297,11 @@ defmodule BowserBrain.ModWorkshop do
     {:noreply, state}
   end
 
+  def handle_info({:browser_event, %{"event" => "mod_script_fault", "reason" => "observer_loop",
+      "webview" => webview}}, %{run: %{webview: webview}} = state) do
+    {:noreply, %{state | run: Map.put(state.run, :script_fault, true)}}
+  end
+
   def handle_info({:progress, token, line}, %{run: %{token: token}} = state) do
     state = %{state | progress: Enum.take(state.progress ++ [line], -80)}
     publish(state)
@@ -1117,6 +1122,9 @@ defmodule BowserBrain.ModWorkshop do
           {state, "failed", string(reason), "", [], nil}
       end
 
+    {status, summary} = if Map.get(state.run, :script_fault, false),
+      do: {"failed", "A page hook was paused because its observer kept triggering itself. Repair the hook, then run verification again."},
+      else: {status, summary}
     p = project(state, state.run.project)
     next_step = ModSmithOutcome.next_step(envelope, status)
     repair_notice = if map_size(Map.get(state.run, :audit_failures, %{})) > 0,

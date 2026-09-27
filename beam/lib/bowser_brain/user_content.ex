@@ -205,9 +205,13 @@ defmodule BowserBrain.UserContent do
 
   defp flatten(bucket, profile) do
     bucket |> Enum.sort() |> Enum.flat_map(fn
-      {{_owner, ^profile}, list} -> list
+      {{owner, ^profile}, list} -> Enum.map(list, &with_owner(&1, owner))
       {{_, _}, _} -> []
       {_owner, list} -> if is_nil(profile), do: list, else: []
     end)
   end
+
+  defp with_owner(script, owner) when is_map(script) and is_atom(owner),
+    do: Map.put(script, :owner, owner |> Atom.to_string() |> String.replace_prefix("Elixir.", ""))
+  defp with_owner(script, _), do: script
 end

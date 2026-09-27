@@ -33,6 +33,87 @@ private final class ScriptFixture: @unchecked Sendable {
 private struct ScriptEvaluation: @unchecked Sendable { let value: Any? }
 
 @MainActor final class ModScriptTests: XCTestCase {
+    func testRunawayObserverIsPausedAndPageAndOtherObserversKeepWorking() async throws {
+        let server = try ScriptFixture()
+        for _ in 0..<100 where server.listener.port == nil { try await Task.sleep(for: .milliseconds(10)) }
+        for world in ["isolated", "page"] {
+            let config = WKWebViewConfiguration()
+            config.websiteDataStore = .nonPersistent()
+            let engine = EngineView(frame: .zero, configuration: config)
+            defer { engine.tearDown() }
+            let looping = ModScript(source: """
+                globalThis.loopCalls = 0;
+                globalThis.timerRan = false;
+                setTimeout(() => { globalThis.timerRan = true; }, 0);
+                const target = document.getElementById('target');
+                new MutationObserver(() => {
+                  globalThis.loopCalls++;
+                  target.textContent = 'replacement ' + globalThis.loopCalls;
+                }).observe(target, {childList:true});
+                target.textContent = 'start';
+                """, world: world, host: "127.0.0.1", owner: "LoopFixture")
+            let healthy = ModScript(source: """
+                globalThis.healthyCalls = 0;
+                new MutationObserver(() => { globalThis.healthyCalls++; })
+                  .observe(document.body, {attributes:true});
+                """, world: world, host: "127.0.0.1", owner: "HealthyFixture")
+            engine.applyUserContent(scripts: [looping, healthy], styles: [], reload: false)
+            engine.load(urlString: "http://127.0.0.1:\(server.port)/loop")
+            for _ in 0..<150 where engine.pausedScripts.isEmpty { try await Task.sleep(for: .milliseconds(20)) }
+            // Fail without evaluating into a starved JS queue if protection regresses.
+            _ = try XCTUnwrap(engine.pausedScripts.first)
+            XCTAssertEqual(engine.pausedScripts, [looping.identity])
+            func eval(_ source: String) async throws -> Any? {
+                let result: ScriptEvaluation = try await withCheckedThrowingContinuation { continuation in
+                    engine.webView.evaluateJavaScript(source, in: nil, in: looping.contentWorld) {
+                        continuation.resume(with: $0.map { ScriptEvaluation(value: $0) })
+                    }
+                }
+                return result.value
+            }
+            try await Task.sleep(for: .milliseconds(100))
+            let observedCount = try await eval("loopCalls")
+            let count = try XCTUnwrap(observedCount as? Int)
+            XCTAssertGreaterThan(count, 0)
+            XCTAssertLessThanOrEqual(count, 100)
+            let timer = try await eval("timerRan") as? Bool
+            XCTAssertEqual(timer, true)
+            _ = try await eval("globalThis.nativeCalls=0; globalThis.siteObserver=new window.MutationObserver(()=>globalThis.nativeCalls++); siteObserver.observe(document.body,{attributes:true}); document.body.setAttribute('data-test','1');")
+            try await Task.sleep(for: .milliseconds(50))
+            let healthyCount = try await eval("healthyCalls") as? Int
+            let nativeCount = try await eval("nativeCalls") as? Int
+            XCTAssertEqual(healthyCount, 1)
+            XCTAssertEqual(nativeCount, 1)
+            let finalCount = try await eval("loopCalls") as? Int
+            XCTAssertEqual(finalCount, count)
+        }
+    }
+
+    func testReinstallDisconnectsPreviousObserversAndNormalCallbacksCanYield() async throws {
+        let config = WKWebViewConfiguration()
+        config.websiteDataStore = .nonPersistent()
+        let web = WKWebView(frame: .zero, configuration: config)
+        web.loadHTMLString("<body>fixture</body>", baseURL: nil)
+        for _ in 0..<100 where web.isLoading { try await Task.sleep(for: .milliseconds(20)) }
+        let source = try XCTUnwrap(ModScript.guardedSource("""
+            globalThis.calls = globalThis.calls || 0;
+            new MutationObserver(() => { globalThis.calls++; }).observe(document.body,{attributes:true});
+            """))
+        for _ in 0..<2 {
+            let _: ScriptEvaluation = try await withCheckedThrowingContinuation { continuation in
+                web.callAsyncJavaScript(source, arguments: ["expectedURL": "about:blank", "scriptKey": "same-script", "scriptToken": "fixture"], in: nil, in: .page) {
+                    continuation.resume(with: $0.map { ScriptEvaluation(value: $0) })
+                }
+            }
+        }
+        let result: ScriptEvaluation = try await withCheckedThrowingContinuation { continuation in
+            web.callAsyncJavaScript("const channel=new MessageChannel(); for(let i=0;i<120;i++){document.body.setAttribute('data-test',String(i));await new Promise(r=>{channel.port1.onmessage=r;channel.port2.postMessage(0);});} channel.port1.close();channel.port2.close();return globalThis.calls;", arguments: [:], in: nil, in: .page) {
+                continuation.resume(with: $0.map { ScriptEvaluation(value: $0) })
+            }
+        }
+        XCTAssertEqual(result.value as? Int, 120)
+    }
+
     func testDescriptorsFailClosedAndMatchNativeOrigins() {
         XCTAssertEqual(ModScript.parseList(["x"])?.first?.world, "isolated")
         XCTAssertNil(ModScript.guardedSource("}); globalThis.escaped=true; (function(){"))

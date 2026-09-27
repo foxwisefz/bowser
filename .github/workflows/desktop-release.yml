@@ -120,7 +120,7 @@ jobs:
             xcodebuild -version
             swift --version
           } > "$RUNNER_TEMP/bowser-test-diagnostics/toolchain.txt"
-          swift test --package-path shell --filter 'UpdateTests|TelemetryTests|ModSmithTests|OnboardingTests' \
+          swift test --package-path shell --filter 'UpdateTests|TelemetryTests|ModSmithTests|OnboardingTests|ModScriptTests' \
             --xunit-output "$RUNNER_TEMP/bowser-test-diagnostics/results.xml" \
             2>&1 | tee "$RUNNER_TEMP/bowser-test-diagnostics/swift-test.log"
           swift build --package-path shell --product BowserRuntimeTool

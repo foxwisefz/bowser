@@ -1,5 +1,6 @@
 import WebKit
 import JavaScriptCore
+import CryptoKit
 
 /// The shell owns scope and execution-world selection; source is never a host filter.
 struct ModScript: Equatable, ExpressibleByStringLiteral {
@@ -7,10 +8,13 @@ struct ModScript: Equatable, ExpressibleByStringLiteral {
     var world: String = "isolated"
     var host: String? = nil
     var origin: String? = nil
+    var owner: String? = nil
+    var identity: String { (owner ?? "payload") + ":" + SHA256.hash(data: Data(source.utf8)).map { String(format: "%02x", $0) }.joined() }
 
     init(stringLiteral value: String) { source = value }
-    init(source: String, world: String = "isolated", host: String? = nil, origin: String? = nil) {
+    init(source: String, world: String = "isolated", host: String? = nil, origin: String? = nil, owner: String? = nil) {
         self.source = source; self.world = world; self.host = host; self.origin = origin
+        self.owner = owner
     }
     @MainActor static let isolatedWorld = WKContentWorld.world(name: "bowser.mods")
     @MainActor static let dispatchWorld = WKContentWorld.world(name: "bowser.dispatch")
@@ -18,6 +22,7 @@ struct ModScript: Equatable, ExpressibleByStringLiteral {
     var wire: [String: Any] {
         var result: [String: Any] = ["source": source, "world": world]
         result["host"] = host; result["origin"] = origin
+        result["owner"] = owner
         return result
     }
     static func parseList(_ value: Any?) -> [ModScript]? {
@@ -30,7 +35,7 @@ struct ModScript: Equatable, ExpressibleByStringLiteral {
                   let world = map["world"] as? String, ["isolated", "page"].contains(world),
                   map["host"] == nil || map["host"] is String,
                   map["origin"] == nil || map["origin"] is String else { return [] }
-            result.append(ModScript(source: source, world: world, host: map["host"] as? String, origin: map["origin"] as? String))
+            result.append(ModScript(source: source, world: world, host: map["host"] as? String, origin: map["origin"] as? String, owner: map["owner"] as? String))
         }
         return result
     }
@@ -68,7 +73,8 @@ struct ModScript: Equatable, ExpressibleByStringLiteral {
         guard let context = JSContext() else { return nil }
         _ = context.objectForKeyedSubscript("Function").call(withArguments: [source])
         guard context.exception == nil else { return nil }
-        let compiled = "if (location.href !== expectedURL) return false;\n(function(){\n" + source + "\n})();\nreturn true;"
+        let compiled = "if (location.href !== expectedURL) return false;\n" + ModObserverGuard.setup +
+            "\n(function(MutationObserver){\n" + source + "\n})(GuardedMutationObserver);\nreturn true;"
         if compiledBodies.count >= 64 { compiledBodies.removeAll() }
         compiledBodies[source] = compiled
         return compiled

@@ -29,6 +29,10 @@ jobs:
         run: brew install elixir
       - name: Test budget enforcement
         run: python3 -m unittest discover -s tests/performance -p 'test*report.py'
+      - name: Test page-hook responsiveness and observer recovery
+        env:
+          BOWSER_HOME: ${{ runner.temp }}/observer-test-home
+        run: swift test --package-path shell --filter ModScriptTests
       - name: Restore trusted main baseline
         uses: actions/cache/restore@v4
         with:

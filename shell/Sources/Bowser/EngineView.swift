@@ -35,6 +35,10 @@ private final class PageRelay: NSObject, WKScriptMessageHandler {
                     "level": dict["level"] as? String ?? "log",
                     "message": dict["message"] as? String ?? "",
                 ])
+            case "bowserScriptFault":
+                guard message.frameInfo.isMainFrame, let dict = body as? [String: Any],
+                      let token = dict["token"] as? String else { return }
+                EngineView.live[id]?.recordScriptFault(token: token)
             case "bowserMediaWarm":
                 guard message.frameInfo.isMainFrame,
                       let dict = body as? [String: Any],
@@ -63,6 +67,15 @@ private final class PageRelay: NSObject, WKScriptMessageHandler {
 @MainActor
 final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
     private var navigationDiagnosticTrace = NavigationDiagnosticTrace()
+    private var scriptExecutions: [String: ModScript] = [:]
+    private(set) var pausedScripts: Set<String> = []
+
+    fileprivate func recordScriptFault(token: String) {
+        guard let script = scriptExecutions.removeValue(forKey: token) else { return }
+        pausedScripts.insert(script.identity)
+        BrainBridge.shared.send(["op": "event", "event": "mod_script_fault", "webview": webviewId,
+                                 "mod": script.owner ?? "Page payload", "reason": "observer_loop"])
+    }
     private let navigationNetwork = NavigationNetworkMonitor.shared
     private(set) static var live: [UInt64: EngineView] = [:]
     private static var nextId: UInt64 = 1
@@ -495,10 +508,14 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
         // Verify the WebKit-supplied security origin as well as the request URL.
         let origin = frame.securityOrigin
         guard origin.host.lowercased() == (url.host?.lowercased() ?? ""), origin.protocol == url.scheme else { return }
+        scriptExecutions.removeAll()
+        pausedScripts.removeAll()
         for script in currentScripts where script.matches(url) {
             guard let code = ModScript.guardedSource(script.source) else { continue }
+            let token = UUID().uuidString
+            scriptExecutions[token] = script
             webView.callAsyncJavaScript(code,
-                arguments: ["expectedURL": url.absoluteString],
+                arguments: ["expectedURL": url.absoluteString, "scriptKey": script.identity, "scriptToken": token],
                 in: frame, in: script.contentWorld) { _ in }
         }
     }
@@ -572,6 +589,10 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
     /// the right tab.
     private func registerRelay() {
         let controller = webView.configuration.userContentController
+        for world in [WKContentWorld.page, ModScript.isolatedWorld] {
+            controller.removeScriptMessageHandler(forName: "bowserScriptFault", contentWorld: world)
+            controller.add(pageRelay, contentWorld: world, name: "bowserScriptFault")
+        }
         controller.removeScriptMessageHandler(forName: "bowserEdited", contentWorld: .defaultClient)
         controller.add(pageRelay, contentWorld: .defaultClient, name: "bowserEdited")
         controller.removeScriptMessageHandler(forName: "bowserConsole")
@@ -595,6 +616,9 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
     }
 
     func tearDown() {
+        for world in [WKContentWorld.page, ModScript.isolatedWorld] {
+            webView.configuration.userContentController.removeScriptMessageHandler(forName: "bowserScriptFault", contentWorld: world)
+        }
         loadingCover?.removeFromSuperview()
         loadingCover = nil
         dismissTabPreview()

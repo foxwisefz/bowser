@@ -207,6 +207,15 @@ defmodule BowserBrain.ModWorkshopTest do
     refute JSON.encode!(visible) =~ "without making changes"
   end
 
+  test "runtime observer pause prevents a successful ModSmith result" do
+    event("submit", %{"text" => "Add a page control"})
+    assert_receive {:runner, pid, _, _, _, _}, 1000
+    send(ModWorkshop, {:browser_event, %{"event" => "mod_script_fault", "webview" => 7, "reason" => "observer_loop"}})
+    [project] = complete(pid, [file("body {}")], %{"status" => "active"}).data["projects"]
+    assert project["status"] == "failed"
+    assert project["summary"] =~ "observer"
+  end
+
   test "saving files preserves nonworking outcomes and allows continuation" do
     for status <- ["needs_help", "failed"] do
       event("submit", %{"text" => "Filter new posts"})

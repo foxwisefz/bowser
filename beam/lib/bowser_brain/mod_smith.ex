@@ -496,6 +496,15 @@ defmodule BowserBrain.ModSmith do
     CONTINUOUS FILTERING: treat a filter as a live behavior, never a one-time
     cleanup of the initial DOM. Detect arriving items and edits to existing items
     (including infinite scroll, SPA navigation and recycled/virtualized cards).
+    Page-hook performance is part of verification. Make mounting idempotent: reuse
+    existing controls; never remove/reinsert a control on every observer callback.
+    Narrow the observed subtree and ignore your own DOM mutations. Use the injected
+    MutationObserver constructor (not window.MutationObserver/globalThis.MutationObserver).
+    Bowser pauses that script's observers if a chain exceeds 100 callbacks or 50ms
+    of callback work before yielding. This is cooperative protection, not preemption
+    of one non-returning callback. Check fresh mod_diagnostics for script_paused /
+    observer_loop, and verify the page remains responsive after installation and
+    repeated updates. A paused hook is a failed check; repair it and verify again.
     Prefer a scoped, debounced MutationObserver; avoid observing your own filter
     UI/style changes in a feedback loop. Send newly discovered/changed item text
     to the Elixir mod and call Jev at runtime through Bowser's server. Deduplicate
@@ -524,7 +533,8 @@ defmodule BowserBrain.ModSmith do
     returns a receipt confirming processed count and unchanged item identities/content;
     use :apply_error otherwise. stage/2,3,4 accepts a nonnegative count (default 1),
     options webview: integer and error: reason. Allowed stages: page_received,
-    page_handled, page_error, jev_started, jev_ok, jev_error, applied, apply_error.
+    page_handled, page_error, jev_started, jev_ok, jev_error, applied, apply_error,
+    script_paused (native observer-loop protection).
     Jev calls in callbacks and Task workers are attributed automatically; do not
     duplicate their jev_started/jev_ok/jev_error receipts. Never
     log page text, prompts, keys or raw error bodies. Diagnostic receipts are a bounded

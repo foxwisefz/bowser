@@ -3,7 +3,7 @@ let toolCatalogJSON = #"""
 [
 {
   "name": "mod_diagnostics",
-  "description": "Read bounded runtime receipts for an owned Elixir mod: page delivery/callback completion, Jev outcomes, and instrumented application counts. No prompts or page content. New receipts are chronological; compare timestamps and webview for the current run. Empty receipts do not prove failure; all-keep and zero hidden are valid outcomes. Desktop only.",
+  "description": "Read bounded runtime receipts for an owned Elixir mod: page delivery/callback completion, Jev outcomes, instrumented application counts, and script_paused with observer_loop when native protection disconnects runaway mod observers. A paused hook is a failed performance check. No prompts or page content. New receipts are chronological; compare timestamps and webview for the current run. Empty receipts do not prove failure; all-keep and zero hidden are valid outcomes. Desktop only.",
   "inputSchema": {
     "type": "object",
     "properties": {
