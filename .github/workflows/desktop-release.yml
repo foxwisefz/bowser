@@ -158,6 +158,15 @@ jobs:
           retention-days: 7
       - name: Build fresh application and runtime
         run: bin/install --stage-only
+      - name: Enforce release performance budgets
+        run: bin/check-performance --stage "$(cat "$BOWSER_STAGE_FILE")" --output "$RUNNER_TEMP/performance"
+      - name: Upload release performance diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-performance-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/performance/
+          retention-days: 14
       - name: Sign and notarize DMG, then sign final update metadata
         run: |
           set -euo pipefail
