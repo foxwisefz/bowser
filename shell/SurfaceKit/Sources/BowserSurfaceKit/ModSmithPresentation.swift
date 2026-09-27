@@ -87,8 +87,17 @@ public struct ModSmithExisting: Decodable, Identifiable {
     public var id: String { path }
 }
 
+public struct ModSmithProfile: Decodable {
+    public let id: String
+    public let name: String
+    public let icon: String?
+    public let character: String?
+}
+
 public struct ModSmithSnapshot: Decodable {
     public init() {}
+    public var workspace_profile: ModSmithProfile?
+    public var running_profile: ModSmithProfile?
     public var available_mods: [ModSmithExisting]? = nil
     public var projects: [ModSmithProject] = []
     public var selected: String?

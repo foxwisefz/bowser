@@ -312,6 +312,9 @@ defmodule BowserBrain.ModWorkshopTest do
     assert snapshot.projects == []
     assert snapshot.busy
     assert snapshot.running_run == token
+    assert snapshot.workspace_profile["id"] == "work"
+    assert snapshot.running_profile["id"] == "default"
+    assert snapshot.running_profile["name"] == BowserBrain.Profiles.get("default")["name"]
     assert event("cancel", %{"run" => "old-run"}).run != nil
     assert event("cancel", %{"run" => token, "app" => %{"id" => "other-client"}}).run != nil
     assert event("cancel", %{"run" => token}).run == nil

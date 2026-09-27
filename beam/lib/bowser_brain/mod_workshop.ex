@@ -1495,6 +1495,9 @@ defmodule BowserBrain.ModWorkshop do
 
     %{
       op: "modsmith_state",
+      workspace_profile: if(client == "main", do: profile_identity(BowserBrain.ModScope.profile_of(state.active))),
+      running_profile: if(client == "main" && state.run && state.run.app == nil,
+        do: profile_identity(Map.get(state.run, :profile, "default"))),
       available_mods: available_mods(state, client),
       app: if(client == "main", do: nil, else: client),
       selected: selected(state, client),
@@ -1536,6 +1539,11 @@ defmodule BowserBrain.ModWorkshop do
       String.contains?(line, "page_eval") -> "Checking the page"
       true -> "Inspecting and building"
     end
+  end
+
+  defp profile_identity(id) do
+    profile = BowserBrain.Profiles.get(id) || %{"id" => id, "name" => id}
+    Map.take(profile, ["id", "name", "icon", "character"])
   end
 
   defp publish(state, client \\ nil, show \\ false) do

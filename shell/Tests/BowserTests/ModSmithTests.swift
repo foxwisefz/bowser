@@ -302,6 +302,10 @@ final class ModSmithTests: XCTestCase {
                 model.snapshot.projects.append(try JSONDecoder().decode(ModSmithProject.self,
                     from: JSONSerialization.data(withJSONObject: older)))
             }
+            model.snapshot.workspace_profile = try JSONDecoder().decode(ModSmithProfile.self,
+                from: Data(#"{"id":"work","name":"Work","icon":"💼"}"#.utf8))
+            model.snapshot.running_profile = model.snapshot.busy ? try JSONDecoder().decode(ModSmithProfile.self,
+                from: Data(#"{"id":"personal","name":"Personal","icon":"🏠"}"#.utf8)) : nil
             let view = NSHostingView(rootView: ModSmithRootView(model: model))
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: width, height: 660),
                                   styleMask: [.titled, .resizable], backing: .buffered, defer: false)

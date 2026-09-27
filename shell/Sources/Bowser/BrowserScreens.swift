@@ -460,6 +460,14 @@ struct ModSmithScreen: View {
             Label("ModSmith", systemImage: "sparkles")
                 .font(.system(size: 16, weight: .semibold, design: .rounded))
                 .padding(.horizontal, 12).padding(.top, 8)
+            if let profile = model.snapshot.workspace_profile {
+                profileIdentity(profile, caption: "Profile")
+                    .padding(10).frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.accentColor.opacity(0.07), in: RoundedRectangle(cornerRadius: 10))
+            } else if model.isSiteApp {
+                Label("This app", systemImage: "app").font(.caption).foregroundStyle(.secondary)
+                    .padding(.horizontal, 12)
+            }
             Button { model.action("new"); composerFocused = true } label: {
                 Label("New mod", systemImage: "plus").frame(maxWidth: .infinity, alignment: .leading)
             }.buttonStyle(.bordered).controlSize(.large)
@@ -524,6 +532,24 @@ struct ModSmithScreen: View {
             Image(systemName: fallback).frame(width: size, height: size)
                 .foregroundStyle(.secondary).accessibilityHidden(true)
         }
+    }
+
+    private func profileIdentity(_ profile: ModSmithProfile, caption: String) -> some View {
+        HStack(spacing: 8) {
+            Group {
+                if let character = profile.character {
+                    SurfaceServices.shared.portrait(character, 26)
+                } else if let icon = profile.icon {
+                    Text(icon).font(.system(size: 22))
+                } else {
+                    Image(systemName: "person.crop.circle.fill").font(.system(size: 24)).foregroundStyle(.secondary)
+                }
+            }.frame(width: 28, height: 28).accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(caption).font(.system(size: 10)).foregroundStyle(.secondary)
+                Text(profile.name).font(.caption.weight(.semibold)).lineLimit(1)
+            }
+        }.accessibilityElement(children: .combine).help("\(caption): \(profile.name)")
     }
 
     private var header: some View {
@@ -763,6 +789,9 @@ struct ModSmithScreen: View {
                     Text(model.snapshot.stage).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
                 Spacer(minLength: 4)
+                if let profile = model.snapshot.running_profile {
+                    profileIdentity(profile, caption: "Running in")
+                }
                 if let running = model.snapshot.projects.first(where: { $0.status == "working" }) {
                     if running.id != model.snapshot.selected {
                         Button("View") { model.action("select", project: running.id) }
