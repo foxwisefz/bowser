@@ -88,3 +88,5 @@ changes append to that conversation. Installed mods without a chat can be opened
 from the same list. Drafts remain visible as drafts. Profile and saved-app
 boundaries continue to filter which conversations appear. Unsent text is retained
 when switching conversations in the open window.
+
+When a target tab leaves the mod’s site, ModSmith recovers to another matching tab in the same profile. Tab discovery, mod discovery, source reads and diagnostics remain available when no matching tab is open. Page actions and draft writes wait for a matching tab; discovery reports the current URLs and whether a target is available.

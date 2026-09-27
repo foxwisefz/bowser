@@ -112,7 +112,8 @@ defmodule BowserBrain.ModSmith do
     #{learn_context(url)}
 
     YOU HAVE LIVE TOOLS into the running browser — use them instead of guessing:
-    list_tabs (which webview is which), page_html (ground-truth DOM for a selector),
+    list_tabs (matching tabs in this profile; reports target_available and current URLs,
+    automatically recovers to another matching tab when the original leaves scope), page_html (ground-truth DOM for a selector),
     page_eval (run JS, check computed styles, probe selectors), put_payload
     (install a draft payload NOW — applies within ~1s after you reload via
     page_eval "location.reload()"), list_mods (every existing mod/payload:

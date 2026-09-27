@@ -235,7 +235,7 @@ let toolCatalogJSON = #"""
   },
   {
     "name": "list_tabs",
-    "description": "List open tabs (webview id + url) and which is active.",
+    "description": "List open tabs (webview id + url) and which is active. In ModSmith, returns matching tabs in the owning profile, target_available and expected_url; automatically selects another matching tab when the target leaves scope. Discovery and source/diagnostic reads remain available without a matching tab; page actions remain blocked.",
     "inputSchema": {
       "type": "object",
       "properties": {}

@@ -1194,6 +1194,29 @@ end
     complete(pid, [file("two")])
   end
 
+  test "navigation away preserves discovery but blocks page actions until a same-profile tab exists" do
+    original_session = :sys.get_state(BowserBrain.Session)
+    on_exit(fn -> :sys.replace_state(BowserBrain.Session, fn _ -> original_session end) end)
+    :sys.replace_state(BowserBrain.Session, &Map.put(&1, :profiles, %{7 => "default", 8 => "work", 9 => "default"}))
+    event("submit", %{"text" => "Reading mode", "scope" => "site"})
+    assert_receive {:runner, _pid, token, _, _, _}, 1000
+    ModRevision.write("sites/example.com/owned.css", "body {}")
+    :sys.replace_state(ModWorkshop, &Map.put(&1, :urls, %{7 => "https://media.example/file", 8 => "https://example.com/private"}))
+    assert %{ok: true, active: nil, target_available: false, tabs: []} = ModWorkshop.tool(token, "list_tabs", %{})
+    assert %{ok: true} = ModWorkshop.tool(token, "list_mods", %{})
+    assert %{ok: true, content: "body {}"} = ModWorkshop.tool(token, "read_mod", %{"path" => "sites/example.com/owned.css"})
+    for tool <- ["page_eval", "page_html", "native_click", "put_payload", "put_mod", "store_put"] do
+      assert %{ok: false, error: error} = ModWorkshop.tool(token, tool, %{})
+      assert error =~ "No matching tab"
+    end
+    :sys.replace_state(ModWorkshop, &put_in(&1.urls[9], "https://example.com/another"))
+    assert %{ok: true, active: 9, tabs: [%{webview: 9, url: "https://example.com/another"}]} = ModWorkshop.tool(token, "list_tabs", %{})
+    assert :sys.get_state(ModWorkshop).run.webview == 9
+    assert %{ok: true} = ModWorkshop.tool(token, "put_payload", %{"name" => "recovery.css", "content" => "body {}"})
+    event("cancel", %{"project" => :sys.get_state(ModWorkshop).run.project})
+    assert %{ok: false} = ModWorkshop.tool(token, "list_tabs", %{})
+  end
+
   test "undo preflights every file and preserves an external edit" do
     r =
       ModRevision.new_revision("two files")

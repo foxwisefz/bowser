@@ -8,7 +8,7 @@ defmodule BowserBrain.ModWorkshop do
   def modify(path), do: GenServer.cast(__MODULE__, {:modify, path})
 
   def tool(token, tool, args) do
-    case GenServer.call(__MODULE__, {:context, token}) do
+    case GenServer.call(__MODULE__, {:context, token, tool}) do
       {:ok, run} ->
         cond do
           Map.get(run, :documentation, false) and tool not in ["list_tabs", "page_html", "read_mod", "list_mods", "mod_diagnostics"] ->
@@ -39,7 +39,8 @@ defmodule BowserBrain.ModWorkshop do
             BowserBrain.AgentPort.dispatch(%{"tool" => "jev", "args" => args})
 
           tool == "list_tabs" ->
-            %{ok: true, active: run.webview, tabs: [%{webview: run.webview, url: run.url}]}
+            %{ok: true, active: if(run.target_available, do: run.webview),
+              target_available: run.target_available, expected_url: run.url, tabs: run.tabs}
 
           tool in ["shell_theme", "toolbars"] and run.app == nil ->
             BowserBrain.AgentPort.dispatch(%{"tool" => tool})
@@ -419,25 +420,31 @@ defmodule BowserBrain.ModWorkshop do
     end
   end
 
-  def handle_call({:context, token}, _, state) do
-    reply =
-      case state.run do
-        %{token: ^token} = run ->
-          current = state.urls[run.webview]
+  def handle_call({:context, token, tool}, _, state) do
+    case state.run do
+      %{token: ^token} = run ->
+        p = project(state, run.project)
+        tabs = if run.app, do: [%{webview: run.webview, url: run.url}], else:
+          state.urls
+          |> Enum.filter(fn {wv, url} ->
+            BowserBrain.ModScope.profile_of(wv) == run.profile and
+              (p["scope"] == "browser" or URI.parse(url).host == URI.parse(run.url).host)
+          end)
+          |> Enum.sort_by(fn {wv, _} -> {wv != run.webview, wv != state.active, wv} end)
+          |> Enum.map(fn {wv, url} -> %{webview: wv, url: url} end)
+        target = List.first(tabs)
+        run = if target, do: %{run | webview: target.webview}, else: run
+        state = %{state | run: run}
+        safe = tool in ["list_tabs", "list_mods", "read_mod", "mod_diagnostics"]
+        if target || safe do
+          {:reply, {:ok, Map.merge(run, %{tabs: tabs, target_available: target != nil})}, state}
+        else
+          {:reply, {:error, "No matching tab is open in this profile. Source and diagnostics remain available; open #{run.url} to verify page behavior."}, state}
+        end
 
-          if run.app == nil and current != nil and
-               URI.parse(current).host != URI.parse(run.url).host do
-            {:error,
-             "The target tab moved to a different site. Return to #{URI.parse(run.url).host} to continue."}
-          else
-            {:ok, run}
-          end
-
-        _ ->
-          {:error, "This run has ended. Start a new refinement before changing files."}
-      end
-
-    {:reply, reply, state}
+      _ ->
+        {:reply, {:error, "This run has ended. Start a new refinement before changing files."}, state}
+    end
   end
 
   def handle_call({:draft, token, args}, _, %{run: %{token: token}} = state) do
