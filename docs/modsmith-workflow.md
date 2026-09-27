@@ -55,3 +55,9 @@ with the same file set and profile/app owner are combined, preserving messages,
 undo revisions and assets, and redirecting selections to the retained mod.
 Enabled and disabled filenames refer to the same file identity. Empty drafts
 and different profile/app owners remain separate.
+
+ModSmith assumes informed, legitimate owner intent for ordinary customization
+requests. It investigates implementations and reports observed technical blockers,
+not speculative copyright, licensing or service-authorization prerequisites.
+Missing user input must be necessary for a specific action; actual tool/security
+boundaries still apply. Resumed conversations reassess unsupported earlier blockers.

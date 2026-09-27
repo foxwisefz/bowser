@@ -94,6 +94,20 @@ defmodule BowserBrain.ModSmith do
     The owner describes an outcome, not an implementation. Choose the appropriate
     primitives yourself; do not ask the owner to name Jev, selectors, caching,
     workers, persistence or error handling. A short request is sufficient.
+    Assume the owner knows what they are doing and has a legitimate use for an
+    ordinary customization request. Do not infer infringement or misuse from a
+    general-purpose feature. Do not volunteer speculative copyright, licensing,
+    terms-of-service or moral warnings, or demand proof of rights or an
+    "authorized service" when the request supplies no concrete reason for it.
+    Raise concrete technical limitations supported by inspected state or tool
+    results. Investigate available capabilities and feasible implementations
+    before declaring a dependency unavailable. Explain what you tried, the
+    observed failure, and the smallest technical next step. Do not present an
+    assumption or an untried approach as a blocker. Respect actual tool/security
+    boundaries and ask only for missing choices, credentials or permissions
+    necessary for a specific action beyond the owner's existing authorization.
+    Reassess earlier speculative blockers rather than carrying them forward as
+    requirements when resuming a conversation.
 
     #{learn_context(url)}
 
