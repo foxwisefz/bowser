@@ -1089,41 +1089,57 @@ struct ExternalProfileScreen: View {
     }
     private var model: any ExternalProfilePresentation { context.model as! any ExternalProfilePresentation }
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            HStack(spacing: 12) {
-                Image(systemName: "arrow.up.forward.app.fill")
-                    .font(.system(size: 26)).foregroundStyle(.tint)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Open with a profile").font(.system(size: 23, weight: .semibold))
-                    Text("Choose where this link belongs.").font(.callout).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 20) {
+            HStack(alignment: .center, spacing: 12) {
+                Image(systemName: "arrow.up.right")
+                    .font(.system(size: 19, weight: .semibold))
+                    .foregroundStyle(.tint)
+                    .frame(width: 42, height: 42)
+                    .background(Color.accentColor.opacity(0.09), in: RoundedRectangle(cornerRadius: 12))
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("Open with a profile")
+                        .font(.system(size: 21, weight: .semibold))
+                    HStack(spacing: 5) {
+                        Text(model.destination)
+                            .lineLimit(1).truncationMode(.middle)
+                        if model.linkCount > 1 {
+                            Text("+\(model.linkCount - 1) more").fixedSize()
+                        }
+                    }
+                    .font(.system(size: 12)).foregroundStyle(.secondary)
+                    .help(model.destination)
                 }
             }
-            HStack(spacing: 8) {
-                Image(systemName: "link").foregroundStyle(.secondary)
-                Text(model.destination).font(.callout.weight(.medium)).lineLimit(1).truncationMode(.middle)
-                if model.linkCount > 1 { Text("+\(model.linkCount - 1) more").foregroundStyle(.secondary) }
-            }.padding(12).frame(maxWidth: .infinity, alignment: .leading)
-                .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 10))
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(spacing: 8) {
                         ForEach(Array(model.choices.enumerated()), id: \.element.id) { index, profile in
                             choice(profile, index: index).id(profile.id)
                         }
-                    }
+                    }.padding(1)
                 }
+                .scrollIndicators(.never)
+                .frame(maxHeight: CGFloat(max(1, model.choices.count)) * 68 - 6)
                 .onChange(of: selectedID) { _, id in
                     if let id { proxy.scrollTo(id) }
                 }
             }
             if let error = model.error { Text(error).font(.caption).foregroundStyle(.red) }
-            HStack {
-                Text("↑ ↓ Choose · Return to open").font(.caption).foregroundStyle(.secondary)
+            HStack(spacing: 6) {
+                Image(systemName: "arrow.up.arrow.down")
+                Text("Choose")
+                Text("·")
+                Image(systemName: "return")
+                Text("Open")
                 Spacer()
                 Button("Cancel", action: model.cancel).keyboardShortcut(.cancelAction)
+                    .buttonStyle(.plain)
+                    .padding(.horizontal, 12).padding(.vertical, 6)
+                    .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 7))
             }
-        }.padding(26).padding(.top, 12)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .font(.system(size: 11)).foregroundStyle(.secondary)
+        }.padding(24).padding(.top, 12)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         .background(Color(nsColor: .windowBackgroundColor))
         .focusable().focusEffectDisabled().focused($keyboardFocused)
         .onKeyPress(.upArrow) { move(-1); return .handled }
@@ -1139,13 +1155,17 @@ struct ExternalProfileScreen: View {
     @ViewBuilder private func choice(_ profile: ProfileDisplay, index: Int) -> some View {
         let button = Button { model.choose(profile.id) } label: {
             HStack(spacing: 14) {
-                ProfileIdentity(draft: profile.draft, size: 38)
-                    .frame(width: 44, height: 44)
+                ProfileIdentity(draft: profile.draft, size: 30)
+                    .frame(width: 36, height: 36)
                     .background(Color(nsColor: screenColor(hex: profile.draft.tint) ?? .controlAccentColor).opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
-                Text(profile.name).font(.system(size: 15, weight: .medium)).lineLimit(1)
+                Text(profile.name).font(.system(size: 14, weight: .medium)).lineLimit(1)
                 Spacer()
                 if index < 9 {
-                    Text("⌘\(index + 1)").font(.system(size: 12, design: .monospaced)).foregroundStyle(.secondary)
+                    Text("⌘\(index + 1)")
+                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 6).padding(.vertical, 4)
+                        .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 5))
                 }
             }.padding(12).contentShape(Rectangle())
         }.buttonStyle(ProfileChoiceStyle(selected: selectedID == profile.id))
@@ -1168,8 +1188,8 @@ private struct ProfileChoiceStyle: ButtonStyle {
         var body: some View {
             configuration.label
                 .foregroundStyle(.primary)
-                .background(selected || hovered || configuration.isPressed ? Color.accentColor.opacity(0.12) : Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
-                .overlay(RoundedRectangle(cornerRadius: 12).stroke(selected || hovered ? Color.accentColor.opacity(0.5) : Color.primary.opacity(0.08)))
+                .background(selected ? Color.accentColor.opacity(configuration.isPressed ? 0.16 : 0.08) : Color.primary.opacity(hovered || configuration.isPressed ? 0.06 : 0.025), in: RoundedRectangle(cornerRadius: 11))
+                .overlay(RoundedRectangle(cornerRadius: 11).strokeBorder(selected ? Color.accentColor.opacity(0.45) : Color.primary.opacity(hovered ? 0.12 : 0.06)))
                 .onHover { hovered = $0 }
         }
     }
