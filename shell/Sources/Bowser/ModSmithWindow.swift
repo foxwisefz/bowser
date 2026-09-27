@@ -82,6 +82,10 @@ final class ModSmithModel: ObservableObject, ModSmithPresentation {
         guard connected() else { connectionError = "Connecting to Bowser. Your draft is saved here; try again shortly."; return }
         var message: [String: Any] = ["op": "event", "event": "modsmith", "action": action]
         if let id = id ?? snapshot.selected { message["project"] = id }
+        if action == "cancel", let run = snapshot.running_run {
+            message["run"] = run
+            message["project"] = snapshot.running_project
+        }
         if let path { message["path"] = path }
         if action == "delete", let id = id ?? snapshot.selected { deletingProjects.insert(id) }
         send(message)

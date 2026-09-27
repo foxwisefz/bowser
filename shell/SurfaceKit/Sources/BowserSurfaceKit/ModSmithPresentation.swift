@@ -93,10 +93,13 @@ public struct ModSmithSnapshot: Decodable {
     public var projects: [ModSmithProject] = []
     public var selected: String?
     public var busy = false
+    public var running_run: String?
+    public var running_project: String?
     public var accepted: String?
     public var error: String?
     public var progress: [String] = []
     public var stage = "Inspecting page"
+    public var canStop: Bool { busy && (running_run != nil || projects.contains(where: { $0.status == "working" })) }
 }
 
 @MainActor public protocol ModSmithPresentation: AnyObject {

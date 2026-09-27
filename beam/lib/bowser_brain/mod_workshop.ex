@@ -683,7 +683,10 @@ defmodule BowserBrain.ModWorkshop do
       action in ["undo", "toggle"] and valid and state.run == nil ->
         revision_action(state, project, action)
 
-      action == "cancel" and valid and state.run != nil and state.run.project == id ->
+      action == "cancel" and state.run != nil and
+          (get_in(state.run.app || %{}, ["id"]) || "main") == client and
+          ((is_binary(event["run"]) and event["run"] == state.run.token) or
+            (event["run"] == nil and valid and state.run.project == id)) ->
         ModSmith.stop_runner(state.run.pid)
         if pending = Map.get(state, :pending_audit) do
           Process.cancel_timer(pending.timer)
@@ -1487,6 +1490,8 @@ defmodule BowserBrain.ModWorkshop do
       app: if(client == "main", do: nil, else: client),
       selected: selected(state, client),
       busy: state.run != nil,
+      running_run: if(state.run && (get_in(state.run.app || %{}, ["id"]) || "main") == client, do: state.run.token),
+      running_project: if(state.run && (get_in(state.run.app || %{}, ["id"]) || "main") == client, do: state.run.project),
       accepted: state.accepted,
       error: if(Map.get(state, :error_client, "main") == client, do: state.error),
       progress:

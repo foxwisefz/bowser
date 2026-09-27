@@ -11,6 +11,23 @@ final class ModSmithTests: XCTestCase {
         return data
     }
 
+    @MainActor func testStopTargetsActiveRunWhenItsConversationIsFilteredOut() {
+        let model = ModSmithModel()
+        model.connected = { true }
+        var sent: [String: Any] = [:]
+        model.send = { sent = $0 }
+        var data = snapshot(selected: "another-chat")
+        data["busy"] = true
+        data["running_run"] = "run-token"
+        data["running_project"] = "running-chat"
+        model.receive(data)
+        XCTAssertTrue(model.snapshot.projects.isEmpty)
+        XCTAssertTrue(model.snapshot.canStop)
+        model.action("cancel")
+        XCTAssertEqual(sent["run"] as? String, "run-token")
+        XCTAssertEqual(sent["project"] as? String, "running-chat")
+    }
+
     @MainActor func testDraftsSurviveSwitchingConversations() {
         let model = ModSmithModel()
         model.targetURL = "https://example.com"
@@ -244,7 +261,7 @@ final class ModSmithTests: XCTestCase {
                  "notes": "The sticky navigation still needs work.", "checks": ["Confirmed the paragraph font is 20px.", "Checked that the article stays scrollable."]]
             ]
         ]
-        for (name, width, filled) in [("empty", 1060, false), ("result", 1060, true), ("compact", 880, true), ("success", 1060, true), ("input", 1060, true), ("prerequisite", 880, true), ("disabled", 1060, true), ("running-other", 880, true)] {
+        for (name, width, filled) in [("empty", 1060, false), ("result", 1060, true), ("compact", 880, true), ("success", 1060, true), ("input", 1060, true), ("prerequisite", 880, true), ("disabled", 1060, true), ("running-other", 880, true), ("running-filtered", 880, true)] {
             if filled {
                 model.receive(["projects": [project], "selected": "reading", "busy": false, "progress": [], "stage": "Ready"])
             }
@@ -257,6 +274,9 @@ final class ModSmithTests: XCTestCase {
                 var running = project
                 running["status"] = "working"
                 model.receive(["projects": [running], "busy": true, "progress": [], "stage": "Checking your mod"])
+            }
+            if name == "running-filtered" {
+                model.receive(["projects": [], "busy": true, "running_run": "fixture-run", "running_project": "hidden-chat", "progress": [], "stage": "Verifying the outcome"])
             }
             if ["input", "prerequisite", "disabled"].contains(name) {
                 var blocked = project

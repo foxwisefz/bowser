@@ -301,6 +301,24 @@ defmodule BowserBrain.ModWorkshopTest do
     assert_receive {:runner, _, _, _, _, _}, 2000
   end
 
+  test "active run cancellation survives profile filtering and fences stale tokens" do
+    original_session = :sys.get_state(BowserBrain.Session)
+    on_exit(fn -> :sys.replace_state(BowserBrain.Session, fn _ -> original_session end) end)
+    :sys.replace_state(BowserBrain.Session, &Map.put(&1, :profiles, %{7 => "default", 8 => "work"}))
+    event("submit", %{"text" => "Build a control", "scope" => "site"})
+    assert_receive {:runner, pid, token, _, _, _}, 1000
+    :sys.replace_state(ModWorkshop, &Map.put(&1, :active, 8))
+    snapshot = ModWorkshop.snapshot(:sys.get_state(ModWorkshop), "main")
+    assert snapshot.projects == []
+    assert snapshot.busy
+    assert snapshot.running_run == token
+    assert event("cancel", %{"run" => "old-run"}).run != nil
+    assert event("cancel", %{"run" => token, "app" => %{"id" => "other-client"}}).run != nil
+    assert event("cancel", %{"run" => token}).run == nil
+    refute Process.alive?(pid)
+    assert hd(:sys.get_state(ModWorkshop).data["projects"])["status"] == "interrupted"
+  end
+
   test "unfinished runs continue in the same project with failure context and ownership guards" do
     event("submit", %{"text" => "Stamp slop on new posts"})
     assert_receive {:runner, pid, _, _, _, _}, 2000

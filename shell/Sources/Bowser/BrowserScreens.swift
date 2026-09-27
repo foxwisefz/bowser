@@ -767,8 +767,6 @@ struct ModSmithScreen: View {
                     if running.id != model.snapshot.selected {
                         Button("View") { model.action("select", project: running.id) }
                     }
-                    Button("Stop build", role: .destructive) { model.action("cancel", project: running.id) }
-                        .accessibilityIdentifier("modsmith-stop-build")
                 }
             }.controlSize(.small).padding(.horizontal, 18).padding(.vertical, 10)
                 .background(Color.accentColor.opacity(0.07))
@@ -794,9 +792,19 @@ struct ModSmithScreen: View {
                             .accessibilityIdentifier("modsmith-continue")
                     }
                 }
-                Button(model.project == nil ? "Create mod" : "Make changes", systemImage: "arrow.up") { model.submit() }
-                    .buttonStyle(.borderedProminent).keyboardShortcut(.return, modifiers: .command)
-                    .disabled(model.snapshot.busy || model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                if model.snapshot.busy {
+                    Button("Stop build", systemImage: "stop.fill", role: .destructive) {
+                        model.action("cancel", project: model.snapshot.running_project ?? model.snapshot.projects.first(where: { $0.status == "working" })?.id)
+                    }
+                    .buttonStyle(.borderedProminent).tint(.red).fixedSize()
+                    .disabled(!model.snapshot.canStop)
+                    .help(model.snapshot.canStop ? "Stop generation, verification and repairs" : "A build is running in another app window. Stop it there.")
+                    .accessibilityIdentifier("modsmith-stop-build")
+                } else {
+                    Button(model.project == nil ? "Create mod" : "Make changes", systemImage: "arrow.up") { model.submit() }
+                        .buttonStyle(.borderedProminent).keyboardShortcut(.return, modifiers: .command)
+                        .disabled(model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
             }
         }.padding(18).background(.bar)
     }
