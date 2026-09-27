@@ -420,9 +420,15 @@ struct ModSmithScreen: View {
     }
 
     var body: some View {
-        HStack(spacing: 0) {
-            sidebar
-            Divider()
+        VStack(spacing: 0) {
+            HStack {
+                Label("ModSmith", systemImage: "sparkles").font(.system(size: 13, weight: .semibold))
+                Spacer()
+                Button("New mod", systemImage: "plus") { model.action("new") }
+                Button("Your mods", systemImage: "square.grid.2x2") {
+                    model.action("open"); showExisting = true
+                }
+            }.buttonStyle(.plain).font(.system(size: 12)).padding(.horizontal, 24).padding(.vertical, 16)
             VStack(spacing: 0) {
                 header
                 Divider()
@@ -432,20 +438,45 @@ struct ModSmithScreen: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background {
+            Color(nsColor: .windowBackgroundColor)
+            LinearGradient(colors: [Color.purple.opacity(0.045), .clear], startPoint: .topLeading, endPoint: .bottomTrailing)
+        }
+        .onChange(of: model.draft) { _, text in
+            if model.project == nil && !model.isSiteApp { model.scopeChoice.update(text) }
+        }
         .onAppear {
             if context.values["hasAppeared"] as? Bool != true { composerFocused = true; context.values["hasAppeared"] = true }
         }
         .sheet(isPresented: context.binding("showExisting", default: false)) {
             VStack(alignment: .leading, spacing: 16) {
-                Text("Continue working on a mod").font(.title2.weight(.semibold))
-                Text("Choose an installed mod. Its existing conversation will reopen when available.").foregroundStyle(.secondary)
-                if (model.snapshot.available_mods ?? []).isEmpty {
+                Text("Your mods").font(.title2.weight(.semibold))
+                Text("Edit a mod to refine it or turn it on and off.").foregroundStyle(.secondary)
+                if (model.snapshot.available_mods ?? []).isEmpty && model.snapshot.projects.isEmpty {
                     Text("No installed mods are available in this window yet.").padding(.vertical, 24)
                 } else {
                     ScrollView {
                         VStack(spacing: 8) {
-                            ForEach(model.snapshot.available_mods ?? []) { mod in
+                            ForEach(model.snapshot.projects) { project in
+                                Button {
+                                    model.action("select", project: project.id)
+                                    showExisting = false
+                                    composerFocused = true
+                                } label: {
+                                    HStack {
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text(project.name).font(.headline)
+                                            Text(project.scopeLabel).font(.caption).foregroundStyle(.secondary)
+                                        }
+                                        Spacer()
+                                        Text(project.statusLabel).font(.caption).foregroundStyle(.secondary)
+                                        Image(systemName: "square.and.pencil")
+                                    }.padding(12).contentShape(Rectangle())
+                                }.buttonStyle(.plain)
+                            }
+                            ForEach((model.snapshot.available_mods ?? []).filter { mod in
+                                !model.snapshot.projects.contains { $0.files.contains(mod.path) }
+                            }) { mod in
                                 Button {
                                     model.action("edit_existing", path: mod.path)
                                     showExisting = false
@@ -470,41 +501,11 @@ struct ModSmithScreen: View {
         }
     }
 
-    private var sidebar: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Label("Your mods", systemImage: "sparkles").font(.headline).padding(.top, 8)
-            Button { model.action("new") } label: {
-                Label("New mod", systemImage: "plus").frame(maxWidth: .infinity)
-            }.controlSize(.large)
-            Button("Edit existing mod…", systemImage: "square.and.pencil") {
-                model.action("open")
-                showExisting = true
-            }.controlSize(.small)
-            ScrollView {
-                VStack(spacing: 5) {
-                    ForEach(model.snapshot.projects) { project in
-                        Button { model.action("select", project: project.id) } label: {
-                            VStack(alignment: .leading, spacing: 5) {
-                                Text(project.name).font(.system(size: 12, weight: .medium)).lineLimit(2)
-                                Text(project.statusLabel).font(.caption).foregroundStyle(.secondary)
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading).padding(10)
-                            .background(model.snapshot.selected == project.id ? Color.accentColor.opacity(0.12) : .clear,
-                                        in: RoundedRectangle(cornerRadius: 9))
-                            .contentShape(Rectangle())
-                        }.buttonStyle(.plain)
-                    }
-                }
-            }
-            Text("Changes happen live.\nMake a mod, then make it yours.")
-                .font(.caption).foregroundStyle(.secondary).lineSpacing(3)
-        }.padding(16).frame(width: 190).background(.quaternary.opacity(0.25))
-    }
-
     private var header: some View {
         VStack(alignment: .leading, spacing: 9) {
-            Text(model.project?.name ?? "What would you change?")
-                .font(.system(size: 20, weight: .semibold)).lineLimit(2)
+            if let project = model.project {
+                Text(project.name).font(.system(size: 24, weight: .semibold, design: .rounded)).lineLimit(2)
+            }
             if let project = model.project {
                 HStack {
                     Label(project.scopeLabel, systemImage: project.scope == "browser" ? "macwindow" : "globe")
@@ -518,9 +519,12 @@ struct ModSmithScreen: View {
                             .help("Restore mod files before: \(project.undoLabel ?? "last change"). Website actions and stored mod data are not reversed.")
                     }
                     if !project.files.isEmpty {
-                        Button(project.enabled ? "Disable" : "Enable", systemImage: project.enabled ? "pause.circle" : "play.circle") {
-                            model.action("toggle")
-                        }
+                        Spacer()
+                        Toggle(project.enabled ? "Enabled" : "Disabled", isOn: Binding(
+                            get: { project.enabled },
+                            set: { if $0 != project.enabled { model.action("toggle") } }
+                        )).toggleStyle(.switch).fixedSize()
+                            .accessibilityIdentifier("modsmith-enabled")
                     }
                 }.controlSize(.small).disabled(model.snapshot.busy)
                 if project.canUndo {
@@ -530,12 +534,13 @@ struct ModSmithScreen: View {
             } else if model.isSiteApp {
                 Label("Only this app", systemImage: "app").font(.caption).foregroundStyle(.secondary)
             } else {
-                Picker("Applies to", selection: Binding(get: { model.scope }, set: { model.scope = $0 })) {
-                    Text("This site").tag("site")
-                    Text("Across Bowser").tag("browser")
-                }.pickerStyle(.segmented).frame(maxWidth: 270)
-                Text(model.scope == "browser" ? "Browser-wide customization" : "\(URL(string: model.targetURL)?.host ?? "Open a website") · includes subdomains")
-                    .font(.caption).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 14) {
+                    Text("What would you change?")
+                        .font(.system(size: 28, weight: .semibold, design: .rounded))
+                    Text("Make a little change. Make it yours.").font(.callout).foregroundStyle(.secondary)
+                    ModScopeCards(choice: model.scopeChoice)
+                }
+
             }
         }.padding(20).frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -549,30 +554,47 @@ struct ModSmithScreen: View {
                             Text("What would you like to change about this mod?").font(.headline)
                             Text("Describe the next change below. Your existing files will be refined in place.").foregroundStyle(.secondary)
                         }
+                        if project.status == "active" && !project.files.isEmpty {
+                            VStack(alignment: .leading, spacing: 14) {
+                                HStack(spacing: 12) {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .font(.system(size: 32)).foregroundStyle(.green)
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text("Your mod is ready").font(.system(size: 20, weight: .semibold, design: .rounded))
+                                        Text(project.enabled ? "Enabled · \(project.scopeLabel)" : "Disabled · Turn it on above to try it")
+                                            .font(.caption).foregroundStyle(.secondary)
+                                    }
+                                }
+                                HStack(spacing: 12) {
+                                    Button("Try it", systemImage: "arrow.up.right") { model.action("try") }
+                                        .buttonStyle(.borderedProminent)
+                                    Button("Make changes", systemImage: "square.and.pencil") { composerFocused = true }
+                                    Spacer()
+                                    Button("Your mods") { model.action("open"); showExisting = true }
+                                }.controlSize(.regular)
+                            }.padding(20).frame(maxWidth: .infinity, alignment: .leading)
+                                .background(Color.green.opacity(0.07), in: RoundedRectangle(cornerRadius: 18))
+                                .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(Color.green.opacity(0.2)))
+                                .id("completion")
+                        }
                         ForEach(project.turns) { turn in turnView(turn) }
                         if project.status == "interrupted" || project.status == "restored" {
                             Text(project.summary).font(.callout).foregroundStyle(.secondary)
                         }
                     } else {
-                        VStack(alignment: .leading, spacing: 18) {
-                            Image(systemName: "sparkles").font(.system(size: 30)).foregroundStyle(Color.accentColor)
-                            Text("A small change.\nA browser that feels like you.")
-                                .font(.system(size: 25, weight: .medium, design: .rounded))
-                            Text("Describe what you want. Try it on the page, then keep refining the same mod.")
-                                .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("START WITH AN IDEA").font(.system(size: 10, weight: .semibold)).tracking(1.5).foregroundStyle(.secondary)
                             ForEach(["Hide distractions and leave only the main content", "Make this page easier to read"], id: \.self) { example in
                                 Button { model.draft = example; composerFocused = true } label: {
-                                    HStack { Text(example); Spacer(); Image(systemName: "arrow.up.left") }
-                                        .padding(10).background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+                                    HStack(spacing: 12) {
+                                        Image(systemName: "sparkles").foregroundStyle(.purple)
+                                        Text(example).font(.system(size: 13))
+                                        Spacer()
+                                        Image(systemName: "arrow.up.left").foregroundStyle(.secondary)
+                                    }.padding(14).background(Color.primary.opacity(0.025), in: RoundedRectangle(cornerRadius: 12))
                                 }.buttonStyle(.plain)
                             }
-                        }.padding(.vertical, 25)
-                    }
-                    if model.project?.status == "working" {
-                        HStack(spacing: 10) {
-                            ProgressView().controlSize(.small)
-                            Text(model.snapshot.stage).font(.callout).foregroundStyle(.secondary)
-                        }
+                        }.padding(.vertical, 8)
                     }
                     if !model.snapshot.progress.isEmpty && model.project?.status == "working" {
                         DisclosureGroup("Activity details", isExpanded: context.binding("showDetails", default: false)) {
@@ -584,8 +606,15 @@ struct ModSmithScreen: View {
                     Color.clear.frame(height: 1).id("bottom")
                 }.padding(22).frame(maxWidth: .infinity, alignment: .leading)
             }
-            .onChange(of: model.project?.turns.count) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
-            .onChange(of: model.snapshot.selected) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
+            .onChange(of: model.project?.turns.count) { _, _ in
+                proxy.scrollTo(model.project?.status == "active" ? "completion" : "bottom", anchor: model.project?.status == "active" ? .top : .bottom)
+            }
+            .onChange(of: model.project?.status) { _, status in
+                if status == "active" { proxy.scrollTo("completion", anchor: .top) }
+            }
+            .onChange(of: model.snapshot.selected) { _, _ in
+                proxy.scrollTo(model.project?.status == "active" ? "completion" : "bottom", anchor: model.project?.status == "active" ? .top : .bottom)
+            }
         }
     }
 
@@ -645,8 +674,8 @@ struct ModSmithScreen: View {
             if let error = model.connectionError ?? model.snapshot.error {
                 Text(error).font(.caption).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
             }
-            TextField(model.project == nil ? "Describe your mod…" : "What should we change next?", text: Binding(get: { model.draft }, set: { model.draft = $0 }), axis: .vertical)
-                .textFieldStyle(.plain).lineLimit(2...6).focused($composerFocused)
+            TextField(model.project == nil ? "Describe what you want to change…" : "What should we change next?", text: Binding(get: { model.draft }, set: { model.draft = $0 }), axis: .vertical)
+                .textFieldStyle(.plain).lineLimit(3...6).focused($composerFocused)
                 .padding(13).background(.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 12))
                 .overlay(RoundedRectangle(cornerRadius: 10).stroke(.quaternary))
             HStack {
@@ -659,7 +688,7 @@ struct ModSmithScreen: View {
                             .accessibilityIdentifier("modsmith-continue")
                     }
                 }
-                Button(model.project == nil ? "Create mod" : "Refine mod", systemImage: "arrow.up") { model.submit() }
+                Button(model.project == nil ? "Create mod" : "Make changes", systemImage: "arrow.up") { model.submit() }
                     .buttonStyle(.borderedProminent).keyboardShortcut(.return, modifiers: .command)
                     .disabled(model.snapshot.busy || model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }

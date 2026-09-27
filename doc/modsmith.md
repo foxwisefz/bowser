@@ -1,5 +1,20 @@
 # ModSmith workspace
 
+Typing `:do <request>` in the omnibar shows **This website** (the captured
+hostname and its subdomains) and **Across Bowser**. Enter starts the request
+in ModSmith immediately with the visible scope; bare `:do` opens a new draft.
+Jev recommends a scope after a short typing pause using only the request and
+hostname. Manual choices win, late results are ignored, and unavailable or
+uncertain recommendations retain the website default. No website requires a
+valid browser-wide selection. Recommendations never block submission.
+
+The workspace uses the same scope cards for new drafts. A successful build
+shows **Your mod is ready**, **Try it**, and **Make changes**; unfinished builds
+keep their explicit status and Continue action. The project header contains the
+Enabled switch. **Your mods** reopens conversations and installed mods for editing
+and enable/disable controls. Undo remains available for file revisions.
+
+
 ModSmith is a core native window: AppKit owns the window and SwiftUI renders
 the mod list, conversation and composer. It opens from View → ModSmith,
 `:do`, or a mod's existing pencil action. Saved apps forward the same protocol
