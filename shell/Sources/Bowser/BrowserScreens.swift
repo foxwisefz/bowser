@@ -550,11 +550,25 @@ struct ModSmithScreen: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     if let project = model.project {
+                        if project.canEnableAndTest {
+                            VStack(alignment: .leading, spacing: 12) {
+                                Label("Enable your mod to test it", systemImage: "power")
+                                    .font(.system(size: 20, weight: .semibold, design: .rounded))
+                                Text("Your mod is saved but switched off. Enable it so ModSmith can check how it works and fix any remaining issues.")
+                                    .font(.callout).foregroundStyle(.secondary)
+                                Button("Enable & test", systemImage: "play.fill") {
+                                    model.action("enable_and_test", project: project.id)
+                                }.buttonStyle(.borderedProminent).disabled(model.snapshot.busy)
+                                    .accessibilityIdentifier("modsmith-enable-and-test")
+                            }.padding(20).frame(maxWidth: .infinity, alignment: .leading)
+                                .background(Color.accentColor.opacity(0.07), in: RoundedRectangle(cornerRadius: 18))
+                                .id("next-action")
+                        }
                         if project.turns.isEmpty {
                             Text("What would you like to change about this mod?").font(.headline)
                             Text("Describe the next change below. Your existing files will be refined in place.").foregroundStyle(.secondary)
                         }
-                        if project.status == "active" && !project.files.isEmpty {
+                        if project.status == "active" && project.enabled && !project.files.isEmpty {
                             VStack(alignment: .leading, spacing: 14) {
                                 HStack(spacing: 12) {
                                     Image(systemName: "checkmark.circle.fill")
@@ -607,13 +621,14 @@ struct ModSmithScreen: View {
                 }.padding(22).frame(maxWidth: .infinity, alignment: .leading)
             }
             .onChange(of: model.project?.turns.count) { _, _ in
-                proxy.scrollTo(model.project?.status == "active" ? "completion" : "bottom", anchor: model.project?.status == "active" ? .top : .bottom)
+                proxy.scrollTo(model.project?.canEnableAndTest == true ? "next-action" : model.project?.status == "active" ? "completion" : "bottom", anchor: model.project?.canEnableAndTest == true || model.project?.status == "active" ? .top : .bottom)
             }
             .onChange(of: model.project?.status) { _, status in
-                if status == "active" { proxy.scrollTo("completion", anchor: .top) }
+                if model.project?.canEnableAndTest == true { proxy.scrollTo("next-action", anchor: .top) }
+                else if status == "active" { proxy.scrollTo("completion", anchor: .top) }
             }
             .onChange(of: model.snapshot.selected) { _, _ in
-                proxy.scrollTo(model.project?.status == "active" ? "completion" : "bottom", anchor: model.project?.status == "active" ? .top : .bottom)
+                proxy.scrollTo(model.project?.canEnableAndTest == true ? "next-action" : model.project?.status == "active" ? "completion" : "bottom", anchor: model.project?.canEnableAndTest == true || model.project?.status == "active" ? .top : .bottom)
             }
         }
     }
@@ -622,7 +637,7 @@ struct ModSmithScreen: View {
         VStack(alignment: .leading, spacing: 9) {
             Text(turn.role == "user" ? "You" : turn.role == "system" ? "Revision history" : "ModSmith")
                 .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-            Text(turn.text).font(.system(size: 13)).textSelection(.enabled)
+            Text(turn.displayText).font(.system(size: 13)).textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
             if let notes = turn.notes, !notes.isEmpty {
                 DisclosureGroup("Details and limitations") {
@@ -635,10 +650,11 @@ struct ModSmithScreen: View {
                 if checks.isEmpty {
                     Text("No verification reported.").font(.caption).foregroundStyle(.secondary)
                 } else {
-                    Text("Checks reported by the agent").font(.caption.weight(.medium)).foregroundStyle(.secondary)
-                    ForEach(Array(checks.enumerated()), id: \.offset) { _, check in
-                        Label(check, systemImage: "checkmark").font(.caption).foregroundStyle(.secondary)
-                    }
+                    DisclosureGroup("Verification details") {
+                        ForEach(Array(checks.enumerated()), id: \.offset) { _, check in
+                            Text(check).font(.caption).foregroundStyle(.secondary)
+                        }
+                    }.font(.caption).foregroundStyle(.secondary)
                 }
             }
         }
@@ -683,8 +699,8 @@ struct ModSmithScreen: View {
                     .font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 if let project = model.project {
-                    if !model.snapshot.busy && project.canContinue {
-                        Button("Continue") { model.action("continue", project: project.id) }
+                    if !model.snapshot.busy && project.canContinue && !project.canEnableAndTest {
+                        Button("Resume testing & fixes") { model.action("continue", project: project.id) }
                             .accessibilityIdentifier("modsmith-continue")
                     }
                 }

@@ -589,6 +589,24 @@ defmodule BowserBrain.ModWorkshop do
         end
         state |> Map.put(:pending_audit, nil) |> finish(nil, :cancelled)
 
+      action == "enable_and_test" and valid and state.run == nil ->
+        files = live_paths(project)
+        if files != [] and Enum.all?(files, &String.ends_with?(&1, ".off")) do
+          enabled = revision_action(state, project, "toggle")
+          if enabled.error do
+            enabled
+          else
+            request = "The owner chose Enable & test. The mod has been enabled. " <>
+              "Inspect runtime diagnostics and verify the requested behavior on the original page. " <>
+              "Repair failures before reporting success. Enabling or compiling alone is not verification. " <>
+              "If verification requires downloading a file, ask the owner to choose a video or file first; " <>
+              "do not start a download without that choice. Report the specific next action if blocked."
+            start(enabled, Map.put(event, "text", request), project(enabled, id))
+          end
+        else
+          state
+        end
+
       action == "continue" and valid and state.run == nil and
           project["status"] in ["partial", "needs_help", "failed", "interrupted"] ->
         request = "Continue this unfinished mod. Preserve the original goal and existing work. " <>
@@ -1191,8 +1209,13 @@ defmodule BowserBrain.ModWorkshop do
         error -> {:error, Exception.message(error)}
       end
 
+    restored_status = if p["status"] == "disabled", do: Map.get(p, "status_before_disable", "needs_help"), else: p["status"]
     status =
-      if result == :ok, do: if(enabled, do: "disabled", else: "active"), else: "interrupted"
+      if result == :ok,
+        do: if(enabled, do: "disabled", else: restored_status),
+        else: "interrupted"
+
+    p = if enabled, do: Map.put(p, "status_before_disable", p["status"]), else: p
 
     p =
       p

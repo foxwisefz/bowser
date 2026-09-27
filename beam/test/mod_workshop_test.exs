@@ -131,6 +131,41 @@ defmodule BowserBrain.ModWorkshopTest do
     assert event("continue", %{"project" => id}).run == nil
   end
 
+  test "enable and test enables once, resumes verification and keeps ownership and Undo" do
+    ModRevision.write("sites/example.com/reading.css.off", "original")
+    event("submit", %{"text" => "Reading mode"})
+    assert_receive {:runner, pid, _, _, _, _}, 1000
+    [project] = complete(pid, [file("draft")], %{"status" => "needs_help"}).data["projects"]
+    id = project["id"]
+    assert event("enable_and_test", %{"project" => "unknown"}).run == nil
+    assert event("enable_and_test", %{"project" => id, "app" => %{"id" => "foreign"}}).run == nil
+    assert ModRevision.read("sites/example.com/reading.css") == nil
+    state = event("enable_and_test", %{"project" => id})
+    assert state.run.project == id
+    assert_receive {:runner, pid, token, prompt, _, _}, 1000
+    assert prompt =~ "verify the requested behavior"
+    assert prompt =~ "do not start a download without that choice"
+    assert ModRevision.read("sites/example.com/reading.css.off") == nil
+    assert ModRevision.read("sites/example.com/reading.css") != nil
+    assert event("enable_and_test", %{"project" => id}).run.token == token
+    [project] = complete(pid, [], %{"status" => "needs_help"}).data["projects"]
+    assert project["status"] == "needs_help"
+    assert event("enable_and_test", %{"project" => id}).run == nil
+    event("undo", %{"project" => id})
+    event("undo", %{"project" => id})
+    assert ModRevision.read("sites/example.com/reading.css") == nil
+    assert ModRevision.read("sites/example.com/reading.css.off") != nil
+  end
+
+  test "enabling an unverified mod does not report success" do
+    ModRevision.write("sites/example.com/reading.css.off", "original")
+    event("submit", %{"text" => "Reading mode"})
+    assert_receive {:runner, pid, _, _, _, _}, 1000
+    [project] = complete(pid, [file("draft")], %{"status" => "needs_help"}).data["projects"]
+    state = event("toggle", %{"project" => project["id"]})
+    assert hd(state.data["projects"])["status"] == "needs_help"
+  end
+
   test "saving files preserves nonworking outcomes and allows continuation" do
     for status <- ["needs_help", "failed"] do
       event("submit", %{"text" => "Filter new posts"})

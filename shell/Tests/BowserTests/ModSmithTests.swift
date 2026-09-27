@@ -98,6 +98,35 @@ final class ModSmithTests: XCTestCase {
         XCTAssertEqual(model.snapshot.selected, "other")
     }
 
+    @MainActor func testDisabledResultOffersEnableAndTestWithoutLosingDraft() {
+        let model = ModSmithModel()
+        model.connected = { true }
+        var sent: [String: Any] = [:]
+        model.send = { sent = $0 }
+        var project: [String: Any] = [
+            "id": "downloader", "name": "Downloader", "scope": "site", "url": "https://youtube.com",
+            "status": "needs_help", "summary": "", "files": ["mods/downloader.ex.off"],
+            "turns": [["id": "reply", "role": "assistant", "text": "NEEDS THE RESIDENT AGENT: Mod is disabled."]],
+            "enabled": false, "can_undo": true
+        ]
+        func receive() { model.receive(["projects": [project], "selected": "downloader", "busy": false, "progress": [], "stage": "Ready"]) }
+        receive()
+        XCTAssertEqual(model.project?.statusLabel, "Disabled")
+        XCTAssertEqual(model.project?.canEnableAndTest, true)
+        XCTAssertEqual(model.project?.turns.first?.displayText, "Mod is disabled.")
+        model.draft = "Keep my request"
+        model.action("enable_and_test")
+        XCTAssertEqual(sent["action"] as? String, "enable_and_test")
+        XCTAssertEqual(sent["project"] as? String, "downloader")
+        XCTAssertEqual(model.draft, "Keep my request")
+        project["status"] = "working"; receive()
+        XCTAssertEqual(model.project?.canEnableAndTest, false)
+        project["status"] = "needs_help"; project["enabled"] = true; receive()
+        XCTAssertEqual(model.project?.canEnableAndTest, false)
+        project["enabled"] = false; project["files"] = [String](); receive()
+        XCTAssertEqual(model.project?.canEnableAndTest, false)
+    }
+
     @MainActor func testContinueEligibilityAndActionPreserveDraft() {
         let model = ModSmithModel()
         model.targetURL = "https://example.com"

@@ -7,6 +7,10 @@ public struct ModSmithTurn: Decodable, Identifiable {
     public var status: String?
     public var notes: String?
     public var checks: [String]?
+    public var displayText: String {
+        text.replacingOccurrences(of: "NEEDS THE RESIDENT AGENT:", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 }
 
 public struct ModSmithProject: Decodable, Identifiable {
@@ -35,12 +39,16 @@ public struct ModSmithProject: Decodable, Identifiable {
     public var canContinue: Bool {
         ["partial", "needs_help", "failed", "interrupted"].contains(status)
     }
+    public var canEnableAndTest: Bool {
+        status != "working" && !enabled && !files.isEmpty
+    }
     public var statusLabel: String {
+        if canEnableAndTest && ["needs_help", "disabled"].contains(status) { return "Disabled" }
         switch status {
         case "working": return "Working"
         case "partial": return "Unfinished"
         case "failed": return "Needs attention"
-        case "needs_help": return "Not working yet"
+        case "needs_help": return "Needs your input"
         case "interrupted": return "Interrupted"
         case "restored": return files.isEmpty ? "Removed" : "Restored"
         case "ready": return "Ready to edit"

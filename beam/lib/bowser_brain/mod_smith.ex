@@ -134,8 +134,8 @@ defmodule BowserBrain.ModSmith do
     genuinely new brain-side service: browsing in the background while the
     owner is elsewhere, scheduled work when no tab is open, audio/media
     pipelines, external integrations beyond one fetch. Then reply IMMEDIATELY
-    with a zero-file envelope whose summary starts "NEEDS THE RESIDENT AGENT:"
-    plus one line on why. A fast honest handoff beats a ten-minute timeout.
+    with a zero-file envelope explaining the limitation in plain language and
+    the specific next step the owner can take. Do not mention internal agents.
 
     MODIFY RULE: the EXISTING MODS catalog below is what the owner already has.
     If the request refers to behavior that exists — by name, by what it does,
@@ -777,8 +777,8 @@ defmodule BowserBrain.ModSmith do
     TIME BUDGET EXCEEDED — stop working now. Reply with ONLY the JSON envelope
     (same contract) for whatever is complete and working. Reference unchanged
     installed drafts by path; include contents only for new or changed files, and describe what is unfinished in "notes". If nothing is usable
-    yet, reply with a zero-file envelope whose summary starts
-    "NEEDS THE RESIDENT AGENT:" and say what was blocking.
+    yet, reply with a zero-file envelope explaining the blocker in plain language
+    and the specific next step the owner can take. Do not mention internal agents.
     """
   end
 

@@ -303,7 +303,6 @@ defmodule BowserBrain.ModSmithTest do
 
     test "finish_prompt demands the envelope and allows an honest handoff" do
       assert ModSmith.finish_prompt() =~ "ONLY the JSON envelope"
-      assert ModSmith.finish_prompt() =~ "NEEDS THE RESIDENT AGENT"
     end
   end
 end
