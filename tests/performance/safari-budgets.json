@@ -1,0 +1,7 @@
+{
+  "navigation_two_frames_ms": {"max_ratio": 1.25, "noise_floor": 20},
+  "dom_content_loaded_ms": {"max_ratio": 1.25, "noise_floor": 10},
+  "layout_1000_rows_ms": {"max_ratio": 1.25, "noise_floor": 3},
+  "scroll_frame_interval_ms": {"max_ratio": 1.25, "noise_floor": 2},
+  "scroll_long_frames_percent": {"max_ratio": 1, "noise_floor": 2}
+}
