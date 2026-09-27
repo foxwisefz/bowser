@@ -128,6 +128,22 @@ defmodule BowserBrain.ModWorkshopTest do
     assert ModRevision.read(path) == nil
   end
 
+  test "a new creation cannot claim files already tied to another mod" do
+    event("submit", %{"text" => "Reader"})
+    assert_receive {:runner, pid, _, _, _, _}, 2000
+    [owner] = complete(pid, [file("original")]).data["projects"]
+    event("submit", %{"text" => "Another reader"})
+    assert_receive {:runner, _pid, token, _, _, _}, 2000
+    result = ModWorkshop.tool(token, "put_payload", %{
+      "host" => "example.com", "name" => "reading.css", "content" => "overwrite"
+    })
+    assert result.ok == false
+    assert result.error =~ "Open that mod"
+    assert ModRevision.read("sites/example.com/reading.css") =~ "original"
+    assert owner["mod_id"] == owner["id"]
+    assert "sites/example.com/reading.css" in owner["owned_files"]
+  end
+
   test "settings deletion confirms first and removes duplicate histories", %{root: root} do
     File.mkdir_p!(Path.join(root, "mods"))
     File.write!(Path.join(root, "mods/reader.ex.off"), "# Reader")

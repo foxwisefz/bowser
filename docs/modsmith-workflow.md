@@ -46,3 +46,12 @@ a different mod project. Duplicate histories referring to the same set of mod
 files (including enabled/disabled aliases) are removed together. A failed history save restores removed files. Existing runtime
 watchers unload deleted mods. Website actions and persistent mod data are not
 reversed or erased.
+
+Each mod has a stable `mod_id` and an explicit `owned_files` list, independent
+of its conversation and undo records. Editing from Settings or Your mods returns
+to that mod’s conversation. Creation cannot overwrite files owned by another
+mod; open the existing mod to refine it. On workspace load, duplicate histories
+with the same file set and profile/app owner are combined, preserving messages,
+undo revisions and assets, and redirecting selections to the retained mod.
+Enabled and disabled filenames refer to the same file identity. Empty drafts
+and different profile/app owners remain separate.

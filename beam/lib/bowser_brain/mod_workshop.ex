@@ -167,7 +167,7 @@ defmodule BowserBrain.ModWorkshop do
   @impl true
   def init(_) do
     Registry.register(BowserBrain.Events, :browser_event, nil)
-    data = ModRevision.load() |> recover()
+    data = ModRevision.load() |> BowserBrain.ModIdentity.normalize() |> recover()
     {:ok, %{data: data, run: nil, active: 0, urls: %{}, progress: [], error: nil, accepted: nil}}
   end
 
@@ -538,6 +538,7 @@ defmodule BowserBrain.ModWorkshop do
   defp persist(state), do: %{state | data: ModRevision.save(state.data)}
 
   defp put_project(state, project) do
+    project = BowserBrain.ModIdentity.attach(project)
     data =
       Map.put(state.data, "projects", [
         project | Enum.reject(state.data["projects"], &(&1["id"] == project["id"]))
@@ -832,6 +833,7 @@ defmodule BowserBrain.ModWorkshop do
       The selected mod is #{p["name"]}. Scope is #{p["scope"]}; target URL #{p["url"]}, webview #{wv}.
       #{if p["scope"] == "site", do: "Only this host's payloads or Elixir mods explicitly declaring this host are allowed.", else: ""}
       #{if p["app"], do: "Only CSS/JS for this saved app. Use sites/#{host}/ paths; these are redirected to this app.", else: ""}
+      Mod identity: #{p["mod_id"] || p["id"]}. Other mods retain their own histories; do not overwrite their files from a new creation. Ask the owner to open the existing mod in Your mods to refine it.
       Existing owned files: #{Enum.join(paths(p), ", ")}. #{if p["existing_path"], do: "Modify #{p["existing_path"]} in place.", else: ""}
       You are refining the SAME mod when there is prior conversation. Read the current files before editing: the owner may have undone a revision since your last reply.
       Give the mod a short human-readable "name" in the JSON envelope. Set "status" to "active" only when the requested core behavior works and has been verified. Use "partial" for a working subset with specific unfinished requirements, and repair failed checks using the available tools. A verification failure alone is not a reason to stop. Use "needs_help" only for a concrete owner decision, permission, or unavailable external dependency; include "blocker": {"kind":"owner_decision"|"permission"|"external_dependency","detail":"observed evidence and what is needed"}. Never label an implementation bug as an external dependency. Installing files or compiling Elixir does not prove embedded JavaScript runs; an isolated service probe does not prove the installed mod works. Check the actual page behavior, including new content when relevant. Usage tips and unperformed optional checks do not by themselves mean partial. Keep "notes" brief and distinguish usage from limitations.
@@ -941,6 +943,9 @@ defmodule BowserBrain.ModWorkshop do
     Enum.map(files, fn file ->
       case prepare_file(p, file) do
         {:ok, {path, content}} = result ->
+          if other = BowserBrain.ModIdentity.conflict(state.data["projects"], p, path) do
+            {:error, "This file belongs to #{other["name"]}. Open that mod in Your mods to edit it, or choose a new filename."}
+          else
           if is_nil(p["app"]) and (String.starts_with?(path, "mods/") or String.starts_with?(path, "sites/")) do
             existing = ModRevision.absolute(ModRevision.actual_path(path))
             if File.exists?(existing) and BowserBrain.ModScope.file_profile(existing) != profile do
@@ -954,6 +959,7 @@ defmodule BowserBrain.ModWorkshop do
             end
           else
             result
+          end
           end
         error -> error
       end
@@ -1202,7 +1208,7 @@ defmodule BowserBrain.ModWorkshop do
 
   defp paths(p),
     do:
-      (Enum.flat_map(p["revisions"], &Map.keys(&1["files"])) ++ List.wrap(p["existing_path"]))
+      (Map.get(p, "owned_files", []) ++ Enum.flat_map(p["revisions"], &Map.keys(&1["files"])) ++ List.wrap(p["existing_path"]))
       |> Enum.uniq()
 
   defp live_paths(p) do
@@ -1229,6 +1235,7 @@ defmodule BowserBrain.ModWorkshop do
     end)
     deleting = Enum.uniq_by([project | duplicates], & &1["id"])
     ids = Enum.map(deleting, & &1["id"])
+    asset_ids = Enum.flat_map(deleting, &Map.get(&1, "history_ids", [&1["id"]]))
     files = deleting |> Enum.flat_map(&live_paths/1) |> Enum.uniq()
     others = Enum.reject(state.data["projects"], &(&1["id"] in ids))
     shared = others |> Enum.flat_map(&paths/1) |> Enum.map(canonical) |> MapSet.new()
@@ -1239,7 +1246,7 @@ defmodule BowserBrain.ModWorkshop do
     originals = Map.new(files, &{&1, ModRevision.read(&1)})
     Enum.each(originals, fn {path, source} ->
       owned = cond do
-        String.starts_with?(path, "assets/") -> Enum.any?(ids, &String.starts_with?(path, "assets/#{&1}/"))
+        String.starts_with?(path, "assets/") -> Enum.any?(asset_ids, &String.starts_with?(path, "assets/#{&1}/"))
         app = project["app"] -> String.starts_with?(path, "app-mods/#{app["id"]}/")
         true -> not String.starts_with?(path, "app-mods/") and
           BowserBrain.ModScope.source_profile(source) == Map.get(project, "profile", "default")
