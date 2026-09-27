@@ -127,6 +127,24 @@ final class ModSmithTests: XCTestCase {
         XCTAssertEqual(model.project?.canEnableAndTest, false)
     }
 
+    @MainActor func testGenericNextStepsAndRepairNoticesAreIndependent() {
+        let model = ModSmithModel()
+        for action in ["reply", "resume"] {
+            let project: [String: Any] = [
+                "id": "organizer", "name": "Organizer", "scope": "browser", "url": "",
+                "status": "needs_help", "summary": "Choose where to apply this change.",
+                "files": ["mods/organizer.ex"], "enabled": true, "can_undo": true, "turns": [],
+                "next_step": ["title": "Choose a workspace", "detail": "Select the workspace to use.", "action": action],
+                "repair_notice": "A proposed change was not installed."
+            ]
+            model.receive(["projects": [project], "selected": "organizer", "busy": false, "progress": [], "stage": "Ready"])
+            XCTAssertEqual(model.project?.needsNextStep, true)
+            XCTAssertEqual(model.project?.nextStep?.action, action)
+            XCTAssertEqual(model.project?.nextStep?.detail, "Select the workspace to use.")
+            XCTAssertNotNil(model.project?.repairNotice)
+        }
+    }
+
     @MainActor func testContinueEligibilityAndActionPreserveDraft() {
         let model = ModSmithModel()
         model.targetURL = "https://example.com"
@@ -198,7 +216,7 @@ final class ModSmithTests: XCTestCase {
                  "notes": "The sticky navigation still needs work.", "checks": ["Confirmed the paragraph font is 20px.", "Checked that the article stays scrollable."]]
             ]
         ]
-        for (name, width, filled) in [("empty", 760, false), ("result", 760, true), ("compact", 620, true), ("success", 760, true), ("running-other", 620, true)] {
+        for (name, width, filled) in [("empty", 760, false), ("result", 760, true), ("compact", 620, true), ("success", 760, true), ("input", 760, true), ("prerequisite", 620, true), ("disabled", 760, true), ("running-other", 620, true)] {
             if filled {
                 model.receive(["projects": [project], "selected": "reading", "busy": false, "progress": [], "stage": "Ready"])
             }
@@ -211,6 +229,19 @@ final class ModSmithTests: XCTestCase {
                 var running = project
                 running["status"] = "working"
                 model.receive(["projects": [running], "busy": true, "progress": [], "stage": "Checking your mod"])
+            }
+            if ["input", "prerequisite", "disabled"].contains(name) {
+                var blocked = project
+                blocked["status"] = "needs_help"
+                blocked["enabled"] = name != "disabled"
+                blocked["turns"] = [["id": "activity", "role": "activity", "text": "Checking what’s needed next…"]]
+                if name != "disabled" {
+                    blocked["next_step"] = ["title": name == "input" ? "Choose a reading style" : "Open the document",
+                        "detail": name == "input" ? "Would you prefer a warm background or the website’s original colors?" : "Open the document you want to format, then resume testing.",
+                        "action": name == "input" ? "reply" : "resume"]
+                    blocked["repair_notice"] = "A proposed change could not pass security review and was not installed. Any earlier saved changes remain."
+                }
+                model.receive(["projects": [blocked], "selected": "reading", "busy": false, "progress": [], "stage": "Ready"])
             }
             let view = NSHostingView(rootView: ModSmithRootView(model: model))
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: width, height: 660),

@@ -144,7 +144,11 @@ defmodule BowserBrain.ModWorkshopTest do
     assert state.run.project == id
     assert_receive {:runner, pid, token, prompt, _, _}, 1000
     assert prompt =~ "verify the requested behavior"
-    assert prompt =~ "do not start a download without that choice"
+    assert prompt =~ "Respect the owner's existing authorization"
+    [visible] = ModWorkshop.snapshot(state, "main").projects
+    assert List.last(visible["turns"])["role"] == "activity"
+    refute Map.has_key?(List.last(visible["turns"]), "instruction")
+    assert List.last(hd(state.data["projects"])["turns"])["instruction"] =~ "structured next_step"
     assert ModRevision.read("sites/example.com/reading.css.off") == nil
     assert ModRevision.read("sites/example.com/reading.css") != nil
     assert event("enable_and_test", %{"project" => id}).run.token == token
@@ -164,6 +168,43 @@ defmodule BowserBrain.ModWorkshopTest do
     [project] = complete(pid, [file("draft")], %{"status" => "needs_help"}).data["projects"]
     state = event("toggle", %{"project" => project["id"]})
     assert hd(state.data["projects"])["status"] == "needs_help"
+  end
+
+  test "next steps persist independently of blocked repairs and clear when work resumes" do
+    Application.put_env(:bowser_brain, :modsmith_auditor, fn _ -> {:error, :unavailable} end)
+    event("submit", %{"text" => "Organize my workspace", "scope" => "browser"})
+    assert_receive {:runner, pid, token, _, _, _}, 1000
+    assert %{ok: false} = ModWorkshop.tool(token, "put_mod", %{
+      "name" => "workspace.ex", "content" => "defmodule WorkspaceFixture do use BowserBrain.Mod end"
+    })
+    step = %{"title" => "Choose a workspace", "detail" => "Which workspace should this apply to?", "action" => "reply"}
+    state = complete(pid, [], %{"status" => "needs_help", "next_step" => step})
+    [project] = ModWorkshop.snapshot(state, "main").projects
+    assert project["next_step"] == step
+    assert project["repair_notice"] =~ "not installed"
+    assert ModRevision.read("mods/workspace.ex") == nil
+    persisted = JSON.decode!(File.read!(Application.get_env(:bowser_brain, :modsmith_workspace_path)))
+    assert hd(persisted["projects"])["next_step"] == step
+    state = event("submit", %{"project" => project["id"], "text" => "The personal workspace"})
+    assert hd(state.data["projects"])["next_step"] == nil
+    assert hd(state.data["projects"])["repair_notice"] == nil
+  end
+
+  test "retry uses the owner request and automatic instructions stay out of snapshots" do
+    event("submit", %{"text" => "Make text easier to read"})
+    assert_receive {:runner, pid, _, _, _, _}, 1000
+    [project] = complete(pid, [], %{"status" => "needs_help"}).data["projects"]
+    event("clarify", %{"project" => project["id"]})
+    assert_receive {:runner, pid, _, prompt, _, _}, 1000
+    assert prompt =~ "without making changes"
+    complete(pid, [file("draft")], %{"status" => "failed"})
+    state = event("retry", %{"project" => project["id"]})
+    assert_receive {:runner, _, _, prompt, _, _}, 1000
+    assert hd(hd(state.data["projects"])["revisions"])["request"] == "Make text easier to read"
+    assert prompt =~ "Make text easier to read"
+    [visible] = ModWorkshop.snapshot(state, "main").projects
+    assert List.last(visible["turns"])["role"] == "activity"
+    refute JSON.encode!(visible) =~ "without making changes"
   end
 
   test "saving files preserves nonworking outcomes and allows continuation" do
@@ -712,6 +753,9 @@ end
     assert_receive {:reviewed_source, second}
     refute first == second
     assert ModRevision.read("mods/fresh.ex") == first
+    assert :sys.get_state(ModWorkshop).run.audit_failures != %{}
+    assert %{ok: true} = ModWorkshop.tool(token, "put_mod", %{"name" => "fresh.ex", "content" => source <> "\n# repaired"})
+    assert :sys.get_state(ModWorkshop).run.audit_failures == %{}
   end
 
   test "nil content and payload tool names cannot bypass the Elixir gate" do

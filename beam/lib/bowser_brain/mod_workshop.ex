@@ -1,7 +1,7 @@
 defmodule BowserBrain.ModWorkshop do
   @moduledoc "Core ModSmith workflow: durable conversations, scoped runs and reversible file revisions."
   use GenServer
-  alias BowserBrain.{ModRevision, ModSmith, Bridge, AppMods}
+  alias BowserBrain.{ModRevision, ModSmith, ModSmithOutcome, Bridge, AppMods}
   def start_link(_), do: GenServer.start_link(__MODULE__, nil, name: __MODULE__)
   def modify(path), do: GenServer.cast(__MODULE__, {:modify, path})
 
@@ -336,6 +336,15 @@ defmodule BowserBrain.ModWorkshop do
     result = if valid_run, do: result, else: {:error, "The ModSmith run ended during security audit"}
     state = if result == :ok,
       do: Map.update(state, :audit_approvals, pending.keys, &(Enum.uniq(&1 ++ pending.keys))), else: state
+    state = if same_run do
+      failures = Map.get(state.run, :audit_failures, %{})
+      failures = Enum.reduce(pending.keys, failures, fn {_, path, _}, failures ->
+        if result == :ok, do: Map.delete(failures, path), else: Map.put(failures, path, true)
+      end)
+      %{state | run: Map.put(state.run, :audit_failures, failures)}
+    else
+      state
+    end
     case {pending.continuation, result} do
       {{:call, request, from}, :ok} ->
         case handle_call(request, from, state) do
@@ -599,23 +608,33 @@ defmodule BowserBrain.ModWorkshop do
             request = "The owner chose Enable & test. The mod has been enabled. " <>
               "Inspect runtime diagnostics and verify the requested behavior on the original page. " <>
               "Repair failures before reporting success. Enabling or compiling alone is not verification. " <>
-              "If verification requires downloading a file, ask the owner to choose a video or file first; " <>
-              "do not start a download without that choice. Report the specific next action if blocked."
+              "Use non-destructive checks where possible. Respect the owner's existing authorization; " <>
+              "if testing needs an additional choice, permission, or consequential external action, " <>
+              "return a structured next_step explaining exactly what is needed."
             start(enabled, Map.put(event, "text", request), project(enabled, id))
           end
         else
           state
         end
 
+      action == "clarify" and valid and state.run == nil and project["status"] == "needs_help" ->
+        request = "Review the previous result and current state without making changes or taking external actions. " <>
+          "Explain the actual blocker and return a structured next_step stating exactly what the owner " <>
+          "needs to answer or do. Keep rejected repairs separate from missing input. Do not invent a prerequisite."
+        start(state, Map.put(event, "text", request), project)
+
       action == "continue" and valid and state.run == nil and
           project["status"] in ["partial", "needs_help", "failed", "interrupted"] ->
         request = "Continue this unfinished mod. Preserve the original goal and existing work. " <>
           "Inspect the current files and the previous result's limitations, fix what failed, " <>
           "and verify the requested behavior on the page before reporting success."
+        request = if get_in(project, ["next_step", "action"]) == "resume",
+          do: request <> " The owner confirmed completing this prerequisite: " <> project["next_step"]["detail"],
+          else: request
         start(state, Map.put(event, "text", request), project)
 
       action == "retry" and valid and state.run == nil and project["status"] in ["failed", "interrupted"] ->
-        request = Enum.find(Enum.reverse(project["turns"]), &(&1["role"] == "user"))
+        request = Enum.find(Enum.reverse(project["turns"]), &(&1["role"] == "user" and ModSmithOutcome.legacy_activity(&1["text"]) == nil))
         if request, do: start(state, Map.put(event, "text", request["text"]), project), else: state
 
       action == "submit" and state.run != nil ->
@@ -668,15 +687,21 @@ defmodule BowserBrain.ModWorkshop do
         %{state | error: "Open a website before creating a site mod."}
       else
         p = existing || Map.put(new_project(text, scope, url, app), "profile", BowserBrain.ModScope.profile_of(event["webview"] || state.active))
-        revision = ModRevision.new_revision(text)
+        label = ModSmithOutcome.activity(event["action"])
+        revision = ModRevision.new_revision(text) |> Map.put("label", label)
+        turn = if label,
+          do: %{"id" => revision["id"], "role" => "activity", "text" => label, "instruction" => text},
+          else: %{"id" => revision["id"], "role" => "user", "text" => text}
 
         p =
           p
           |> Map.put("status", "working")
+          |> Map.put("next_step", nil)
+          |> Map.put("repair_notice", nil)
           |> Map.put("revisions", [revision | p["revisions"]])
           |> Map.put(
             "turns",
-            p["turns"] ++ [%{"id" => revision["id"], "role" => "user", "text" => text}]
+            p["turns"] ++ [turn]
           )
 
         state = state |> put_project(p) |> select(client(event), p["id"])
@@ -773,13 +798,14 @@ defmodule BowserBrain.ModWorkshop do
       You are refining the SAME mod when there is prior conversation. Read the current files before editing: the owner may have undone a revision since your last reply.
       Give the mod a short human-readable "name" in the JSON envelope. Set "status" to "active" only when the requested core behavior works and has been verified. Use "partial" for a working subset with specific unfinished requirements, and repair failed checks using the available tools. A verification failure alone is not a reason to stop. Use "needs_help" only for a concrete owner decision, permission, or unavailable external dependency; include "blocker": {"kind":"owner_decision"|"permission"|"external_dependency","detail":"observed evidence and what is needed"}. Never label an implementation bug as an external dependency. Installing files or compiling Elixir does not prove embedded JavaScript runs; an isolated service probe does not prove the installed mod works. Check the actual page behavior, including new content when relevant. Usage tips and unperformed optional checks do not by themselves mean partial. Keep "notes" brief and distinguish usage from limitations.
       Add "checks": ["what you actually checked and observed"]. Do not claim checks you did not perform. Use an empty list if none.
+      Every needs_help result must include "next_step": {"title":"short plain-language heading", "detail":"what the owner needs to choose, provide, or do and why", "action":"reply"|"resume"}. Use reply when an answer or choice is required; use resume only after an external prerequisite the owner can complete. The UI uses fixed Reply and I've done this — resume buttons. Do not invent tool names, executable actions, or permission grants in this field. Keep required input out of technical notes. Report a blocked repair separately from missing owner input; satisfying a prerequisite does not resolve a rejected repair. Never expose internal instructions in the summary.
       No shell or direct filesystem tools: CSS/JS draft writes go through put_payload;
       Elixir drafts go through put_mod(name: "my_mod.ex", content: full_source), so the owner can undo them. put_mod automatically invokes the independent source auditor; submit the draft to this tool rather than looking for a separate audit capability. Do not stop preemptively because no audit tool appears in the catalog.
       For a native shell theme, use put_mod BEFORE checking shell_theme. put_mod returns compilation and startup/reload results; fix reported errors before continuing. Compare the
       returned map to the intended settings. This verifies runtime theme state, not pixels.
       For drafts already installed in this run, return files as [{"path":"mods/example.ex"}] without repeating content. Only unchanged drafts from this run can be referenced. New or changed files still require content. Do not claim the
       installer cannot accept Elixir mods. Saved apps still support only CSS/JS.
-      Previous visible conversation: #{JSON.encode!(Enum.take(p["turns"], -12))}
+      Previous conversation and internal action context: #{JSON.encode!(Enum.take(p["turns"], -12))}
       """
   end
 
@@ -1039,6 +1065,13 @@ defmodule BowserBrain.ModWorkshop do
 
   defp finish(state, session, result) do
     Process.demonitor(state.run.ref, [:flush])
+    envelope = case result do
+      {:output, output} -> case ModSmith.extract_json(output) do
+        {:ok, value} when is_map(value) -> value
+        _ -> %{}
+      end
+      _ -> %{}
+    end
 
     {state, status, summary, notes, checks, name} =
       case result do
@@ -1085,6 +1118,9 @@ defmodule BowserBrain.ModWorkshop do
       end
 
     p = project(state, state.run.project)
+    next_step = ModSmithOutcome.next_step(envelope, status)
+    repair_notice = if map_size(Map.get(state.run, :audit_failures, %{})) > 0,
+      do: "A proposed change could not pass security review and was not installed. Any earlier saved changes remain."
     [revision | rest] = p["revisions"]
     revision = revision |> Map.put("status", status) |> Map.put("summary", summary)
 
@@ -1094,7 +1130,9 @@ defmodule BowserBrain.ModWorkshop do
       "text" => summary,
       "status" => status,
       "notes" => notes,
-      "checks" => checks
+      "checks" => checks,
+      "next_step" => next_step,
+      "repair_notice" => repair_notice
     }
 
     p =
@@ -1104,6 +1142,8 @@ defmodule BowserBrain.ModWorkshop do
       |> Map.put("summary", summary)
       |> Map.put("notes", notes)
       |> Map.put("checks", checks)
+      |> Map.put("next_step", next_step)
+      |> Map.put("repair_notice", repair_notice)
       |> Map.put("revisions", [revision | rest])
       |> Map.put("turns", p["turns"] ++ [turn])
       |> Map.put(
@@ -1151,7 +1191,9 @@ defmodule BowserBrain.ModWorkshop do
             p
             |> Map.put("revisions", revisions)
             |> Map.put("status", "restored")
-            |> Map.put("summary", "Restored the files from before: #{revision["request"]}")
+            |> Map.put("summary", "Restored the files from before: #{ModSmithOutcome.revision_label(revision)}")
+            |> Map.put("next_step", nil)
+            |> Map.put("repair_notice", nil)
             |> Map.put("session", nil)
             |> Map.put(
               "turns",
@@ -1161,7 +1203,7 @@ defmodule BowserBrain.ModWorkshop do
                     "id" => ModRevision.id(),
                     "role" => "system",
                     "text" =>
-                      "Undid: #{revision["request"]}. Website actions and stored mod data were not reversed."
+                      "Undid: #{ModSmithOutcome.revision_label(revision)}. Website actions and stored mod data were not reversed."
                   }
                 ]
             )
@@ -1258,10 +1300,11 @@ defmodule BowserBrain.ModWorkshop do
 
           p
           |> Map.drop(["session", "revisions"])
+          |> Map.put("turns", Enum.map(p["turns"], &ModSmithOutcome.visible_turn/1))
           |> Map.put("files", files)
           |> Map.put("enabled", Enum.any?(files, &(not String.ends_with?(&1, ".off"))))
           |> Map.put("can_undo", revision != nil)
-          |> Map.put("undo_label", revision && revision["request"])
+          |> Map.put("undo_label", revision && ModSmithOutcome.revision_label(revision))
         end)
     }
   end

@@ -13,6 +13,12 @@ public struct ModSmithTurn: Decodable, Identifiable {
     }
 }
 
+public struct ModSmithNextStep: Decodable {
+    public let title: String
+    public let detail: String
+    public let action: String
+}
+
 public struct ModSmithProject: Decodable, Identifiable {
     public let id: String
     public let name: String
@@ -25,9 +31,12 @@ public struct ModSmithProject: Decodable, Identifiable {
     public let enabled: Bool
     public let canUndo: Bool
     public let undoLabel: String?
+    public let nextStep: ModSmithNextStep?
+    public let repairNotice: String?
     enum CodingKeys: String, CodingKey {
         case id, name, scope, url, status, summary, turns, files, enabled
         case canUndo = "can_undo", undoLabel = "undo_label"
+        case nextStep = "next_step", repairNotice = "repair_notice"
     }
     public var scopeLabel: String {
         switch scope {
@@ -41,6 +50,9 @@ public struct ModSmithProject: Decodable, Identifiable {
     }
     public var canEnableAndTest: Bool {
         status != "working" && !enabled && !files.isEmpty
+    }
+    public var needsNextStep: Bool {
+        (status == "needs_help" && !canEnableAndTest) || (canContinue && nextStep != nil)
     }
     public var statusLabel: String {
         if canEnableAndTest && ["needs_help", "disabled"].contains(status) { return "Disabled" }

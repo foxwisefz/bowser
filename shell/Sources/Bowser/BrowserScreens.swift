@@ -545,11 +545,46 @@ struct ModSmithScreen: View {
         }.padding(20).frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    private var resultAnchor: String {
+        guard let project = model.project else { return "bottom" }
+        if project.needsNextStep { return "required-input" }
+        if project.canEnableAndTest { return "next-action" }
+        return project.status == "active" ? "completion" : "bottom"
+    }
+
     private var conversation: some View {
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     if let project = model.project {
+                        if project.needsNextStep {
+                            VStack(alignment: .leading, spacing: 12) {
+                                Text(project.nextStep?.title ?? "The next step needs clarification")
+                                    .font(.system(size: 20, weight: .semibold, design: .rounded))
+                                Text(project.nextStep?.detail ?? "This result didn’t record what you need to provide or do. Ask ModSmith to explain before proceeding.")
+                                    .font(.callout).foregroundStyle(.secondary)
+                                if let step = project.nextStep {
+                                    if step.action == "reply" {
+                                        Button("Reply", systemImage: "text.bubble") { composerFocused = true }
+                                            .buttonStyle(.borderedProminent)
+                                    } else if step.action == "resume" {
+                                        Button("I’ve done this — resume", systemImage: "play.fill") { model.action("continue", project: project.id) }
+                                            .buttonStyle(.borderedProminent).disabled(model.snapshot.busy)
+                                    }
+                                } else {
+                                    Button("Clarify next step", systemImage: "questionmark.bubble") { model.action("clarify", project: project.id) }
+                                        .buttonStyle(.borderedProminent).disabled(model.snapshot.busy)
+                                }
+                            }.padding(20).frame(maxWidth: .infinity, alignment: .leading)
+                                .background(Color.accentColor.opacity(0.07), in: RoundedRectangle(cornerRadius: 18))
+                                .id("required-input")
+                        }
+                        if let notice = project.repairNotice, !notice.isEmpty {
+                            Label(notice, systemImage: "exclamationmark.shield")
+                                .font(.callout).foregroundStyle(.orange)
+                                .padding(14).frame(maxWidth: .infinity, alignment: .leading)
+                                .background(Color.orange.opacity(0.06), in: RoundedRectangle(cornerRadius: 12))
+                        }
                         if project.canEnableAndTest {
                             VStack(alignment: .leading, spacing: 12) {
                                 Label("Enable your mod to test it", systemImage: "power")
@@ -621,21 +656,20 @@ struct ModSmithScreen: View {
                 }.padding(22).frame(maxWidth: .infinity, alignment: .leading)
             }
             .onChange(of: model.project?.turns.count) { _, _ in
-                proxy.scrollTo(model.project?.canEnableAndTest == true ? "next-action" : model.project?.status == "active" ? "completion" : "bottom", anchor: model.project?.canEnableAndTest == true || model.project?.status == "active" ? .top : .bottom)
+                proxy.scrollTo(resultAnchor, anchor: resultAnchor == "bottom" ? .bottom : .top)
             }
             .onChange(of: model.project?.status) { _, status in
-                if model.project?.canEnableAndTest == true { proxy.scrollTo("next-action", anchor: .top) }
-                else if status == "active" { proxy.scrollTo("completion", anchor: .top) }
+                if resultAnchor != "bottom" { proxy.scrollTo(resultAnchor, anchor: .top) }
             }
             .onChange(of: model.snapshot.selected) { _, _ in
-                proxy.scrollTo(model.project?.canEnableAndTest == true ? "next-action" : model.project?.status == "active" ? "completion" : "bottom", anchor: model.project?.canEnableAndTest == true || model.project?.status == "active" ? .top : .bottom)
+                proxy.scrollTo(resultAnchor, anchor: resultAnchor == "bottom" ? .bottom : .top)
             }
         }
     }
 
     private func turnView(_ turn: ModSmithTurn) -> some View {
         VStack(alignment: .leading, spacing: 9) {
-            Text(turn.role == "user" ? "You" : turn.role == "system" ? "Revision history" : "ModSmith")
+            Text(turn.role == "user" ? "You" : turn.role == "system" ? "Revision history" : turn.role == "activity" ? "Activity" : "ModSmith")
                 .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
             Text(turn.displayText).font(.system(size: 13)).textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
@@ -699,7 +733,7 @@ struct ModSmithScreen: View {
                     .font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 if let project = model.project {
-                    if !model.snapshot.busy && project.canContinue && !project.canEnableAndTest {
+                    if !model.snapshot.busy && project.canContinue && !project.canEnableAndTest && !project.needsNextStep {
                         Button("Resume testing & fixes") { model.action("continue", project: project.id) }
                             .accessibilityIdentifier("modsmith-continue")
                     }
