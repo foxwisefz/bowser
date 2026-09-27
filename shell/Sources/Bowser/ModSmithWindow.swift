@@ -142,11 +142,11 @@ final class ModSmithWindow: NSObject {
             if model.project == nil { model.scopeChoice.reset(url: model.targetURL, faviconPath: model.targetFavicon) }
         }
         if window == nil {
-            let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 660),
+            let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1060, height: 720),
                              styleMask: [.titled, .closable, .resizable, .miniaturizable], backing: .buffered, defer: false)
             w.title = "ModSmith"
             w.subtitle = "Make Bowser yours"
-            w.minSize = NSSize(width: 620, height: 480)
+            w.minSize = NSSize(width: 880, height: 520)
             w.isReleasedWhenClosed = false
             w.setFrameAutosaveName("ModSmithWorkspace")
             w.contentView = NSHostingView(rootView: LiveBrowserScreen(kind: "modsmith", model: model))

@@ -420,29 +420,17 @@ struct ModSmithScreen: View {
         get { context.binding("showDetails", default: false).wrappedValue }
         nonmutating set { context.binding("showDetails", default: false).wrappedValue = newValue }
     }
-    private var showExisting: Bool {
-        get { context.binding("showExisting", default: false).wrappedValue }
-        nonmutating set { context.binding("showExisting", default: false).wrappedValue = newValue }
-    }
-
     var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Label("ModSmith", systemImage: "sparkles").font(.system(size: 13, weight: .semibold))
-                Spacer()
-                Button("New mod", systemImage: "plus") { model.action("new") }
-                Button("Your mods", systemImage: "square.grid.2x2") {
-                    model.action("open"); showExisting = true
-                }
-            }.buttonStyle(.plain).font(.system(size: 12)).padding(.horizontal, 24).padding(.vertical, 16)
+        HStack(spacing: 0) {
+            sidebar
+            Divider()
             VStack(spacing: 0) {
                 header
                 Divider()
                 conversation
                 activeBuild
                 composer
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }.frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .background {
             Color(nsColor: .windowBackgroundColor)
@@ -465,59 +453,67 @@ struct ModSmithScreen: View {
         .onAppear {
             if context.values["hasAppeared"] as? Bool != true { composerFocused = true; context.values["hasAppeared"] = true }
         }
-        .sheet(isPresented: context.binding("showExisting", default: false)) {
-            VStack(alignment: .leading, spacing: 16) {
-                Text("Your mods").font(.title2.weight(.semibold))
-                Text("Open a mod to edit it, turn it on or off, or delete it.").foregroundStyle(.secondary)
-                if (model.snapshot.available_mods ?? []).isEmpty && model.snapshot.projects.isEmpty {
-                    Text("No installed mods are available in this window yet.").padding(.vertical, 24)
-                } else {
-                    ScrollView {
-                        VStack(spacing: 8) {
-                            ForEach(model.snapshot.projects) { project in
-                                Button {
-                                    model.action("select", project: project.id)
-                                    showExisting = false
-                                    composerFocused = true
-                                } label: {
-                                    HStack {
-                                        modIcon(project.favicon, fallback: project.scope == "browser" ? "macwindow" : "globe")
-                                        VStack(alignment: .leading, spacing: 4) {
-                                            Text(project.name).font(.headline)
-                                            Text(project.scopeLabel).font(.caption).foregroundStyle(.secondary)
-                                        }
-                                        Spacer()
-                                        Text(project.statusLabel).font(.caption).foregroundStyle(.secondary)
-                                        Image(systemName: "square.and.pencil")
-                                    }.padding(12).contentShape(Rectangle())
-                                }.buttonStyle(.plain)
-                            }
-                            ForEach((model.snapshot.available_mods ?? []).filter { mod in
-                                !model.snapshot.projects.contains { $0.files.contains(mod.path) }
-                            }) { mod in
-                                Button {
-                                    model.action("edit_existing", path: mod.path)
-                                    showExisting = false
-                                    composerFocused = true
-                                } label: {
-                                    HStack {
-                                        modIcon(mod.favicon, fallback: mod.scope == "Across Bowser" ? "macwindow" : "globe")
-                                        VStack(alignment: .leading, spacing: 4) {
-                                            Text(mod.name).font(.headline)
-                                            Text(mod.scope).font(.caption).foregroundStyle(.secondary)
-                                        }
-                                        Spacer()
-                                        Text(mod.enabled ? "Enabled" : "Disabled").font(.caption)
-                                        Image(systemName: "chevron.right")
-                                    }.padding(12).contentShape(Rectangle())
-                                }.buttonStyle(.plain)
-                            }
-                        }
-                    }.frame(maxHeight: 300)
+    }
+
+    private var sidebar: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Label("ModSmith", systemImage: "sparkles")
+                .font(.system(size: 16, weight: .semibold, design: .rounded))
+                .padding(.horizontal, 12).padding(.top, 8)
+            Button { model.action("new"); composerFocused = true } label: {
+                Label("New mod", systemImage: "plus").frame(maxWidth: .infinity, alignment: .leading)
+            }.buttonStyle(.bordered).controlSize(.large)
+            Text("MODS & HISTORY").font(.system(size: 10, weight: .semibold))
+                .tracking(0.8).foregroundStyle(.secondary).padding(.horizontal, 12)
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 5) {
+                    ForEach(model.snapshot.projects) { project in
+                        Button {
+                            model.action("select", project: project.id)
+                            composerFocused = true
+                        } label: {
+                            HStack(alignment: .top, spacing: 9) {
+                                modIcon(project.favicon, fallback: project.scope == "browser" ? "macwindow" : "globe", size: 20)
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(project.name).font(.system(size: 12, weight: .medium)).lineLimit(2)
+                                    Text(project.files.isEmpty && project.status != "working" ? "Draft · saved chat" : project.statusLabel)
+                                        .font(.system(size: 10)).foregroundStyle(.secondary)
+                                }
+                                Spacer(minLength: 0)
+                            }.padding(10).frame(maxWidth: .infinity, alignment: .leading)
+                                .background(model.snapshot.selected == project.id ? Color.accentColor.opacity(0.13) : .clear,
+                                            in: RoundedRectangle(cornerRadius: 9))
+                                .contentShape(Rectangle())
+                        }.buttonStyle(.plain)
+                            .accessibilityAddTraits(model.snapshot.selected == project.id ? [.isSelected] : [])
+                    }
+                    ForEach((model.snapshot.available_mods ?? []).filter { mod in
+                        !model.snapshot.projects.contains { $0.files.contains(mod.path) }
+                    }) { mod in
+                        Button {
+                            model.action("edit_existing", path: mod.path)
+                            composerFocused = true
+                        } label: {
+                            HStack(alignment: .top, spacing: 9) {
+                                modIcon(mod.favicon, fallback: mod.scope == "Across Bowser" ? "macwindow" : "globe", size: 20)
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(mod.name).font(.system(size: 12, weight: .medium)).lineLimit(2)
+                                    Text("Open mod chat").font(.system(size: 10)).foregroundStyle(.secondary)
+                                }
+                                Spacer(minLength: 0)
+                            }.padding(10).frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+                        }.buttonStyle(.plain)
+                    }
+                    if model.snapshot.projects.isEmpty && (model.snapshot.available_mods ?? []).isEmpty {
+                        Text("Your mods and saved conversations will appear here.")
+                            .font(.callout).foregroundStyle(.secondary).padding(12)
+                    }
                 }
-                HStack { Spacer(); Button("Cancel") { showExisting = false }.keyboardShortcut(.cancelAction) }
-            }.padding(24).frame(width: 440)
-        }
+            }
+            Text("One mod. One conversation.").font(.system(size: 10)).foregroundStyle(.secondary)
+                .padding(.horizontal, 12)
+        }.padding(12).frame(width: 210).frame(maxHeight: .infinity)
+            .background(Color.primary.opacity(0.025))
     }
 
     @ViewBuilder private func modIcon(_ path: String?, fallback: String, size: CGFloat = 24) -> some View {
@@ -653,7 +649,6 @@ struct ModSmithScreen: View {
                                         .buttonStyle(.borderedProminent)
                                     Button("Make changes", systemImage: "square.and.pencil") { composerFocused = true }
                                     Spacer()
-                                    Button("Your mods") { model.action("open"); showExisting = true }
                                 }.controlSize(.regular)
                             }.padding(20).frame(maxWidth: .infinity, alignment: .leading)
                                 .background(Color.green.opacity(0.07), in: RoundedRectangle(cornerRadius: 18))
@@ -681,7 +676,7 @@ struct ModSmithScreen: View {
                                         .buttonStyle(.borderedProminent).disabled(model.snapshot.busy)
                                 }
                                 Divider()
-                                Text("Turn this mod on or off using Enabled above or Settings → Mods. To change it, describe what you want below. Find this guide again in Your mods.")
+                                Text("Turn this mod on or off using Enabled above or Settings → Mods. To change it, describe what you want below. Select this mod in the sidebar to return to its guide and chat history.")
                                     .font(.caption).foregroundStyle(.secondary)
                             }.padding(20).frame(maxWidth: .infinity, alignment: .leading)
                                 .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 18))

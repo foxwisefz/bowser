@@ -841,7 +841,7 @@ defmodule BowserBrain.ModWorkshop do
       The selected mod is #{p["name"]}. Scope is #{p["scope"]}; target URL #{p["url"]}, webview #{wv}.
       #{if p["scope"] == "site", do: "Only this host's payloads or Elixir mods explicitly declaring this host are allowed.", else: ""}
       #{if p["app"], do: "Only CSS/JS for this saved app. Use sites/#{host}/ paths; these are redirected to this app.", else: ""}
-      Mod identity: #{p["mod_id"] || p["id"]}. Other mods retain their own histories; do not overwrite their files from a new creation. Ask the owner to open the existing mod in Your mods to refine it.
+      Mod identity: #{p["mod_id"] || p["id"]}. Other mods retain their own histories; do not overwrite their files from a new creation. Ask the owner to open the existing mod in the ModSmith sidebar to refine it.
       Existing owned files: #{Enum.join(paths(p), ", ")}. #{if p["existing_path"], do: "Modify #{p["existing_path"]} in place.", else: ""}
       You are refining the SAME mod when there is prior conversation. Read the current files before editing: the owner may have undone a revision since your last reply.
       Give the mod a short human-readable "name" in the JSON envelope. Set "status" to "active" only when the requested core behavior works and has been verified. Use "partial" for a working subset with specific unfinished requirements, and repair failed checks using the available tools. A verification failure alone is not a reason to stop. Use "needs_help" only for a necessary owner choice or an observed technical blocker such as missing credentials, a denied tool/OS permission, or an unavailable dependency you actually investigated. Assume informed, legitimate owner intent; speculative copyright, licensing or service-authorization concerns are not prerequisites. Do not ask the owner to supply a service merely because you have not investigated an implementation; include "blocker": {"kind":"owner_decision"|"permission"|"external_dependency","detail":"observed evidence and what is needed"}. Never label an implementation bug as an external dependency. Installing files or compiling Elixir does not prove embedded JavaScript runs; an isolated service probe does not prove the installed mod works. Check the actual page behavior, including new content when relevant. Usage tips and unperformed optional checks do not by themselves mean partial. Keep "notes" brief and distinguish usage from limitations.
@@ -953,7 +953,7 @@ defmodule BowserBrain.ModWorkshop do
       case prepare_file(p, file) do
         {:ok, {path, content}} = result ->
           if other = BowserBrain.ModIdentity.conflict(state.data["projects"], p, path) do
-            {:error, "This file belongs to #{other["name"]}. Open that mod in Your mods to edit it, or choose a new filename."}
+            {:error, "This file belongs to #{other["name"]}. Open that mod in the ModSmith sidebar to edit it, or choose a new filename."}
           else
           if is_nil(p["app"]) and (String.starts_with?(path, "mods/") or String.starts_with?(path, "sites/")) do
             existing = ModRevision.absolute(ModRevision.actual_path(path))

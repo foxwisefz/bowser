@@ -36,7 +36,7 @@ that run's review failure. Enabling a mod does not establish verification.
 Testing respects existing authorization and asks for additional choices or
 permissions only when needed, regardless of the mod's website or behavior.
 
-Open a mod from **Your mods**, then choose **Delete mod**, or use **Delete…**
+Open a mod from the **ModSmith sidebar**, then choose **Delete mod**, or use **Delete…**
 in **Settings → Mods**. Both paths ask for confirmation and use the same cleanup. Confirmation removes
 its active and disabled files, assets, and the entire ModSmith project (requests,
 agent session reference, conversation, and undo revisions). Empty or failed
@@ -48,7 +48,7 @@ watchers unload deleted mods. Website actions and persistent mod data are not
 reversed or erased.
 
 Each mod has a stable `mod_id` and an explicit `owned_files` list, independent
-of its conversation and undo records. Editing from Settings or Your mods returns
+of its conversation and undo records. Editing from Settings or the ModSmith sidebar returns
 to that mod’s conversation. Creation cannot overwrite files owned by another
 mod; open the existing mod to refine it. On workspace load, duplicate histories
 with the same file set and profile/app owner are combined, preserving messages,
@@ -81,3 +81,10 @@ restores the guide captured before that revision.
 and page HTML without changing or executing the mod. The tool gateway restricts
 these runs to read tools, and completion preserves the mod’s prior status and
 undo revisions. Missing or malformed guide output shows a retryable error.
+
+ModSmith’s sidebar lists saved mod conversations across sessions, with the current
+selection highlighted. Select a mod to reopen its full chat and guide; subsequent
+changes append to that conversation. Installed mods without a chat can be opened
+from the same list. Drafts remain visible as drafts. Profile and saved-app
+boundaries continue to filter which conversations appear. Unsent text is retained
+when switching conversations in the open window.

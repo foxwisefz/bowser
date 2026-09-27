@@ -244,7 +244,7 @@ final class ModSmithTests: XCTestCase {
                  "notes": "The sticky navigation still needs work.", "checks": ["Confirmed the paragraph font is 20px.", "Checked that the article stays scrollable."]]
             ]
         ]
-        for (name, width, filled) in [("empty", 760, false), ("result", 760, true), ("compact", 620, true), ("success", 760, true), ("input", 760, true), ("prerequisite", 620, true), ("disabled", 760, true), ("running-other", 620, true)] {
+        for (name, width, filled) in [("empty", 1060, false), ("result", 1060, true), ("compact", 880, true), ("success", 1060, true), ("input", 1060, true), ("prerequisite", 880, true), ("disabled", 1060, true), ("running-other", 880, true)] {
             if filled {
                 model.receive(["projects": [project], "selected": "reading", "busy": false, "progress": [], "stage": "Ready"])
             }
@@ -270,6 +270,17 @@ final class ModSmithTests: XCTestCase {
                     blocked["repair_notice"] = "A proposed change could not pass security review and was not installed. Any earlier saved changes remain."
                 }
                 model.receive(["projects": [blocked], "selected": "reading", "busy": false, "progress": [], "stage": "Ready"])
+            }
+            if filled {
+                var older = project
+                older["id"] = "older-mod"
+                older["name"] = "Focus mode"
+                older["scope"] = "browser"
+                older["status"] = "active"
+                older["favicon"] = nil
+                older["files"] = ["mods/focus.ex"]
+                model.snapshot.projects.append(try JSONDecoder().decode(ModSmithProject.self,
+                    from: JSONSerialization.data(withJSONObject: older)))
             }
             let view = NSHostingView(rootView: ModSmithRootView(model: model))
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: width, height: 660),

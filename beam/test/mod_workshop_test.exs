@@ -128,6 +128,25 @@ defmodule BowserBrain.ModWorkshopTest do
     assert ModRevision.read(path) == nil
   end
 
+  test "reopening a saved mod keeps its old chat and appends to the same conversation" do
+    event("submit", %{"text" => "Create reading mode"})
+    assert_receive {:runner, pid, _, _, _, _}, 2000
+    [original] = complete(pid, [file("original")]).data["projects"]
+    restored = ModRevision.load() |> BowserBrain.ModIdentity.normalize() |> ModWorkshop.recover()
+    :sys.replace_state(ModWorkshop, fn state -> %{state | data: restored} end)
+    state = event("edit_existing", %{"path" => "sites/example.com/reading.css"})
+    assert [same] = state.data["projects"]
+    assert same["id"] == original["id"]
+    assert same["turns"] == original["turns"]
+    event("submit", %{"project" => same["id"], "text" => "Make text larger"})
+    assert_receive {:runner, pid, _, _, _, _}, 2000
+    state = complete(pid, [file("refined")])
+    assert [updated] = state.data["projects"]
+    assert updated["id"] == original["id"]
+    assert Enum.take(updated["turns"], length(original["turns"])) == original["turns"]
+    assert Enum.any?(updated["turns"], &(&1["text"] == "Make text larger"))
+  end
+
   test "usage docs persist, update read-only, and follow file undo" do
     first = %{"entry_point" => "Open an article; reading mode is automatic.", "steps" => ["Open the website.", "Read the restyled article."], "tips" => ""}
     second = %{first | "steps" => ["Open an article.", "Use the new layout."]}
