@@ -17,6 +17,7 @@ import time
 import traceback
 import uuid
 from report import evaluate
+from startup_probe import wait_for_tabs
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'tests'))
@@ -96,22 +97,9 @@ async def browser_startup(stage, work, output, record):
                 start = time.monotonic()
                 process = subprocess.Popen([str(bundle / 'Contents/MacOS/Bowser')], env={**ENV, 'BOWSER_HOME': str(home)}, stdout=log, stderr=log)
                 try:
-                    deadline = start + 20
-                    while True:
-                        if process.poll() is not None: raise RuntimeError('Browser exited before ready')
-                        if time.monotonic() > deadline: raise TimeoutError(f'Browser restore {count}')
-                        try:
-                            reader, writer = await asyncio.open_unix_connection(str(home / 'agent.sock'))
-                            try:
-                                writer.write(b'{"tool":"list_tabs"}\n'); await writer.drain()
-                                reply = json.loads(await asyncio.wait_for(reader.readline(), 2))
-                            finally:
-                                writer.close(); await writer.wait_closed()
-                            if reply.get('ok') and len(reply.get('tabs', [])) == count:
-                                record(f'startup_browser_{count}_tabs_ms', (time.monotonic()-start)*1000)
-                                break
-                        except (FileNotFoundError, ConnectionRefusedError): pass
-                        await asyncio.sleep(.01)
+                    await wait_for_tabs(home / 'agent.sock', count, start + 20,
+                                        lambda: process.poll() is not None)
+                    record(f'startup_browser_{count}_tabs_ms', (time.monotonic()-start)*1000)
                 finally:
                     stop(process)
                     endpoint = home / 'backend/host.sock'
