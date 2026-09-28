@@ -67,6 +67,7 @@ private final class PageRelay: NSObject, WKScriptMessageHandler {
 @MainActor
 final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
     private var navigationDiagnosticTrace = NavigationDiagnosticTrace()
+    private var navigationDiagnosticWatchdog: Task<Void, Never>?
     private var scriptExecutions: [String: ModScript] = [:]
     private(set) var pausedScripts: Set<String> = []
 
@@ -747,6 +748,9 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
         decidePolicyFor navigationResponse: WKNavigationResponse,
         decisionHandler: @escaping @MainActor @Sendable (WKNavigationResponsePolicy) -> Void
     ) {
+        if navigationResponse.isForMainFrame, failedNavigationURL == nil {
+            recordNavigationDiagnostic("response", status: (navigationResponse.response as? HTTPURLResponse)?.statusCode)
+        }
         if navigationResponse.isForMainFrame,
            let response = navigationResponse.response as? HTTPURLResponse,
            response.statusCode >= 400, response.expectedContentLength == 0,
@@ -858,11 +862,37 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
         webView.setMicrophoneCaptureState(.none, completionHandler: nil)
     }
 
+    private func recordNavigationDiagnostic(_ stage: String, navigation: WKNavigation? = nil,
+                                            status: Int? = nil) {
+        var record = navigationDiagnosticTrace.event(navigation, stage: stage,
+            now: ProcessInfo.processInfo.systemUptime, network: navigationNetwork.snapshot,
+            revision: navigationNetwork.revision)
+        record.httpStatus = status
+        persistNavigationDiagnostic(record)
+    }
+
+    private func persistNavigationDiagnostic(_ value: NavigationDiagnosticRecord) {
+        var record = value
+        record.webviewID = webviewId
+        record.profileID = profileId
+        record.isLoading = webView.isLoading
+        record.estimatedProgress = webView.estimatedProgress
+        record.visible = window?.occlusionState.contains(.visible) ?? false
+        NavigationDiagnosticLog.record(record)
+    }
+
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
         if !hasRenderedContent { showLoadingCover() }
         if failedNavigationURL == nil, let navigation {
             navigationDiagnosticTrace.start(navigation, now: ProcessInfo.processInfo.systemUptime,
                 network: navigationNetwork.snapshot, revision: navigationNetwork.revision)
+            recordNavigationDiagnostic("started", navigation: navigation)
+            navigationDiagnosticWatchdog?.cancel()
+            navigationDiagnosticWatchdog = Task { @MainActor [weak self] in
+                do { try await Task.sleep(for: .seconds(10)) } catch { return }
+                guard let self, self.webView.isLoading else { return }
+                self.recordNavigationDiagnostic("still_loading", navigation: navigation)
+            }
         }
         cancelMediaPermission?()
         faviconGeneration = UUID()
@@ -874,10 +904,14 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
     }
 
     func webView(_ webView: WKWebView, didReceiveServerRedirectForProvisionalNavigation navigation: WKNavigation!) {
-        if let navigation { navigationDiagnosticTrace.redirect(navigation) }
+        if let navigation {
+            navigationDiagnosticTrace.redirect(navigation)
+            recordNavigationDiagnostic("redirect", navigation: navigation)
+        }
     }
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        if failedNavigationURL == nil { recordNavigationDiagnostic("committed", navigation: navigation) }
         hasRenderedContent = false
         showLoadingCover()
         hasUnsavedInteraction = false
@@ -888,6 +922,8 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        if navigationDiagnosticTrace.isCurrent(navigation) { navigationDiagnosticWatchdog?.cancel() }
+        if failedNavigationURL == nil { recordNavigationDiagnostic("finished", navigation: navigation) }
         revealPageContent()
         guard failedNavigationURL == nil else {
             BrowserWindowController.host(of: webviewId)?.engineDidPaint(self)
@@ -925,10 +961,11 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
 
     private func handleLoadFailure(_ error: Error, navigation: WKNavigation?, provisional: Bool) {
         let nsError = error as NSError
-        guard Self.shouldShowErrorPage(domain: nsError.domain, code: nsError.code) else { return }
-        NavigationDiagnosticLog.record(navigationDiagnosticTrace.failure(navigation, error: nsError,
+        if navigationDiagnosticTrace.isCurrent(navigation) { navigationDiagnosticWatchdog?.cancel() }
+        persistNavigationDiagnostic(navigationDiagnosticTrace.failure(navigation, error: nsError,
             stage: provisional ? "before_commit" : "after_commit", now: ProcessInfo.processInfo.systemUptime,
             network: navigationNetwork.snapshot, revision: navigationNetwork.revision))
+        guard Self.shouldShowErrorPage(domain: nsError.domain, code: nsError.code) else { return }
         dismissTabPreview()
         let failedURL = Self.navigationFailureURL(nsError, requested: requestedURL, current: webView.url?.absoluteString)
         NSLog("Bowser: navigation failed for webview \(webviewId): \(nsError.domain) \(nsError.code)")
@@ -1134,6 +1171,8 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
     // The chrome/engine split, delivered by WebKit: a page crash kills only
     // Apple's WebContent process. Reload and move on; the window never blinks.
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        navigationDiagnosticWatchdog?.cancel()
+        recordNavigationDiagnostic("webcontent_terminated")
         guard pendingRestoreURL == nil else { return }
         Task { await Telemetry.shared.record(.crash(.native)) }
         NSLog("Bowser: WebContent process died for webview \(webviewId) — reloading")
