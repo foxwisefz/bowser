@@ -185,6 +185,7 @@ final class SurfaceManager {
             backing: .buffered,
             defer: false
         )
+        panel.browserOwner = main.windowController as? BrowserWindowController
         panel.backgroundColor = .clear
         panel.isOpaque = false
         panel.hasShadow = false
@@ -269,6 +270,7 @@ final class SurfaceManager {
             backing: .buffered,
             defer: false
         )
+        panel.browserOwner = main.windowController as? BrowserWindowController
         // A fully transparent window lets WindowServer route clicks through
         // transparent favicon pixels before AppKit can hit-test them.
         panel.backgroundColor = NSColor.windowBackgroundColor.withAlphaComponent(0.01)
@@ -460,6 +462,7 @@ final class SurfaceManager {
             backing: .buffered,
             defer: false
         )
+        panel.browserOwner = (activeBrowserWindow ?? NSApp.mainWindow)?.windowController as? BrowserWindowController
         panel.minSize = NSSize(width: 220, height: 60)
         panel.maxSize = NSSize(width: Self.maxPanelWidth, height: 1400)
         panel.level = .floating
@@ -574,6 +577,7 @@ final class SurfaceManager {
             }
         }
         for (id, panel) in panels where panel !== parent && belongsToActiveProfile(id) {
+            (panel as? SurfacePanel)?.browserOwner = parent.windowController as? BrowserWindowController
             let screenAttached = edgeConfigs[id]?.attach == "screen"
             if screenAttached && !screenEdgesVisible { panel.orderOut(nil); continue }
             let windowAttachedEdge = edgeConfigs[id] != nil && !screenAttached
@@ -663,7 +667,12 @@ final class SurfaceManager {
 /// Borderless panels refuse key status by default; allow it so text fields
 /// in palettes can be edited (becomesKeyOnlyIfNeeded keeps buttons from
 /// stealing focus).
-private final class SurfacePanel: NSPanel {
+@MainActor protocol BrowserOwnedPanel: AnyObject {
+    var browserOwner: BrowserWindowController? { get }
+}
+
+private final class SurfacePanel: NSPanel, BrowserOwnedPanel {
+    weak var browserOwner: BrowserWindowController?
     override var canBecomeKey: Bool { true }
 }
 

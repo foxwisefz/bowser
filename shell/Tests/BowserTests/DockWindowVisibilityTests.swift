@@ -50,9 +50,11 @@ import XCTest
         let panel = try XCTUnwrap(NSApp.windows.first { !before.contains(ObjectIdentifier($0)) } as? NSPanel)
         NotificationCenter.default.post(name: NSWindow.didMiniaturizeNotification, object: other)
         XCTAssertTrue(panel.isVisible)
+        XCTAssertTrue(AppDelegate.browserController(eventWindow: panel, keyWindow: panel, mainWindow: other) === primary)
         manager.orderAllFront(parent: other)
         XCTAssertFalse(panel.isVisible)
         manager.orderAllFront(parent: main)
         XCTAssertTrue(panel.isVisible)
+        XCTAssertTrue(AppDelegate.browserController(eventWindow: panel, keyWindow: panel, mainWindow: other) === primary)
     }
 }

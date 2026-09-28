@@ -18,6 +18,7 @@ import BowserSurfaceKit
         guard SiteAppConfiguration.current == nil else { return }
         target = controller
         let panel = ensurePanel()
+        panel.browserOwner = controller
         targetURL = controller.activeTab?.currentURLString ?? ""
         state.modScope.reset(url: targetURL, faviconPath: controller.activeTab?.faviconPath)
         state.query = ""; state.selected = 0
@@ -101,7 +102,8 @@ import BowserSurfaceKit
   }
 
 }
-private final class CommandBarPanel: NSPanel {
+private final class CommandBarPanel: NSPanel, BrowserOwnedPanel {
+  weak var browserOwner: BrowserWindowController?
   var onDismiss: (() -> Void)?
   override var canBecomeKey: Bool { true }
   override func resignKey() {

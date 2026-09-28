@@ -41,6 +41,8 @@ final class ToolbarWindowDragView: NSView {
             down = nil
             guard event.window === window, !isHiddenOrHasHiddenAncestor,
                   visibleRect.contains(convert(event.locationInWindow, from: nil)) else { return event }
+            // This monitor consumes the down before NSWindow can activate itself.
+            window.makeKeyAndOrderFront(nil)
             down = event
             return nil
         case .leftMouseDragged:

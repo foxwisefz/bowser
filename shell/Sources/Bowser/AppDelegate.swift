@@ -91,64 +91,73 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // WKWebView (as first responder) claims ⌘-key equivalents before the
         // menu ever sees them — intercept ours ahead of window dispatch.
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-            // ⌘` / ⌘⇧` by PHYSICAL key (kVK_ANSI_Grave): the typed character
-            // for that key varies by layout, and a miss here beeps.
-            if event.keyCode == 50 || event.keyCode == 10, flags == .command || flags == [.command, .shift] {
-                self?.cycleWindows(forward: flags == .command)
+            guard let self else { return event }
+            return self.handleShortcut(event)
+        }
+    }
+
+    func handleShortcut(_ event: NSEvent) -> NSEvent? {
+        let controller = Self.browserController(eventWindow: event.window, keyWindow: NSApp.keyWindow,
+                                                mainWindow: NSApp.mainWindow)
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        // ⌘` / ⌘⇧` by PHYSICAL key (kVK_ANSI_Grave): the typed character
+        // for that key varies by layout, and a miss here beeps.
+        if event.keyCode == 50 || event.keyCode == 10, flags == .command || flags == [.command, .shift] {
+            self.cycleWindows(forward: flags == .command)
+            return nil
+        }
+        if controller == nil, flags.contains(.command),
+           event.charactersIgnoringModifiers?.lowercased() != "," { return event }
+        // ⌘⇧[ / ⌘⇧] cycle tabs (Safari muscle memory; arrows would
+        // collide with select-to-line-edge in text fields).
+        if flags == [.command, .shift] {
+            switch event.charactersIgnoringModifiers?.lowercased() {
+            case "[":
+                controller?.activateAdjacentTab(offset: -1)
                 return nil
-            }
-            // ⌘⇧[ / ⌘⇧] cycle tabs (Safari muscle memory; arrows would
-            // collide with select-to-line-edge in text fields).
-            if flags == [.command, .shift] {
-                switch event.charactersIgnoringModifiers?.lowercased() {
-                case "[":
-                    self?.currentController?.activateAdjacentTab(offset: -1)
-                    return nil
-                case "]":
-                    self?.currentController?.activateAdjacentTab(offset: 1)
-                    return nil
-                case "c":
-                    self?.copyCurrentURL(nil)
-                    return nil
-                case "`", "~":
-                    self?.cycleWindows(forward: false)
-                    return nil
-                default:
-                    return event
-                }
-            }
-            guard flags == .command,
-                  let key = event.charactersIgnoringModifiers?.lowercased()
-            else { return event }
-            switch key {
-            case "k", "l":
-                guard SiteAppConfiguration.current == nil else { return event }
-                if let controller = self?.currentController {
-                    CommandBar.shared.show(for: controller)
-                }
+            case "]":
+                controller?.activateAdjacentTab(offset: 1)
                 return nil
-            case "r":
-                self?.currentController?.activeTab?.reloadPage()
+            case "c":
+                self.copyURL(from: controller)
                 return nil
-            case ",":
-                self?.openSettings(nil)
-                return nil
-            case "`":
-                self?.cycleWindows(forward: true)
-                return nil
-            case "=", "+":
-                self?.currentController?.activeTab?.zoom(direction: 1)
-                return nil
-            case "-":
-                self?.currentController?.activeTab?.zoom(direction: -1)
-                return nil
-            case "0":
-                self?.currentController?.activeTab?.zoom(direction: 0)
+            case "`", "~":
+                self.cycleWindows(forward: false)
                 return nil
             default:
                 return event
             }
+        }
+        guard flags == .command,
+              let key = event.charactersIgnoringModifiers?.lowercased()
+        else { return event }
+        switch key {
+        case "k", "l":
+            guard SiteAppConfiguration.current == nil else { return event }
+            if let controller {
+                CommandBar.shared.show(for: controller)
+            }
+            return nil
+        case "r":
+            controller?.activeTab?.reloadPage()
+            return nil
+        case ",":
+            self.openSettings(nil)
+            return nil
+        case "`":
+            self.cycleWindows(forward: true)
+            return nil
+        case "=", "+":
+            controller?.activeTab?.zoom(direction: 1)
+            return nil
+        case "-":
+            controller?.activeTab?.zoom(direction: -1)
+            return nil
+        case "0":
+            controller?.activeTab?.zoom(direction: 0)
+            return nil
+        default:
+            return event
         }
     }
 
@@ -178,8 +187,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if BrowserWindowController.all.isEmpty && externalProfilePicker.model.linkCount == 0 { openWindow() }
             return true
         }
-        currentController?.window?.deminiaturize(nil)
-        currentController?.window?.makeKeyAndOrderFront(nil)
+        let controller = currentController ?? BrowserWindowController.all.last
+        controller?.window?.deminiaturize(nil)
+        controller?.window?.makeKeyAndOrderFront(nil)
         return false
     }
 
@@ -213,14 +223,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// The window that owns new tabs: the key/main browser window, else the
-    /// most recent one. Panels (command bar, mod surfaces) are never it —
-    /// that mistake is what used to make the command bar a tab host.
+    /// Keyboard events carry their receiving window, including during focus transitions.
+    /// A key utility window must never fall through to a browser behind it.
     var currentController: BrowserWindowController? {
-        let focused = [NSApp.keyWindow, NSApp.mainWindow]
-            .compactMap { $0?.windowController as? BrowserWindowController }
-            .first
-        return focused ?? BrowserWindowController.all.last
+        let event = NSApp.currentEvent
+        let receiver = event?.type == .keyDown ? event?.window : nil
+        return Self.browserController(eventWindow: receiver, keyWindow: NSApp.keyWindow,
+                                      mainWindow: NSApp.mainWindow)
+    }
+
+    static func browserController(eventWindow: NSWindow?, keyWindow: NSWindow?,
+                                  mainWindow: NSWindow?) -> BrowserWindowController? {
+        guard let window = eventWindow ?? keyWindow ?? mainWindow else { return nil }
+        if let controller = window.windowController as? BrowserWindowController { return controller }
+        if let owned = window as? BrowserOwnedPanel { return owned.browserOwner }
+        if let parent = window.parent, let controller = parent.windowController as? BrowserWindowController {
+            return controller
+        }
+        return nil
     }
 
     /// The webview the user is looking at — the opener for anything they open.
@@ -392,7 +412,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func copyCurrentURL(_ sender: Any?) {
-        guard let url = currentController?.activeTab?.currentURLString else { return }
+        copyURL(from: currentController)
+    }
+
+    private func copyURL(from controller: BrowserWindowController?) {
+        guard let url = controller?.activeTab?.currentURLString else { return }
         let pb = NSPasteboard.general
         pb.clearContents()
         pb.setString(url, forType: .string)

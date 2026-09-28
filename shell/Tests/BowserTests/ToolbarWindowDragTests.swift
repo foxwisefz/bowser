@@ -6,7 +6,24 @@ import XCTest
 @MainActor final class ToolbarWindowDragTests: XCTestCase {
     private final class DragWindow: NSWindow {
         var dragCount = 0
+        var activationCount = 0
+        override func makeKeyAndOrderFront(_ sender: Any?) { activationCount += 1 }
         override func performDrag(with event: NSEvent) { dragCount += 1 }
+    }
+
+    func testMouseDownActivatesToolbarWindowBeforeItIsConsumed() throws {
+        let window = DragWindow(contentRect: NSRect(x: 0, y: 0, width: 340, height: 32),
+                                styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let view = ToolbarWindowDragView(frame: NSRect(x: 0, y: 0, width: 340, height: 32))
+        window.contentView = view
+        defer { window.close() }
+        let event = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown, location: NSPoint(x: 20, y: 16),
+            modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber, context: nil,
+            eventNumber: 1, clickCount: 1, pressure: 1))
+        XCTAssertNil(view.handle(event))
+        XCTAssertEqual(window.activationCount, 1)
+        XCTAssertEqual(window.dragCount, 0)
     }
 
     func testFallbackDragsAcrossControlsAndPreservesClicks() async throws {
