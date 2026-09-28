@@ -1,64 +1,41 @@
 import AppKit
 import QuartzCore
 
-/// A composited native canvas while WebKit has no page pixels. Never delays first paint.
+/// A flowing native canvas while WebKit has no page pixels. Never delays first paint.
 final class PageLoadingView: NSView {
     private let visual = CALayer()
-    private let aura = CAGradientLayer()
-    private let core = CAGradientLayer()
+    private var clouds: [CAGradientLayer] = []
     private var ribbons: [CAGradientLayer] = []
+    private var masks: [CAShapeLayer] = []
     var loading = false { didSet { updateMotion() } }
-    var isAnimating: Bool { ribbons.first?.animation(forKey: "orbit") != nil }
+    var isAnimating: Bool { masks.first?.animation(forKey: "flow") != nil }
 
     override init(frame: NSRect) {
         super.init(frame: frame)
         wantsLayer = true
+        layer?.masksToBounds = true
         setAccessibilityElement(true)
         setAccessibilityRole(.progressIndicator)
         setAccessibilityLabel("Loading page")
-        visual.bounds = CGRect(x: 0, y: 0, width: 160, height: 160)
         layer?.addSublayer(visual)
-
-        aura.type = .radial
-        aura.frame = visual.bounds
-        aura.startPoint = CGPoint(x: 0.5, y: 0.5)
-        aura.endPoint = CGPoint(x: 1, y: 1)
-        aura.locations = [0, 0.3, 1]
-        visual.addSublayer(aura)
-
-        for index in 0..<3 {
+        for _ in 0..<3 {
+            let cloud = CAGradientLayer()
+            cloud.type = .radial
+            cloud.startPoint = CGPoint(x: 0.5, y: 0.5)
+            cloud.endPoint = CGPoint(x: 1, y: 1)
+            cloud.locations = [0, 0.35, 1]
+            visual.addSublayer(cloud)
+            clouds.append(cloud)
             let ribbon = CAGradientLayer()
-            ribbon.type = .conic
-            ribbon.frame = CGRect(x: 43, y: 43, width: 74, height: 74)
-            ribbon.startPoint = CGPoint(x: 0.5, y: 0.5)
-            ribbon.endPoint = CGPoint(x: 1, y: 0.5)
-            ribbon.locations = [0, 0.3, 0.65, 1]
+            ribbon.startPoint = CGPoint(x: 0, y: 0.2)
+            ribbon.endPoint = CGPoint(x: 1, y: 0.8)
+            ribbon.locations = [0, 0.25, 0.55, 0.8, 1]
             let mask = CAShapeLayer()
-            mask.frame = ribbon.bounds
-            let path = CGMutablePath()
-            path.move(to: CGPoint(x: 37, y: 5))
-            path.addCurve(to: CGPoint(x: 69, y: 39), control1: CGPoint(x: 59, y: 0), control2: CGPoint(x: 75, y: 20))
-            path.addCurve(to: CGPoint(x: 30, y: 66), control1: CGPoint(x: 62, y: 58), control2: CGPoint(x: 48, y: 73))
-            path.addCurve(to: CGPoint(x: 37, y: 5), control1: CGPoint(x: 2, y: 59), control2: CGPoint(x: 4, y: 13))
-            path.closeSubpath()
-            mask.path = path
-            mask.fillColor = NSColor.clear.cgColor
-            mask.strokeColor = NSColor.white.cgColor
-            mask.lineWidth = index == 0 ? 3 : 1.5
             ribbon.mask = mask
-            ribbon.transform = CATransform3DMakeRotation(CGFloat(index) * 2.1, 0, 0, 1)
-            ribbon.opacity = index == 0 ? 1 : 0.65
             visual.addSublayer(ribbon)
             ribbons.append(ribbon)
+            masks.append(mask)
         }
-
-        core.type = .radial
-        core.frame = CGRect(x: 58, y: 58, width: 44, height: 44)
-        core.cornerRadius = 22
-        core.startPoint = CGPoint(x: 0.32, y: 0.28)
-        core.endPoint = CGPoint(x: 1, y: 1)
-        core.locations = [0, 0.38, 0.8, 1]
-        visual.addSublayer(core)
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(updateMotion),
             name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(updateMotion),
@@ -72,56 +49,95 @@ final class PageLoadingView: NSView {
         NSWorkspace.shared.notificationCenter.removeObserver(self)
     }
 
+    private func wave(_ index: Int, alternate: Bool) -> CGPath {
+        let w = bounds.width, h = bounds.height
+        let baseline = CGFloat(index) * 0.085 + 0.28
+        let lift: CGFloat = alternate ? 0.24 : -0.12
+        let path = CGMutablePath()
+        path.move(to: CGPoint(x: -w * 0.15, y: h * baseline))
+        path.addCurve(to: CGPoint(x: w * 1.15, y: h * (baseline + 0.2)),
+                      control1: CGPoint(x: w * 0.3, y: h * (baseline + 0.55 + lift)),
+                      control2: CGPoint(x: w * 0.58, y: h * (baseline - 0.32 - lift)))
+        path.addCurve(to: CGPoint(x: -w * 0.15, y: h * (baseline - 0.05)),
+                      control1: CGPoint(x: w * 0.62, y: h * (baseline - 0.04 - lift)),
+                      control2: CGPoint(x: w * 0.28, y: h * (baseline + 0.12 + lift)))
+        path.closeSubpath()
+        return path
+    }
+
     override func layout() {
         super.layout()
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        visual.position = CGPoint(x: bounds.midX, y: bounds.midY)
+        let resized = visual.bounds.size != bounds.size
+        visual.frame = bounds
+        for index in 0..<3 {
+            clouds[index].frame = CGRect(x: bounds.width * (CGFloat(index) * 0.38 - 0.35),
+                                         y: bounds.height * (index == 1 ? -0.2 : 0.05),
+                                         width: bounds.width * 0.95, height: bounds.height * 0.95)
+            ribbons[index].frame = visual.bounds
+            masks[index].frame = visual.bounds
+            masks[index].path = wave(index, alternate: false)
+            if resized { masks[index].removeAllAnimations(); clouds[index].removeAllAnimations() }
+        }
         CATransaction.commit()
+        updateMotion()
     }
 
     override var wantsUpdateLayer: Bool { true }
     override func updateLayer() {
         let dark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        let violet = NSColor(srgbRed: 0.48, green: 0.32, blue: 1, alpha: 1)
-        let cyan = NSColor(srgbRed: 0.08, green: 0.76, blue: 0.95, alpha: 1)
-        let pink = NSColor(srgbRed: 0.95, green: 0.35, blue: 0.72, alpha: 1)
+        let violet = NSColor(srgbRed: 0.43, green: 0.26, blue: 0.96, alpha: 1)
+        let cyan = NSColor(srgbRed: 0.02, green: 0.8, blue: 0.86, alpha: 1)
+        let pink = NSColor(srgbRed: 0.95, green: 0.26, blue: 0.58, alpha: 1)
+        let colors = [cyan, violet, pink]
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
-        aura.colors = [violet.withAlphaComponent(dark ? 0.22 : 0.12).cgColor,
-                       cyan.withAlphaComponent(dark ? 0.07 : 0.04).cgColor, violet.withAlphaComponent(0).cgColor]
-        core.colors = [NSColor.white.withAlphaComponent(0.95).cgColor, cyan.cgColor, violet.cgColor, pink.cgColor]
-        ribbons.forEach { $0.colors = [cyan.cgColor, violet.cgColor, pink.cgColor, cyan.cgColor] }
+        layer?.backgroundColor = (dark
+            ? NSColor(srgbRed: 0.035, green: 0.045, blue: 0.09, alpha: 1)
+            : NSColor(srgbRed: 0.965, green: 0.97, blue: 0.99, alpha: 1)).cgColor
+        for index in 0..<3 {
+            let color = colors[index]
+            clouds[index].colors = [color.withAlphaComponent(dark ? 0.32 : 0.18).cgColor,
+                                     color.withAlphaComponent(dark ? 0.12 : 0.07).cgColor,
+                                     color.withAlphaComponent(0).cgColor]
+            ribbons[index].colors = [color.withAlphaComponent(0).cgColor,
+                color.withAlphaComponent(dark ? 0.45 : 0.22).cgColor,
+                colors[(index + 1) % 3].withAlphaComponent(dark ? 0.68 : 0.34).cgColor,
+                colors[(index + 2) % 3].withAlphaComponent(dark ? 0.35 : 0.18).cgColor,
+                color.withAlphaComponent(0).cgColor]
+        }
         CATransaction.commit()
     }
 
     @objc private func updateMotion() {
         visual.isHidden = !loading
-        let animate = loading && window != nil && window?.occlusionState.contains(.visible) == true &&
+        let animate = loading && window?.occlusionState.contains(.visible) == true &&
             !isHiddenOrHasHiddenAncestor && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         guard animate else {
-            ribbons.forEach { $0.removeAllAnimations() }
-            aura.removeAllAnimations()
+            masks.forEach { $0.removeAllAnimations() }
+            clouds.forEach { $0.removeAllAnimations() }
             return
         }
-        guard !isAnimating else { return }
-        for (index, ribbon) in ribbons.enumerated() {
-            let rotation = CABasicAnimation(keyPath: "transform.rotation.z")
-            rotation.fromValue = Double(index) * 2.1
-            rotation.toValue = Double(index) * 2.1 + (index == 1 ? -2 : 2) * Double.pi
-            rotation.duration = [2.4, 3.8, 5.2][index]
-            rotation.repeatCount = .infinity
-            ribbon.add(rotation, forKey: "orbit")
+        guard !isAnimating, bounds.width > 0, bounds.height > 0 else { return }
+        for index in 0..<3 {
+            let flow = CABasicAnimation(keyPath: "path")
+            flow.fromValue = wave(index, alternate: false)
+            flow.toValue = wave(index, alternate: true)
+            flow.duration = [2.6, 3.3, 4.1][index]
+            flow.autoreverses = true
+            flow.repeatCount = .infinity
+            flow.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            masks[index].add(flow, forKey: "flow")
+            let drift = CABasicAnimation(keyPath: "transform.translation.x")
+            drift.fromValue = -bounds.width * 0.08
+            drift.toValue = bounds.width * 0.08
+            drift.duration = [3.1, 4.2, 3.7][index]
+            drift.autoreverses = true
+            drift.repeatCount = .infinity
+            drift.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            clouds[index].add(drift, forKey: "drift")
         }
-        let breath = CABasicAnimation(keyPath: "opacity")
-        breath.fromValue = 0.55
-        breath.toValue = 1
-        breath.duration = 1.6
-        breath.autoreverses = true
-        breath.repeatCount = .infinity
-        breath.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-        aura.add(breath, forKey: "breath")
     }
 
     override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); updateMotion() }
