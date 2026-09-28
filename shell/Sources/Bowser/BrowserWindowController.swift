@@ -108,6 +108,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         if !isSiteApp {
         let fallback = NSHostingView(rootView: AnyView(clusterView()))
         let hosting = NativeModuleSlot(fallback: fallback)
+        hosting.identifier = ToolbarWindowDragView.regionIdentifier
         hosting.interactionInProgress = { TabDragPreview.shared.source != nil }
         hosting.onAction = { [weak self] event in self?.nativeToolbarAction(event) }
         nativeToolbar = hosting

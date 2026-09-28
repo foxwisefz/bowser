@@ -8,6 +8,7 @@ struct ToolbarWindowDragHandle: NSViewRepresentable {
 }
 
 final class ToolbarWindowDragView: NSView {
+    static let regionIdentifier = NSUserInterfaceItemIdentifier("bowser.toolbar.controls")
     private var monitor: Any?
     private var down: NSEvent?
 
@@ -34,13 +35,29 @@ final class ToolbarWindowDragView: NSView {
     override var mouseDownCanMoveWindow: Bool { false }
     override func mouseDown(with event: NSEvent) {}
 
+    private func ownsHit(at point: NSPoint) -> Bool {
+        // SwiftUI's background view can outgrow its native host. Its bounds
+        // alone are not authority to intercept clicks elsewhere in the window.
+        var ancestor: NSView? = self
+        while let view = ancestor, view.identifier != Self.regionIdentifier { ancestor = view.superview }
+        guard let region = ancestor, !region.isHiddenOrHasHiddenAncestor,
+              region.visibleRect.contains(region.convert(point, from: nil)) else { return false }
+        var root = region
+        while true {
+            guard root.alphaValue > 0.01 else { return false }
+            guard let parent = root.superview else { break }
+            root = parent
+        }
+        guard let hit = root.hitTest(root.convert(point, from: nil)) else { return false }
+        return hit === region || hit.isDescendant(of: region)
+    }
+
     func handle(_ event: NSEvent) -> NSEvent? {
-        guard let window else { down = nil; return event }
+        guard let window, event.window === window else { down = nil; return event }
         switch event.type {
         case .leftMouseDown:
             down = nil
-            guard event.window === window, !isHiddenOrHasHiddenAncestor,
-                  visibleRect.contains(convert(event.locationInWindow, from: nil)) else { return event }
+            guard !isHiddenOrHasHiddenAncestor, ownsHit(at: event.locationInWindow) else { return event }
             // This monitor consumes the down before NSWindow can activate itself.
             window.makeKeyAndOrderFront(nil)
             down = event

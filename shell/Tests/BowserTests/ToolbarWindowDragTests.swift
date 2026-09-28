@@ -16,6 +16,7 @@ import XCTest
                                 styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         let view = ToolbarWindowDragView(frame: NSRect(x: 0, y: 0, width: 340, height: 32))
+        view.identifier = ToolbarWindowDragView.regionIdentifier
         window.contentView = view
         defer { window.close() }
         let event = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown, location: NSPoint(x: 20, y: 16),
@@ -32,6 +33,41 @@ import XCTest
         let toolbar = CmdCluster(profileID: "default", reveal: ChromeReveal(), tint: nil,
             openBar: { commands += 1 }, goBack: {}, goForward: {}, reload: {}, modClick: { _ in }, onHoverChanged: { _ in })
         try await checkDragRegions(NSHostingView(rootView: toolbar), commands: { commands })
+    }
+
+    func testPageAndOccludedChromeDragsAreNotIntercepted() throws {
+        let window = DragWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 400),
+                                styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let page = NSView(frame: NSRect(x: 0, y: 0, width: 600, height: 400))
+        window.contentView = page
+        let region = NSView(frame: NSRect(x: 20, y: 350, width: 200, height: 24))
+        region.identifier = ToolbarWindowDragView.regionIdentifier
+        page.addSubview(region)
+        // Reproduce an oversized SwiftUI background extending down into the page.
+        let drag = ToolbarWindowDragView(frame: NSRect(x: 0, y: -350, width: 500, height: 400))
+        region.addSubview(drag)
+        defer { window.close() }
+        func gesture(_ point: NSPoint, consumed: Bool) throws {
+            for (type, offset): (NSEvent.EventType, CGFloat) in [(.leftMouseDown, 0), (.leftMouseDragged, 10)] {
+                let event = try XCTUnwrap(NSEvent.mouseEvent(with: type,
+                    location: NSPoint(x: point.x + offset, y: point.y), modifierFlags: [], timestamp: 0,
+                    windowNumber: window.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 1))
+                XCTAssertEqual(drag.handle(event) == nil, consumed)
+            }
+        }
+        try gesture(NSPoint(x: 50, y: 100), consumed: false)
+        try gesture(NSPoint(x: 400, y: 360), consumed: false)
+        XCTAssertEqual(window.dragCount, 0)
+        try gesture(NSPoint(x: 50, y: 360), consumed: true)
+        XCTAssertEqual(window.dragCount, 1)
+        let overlay = NSView(frame: region.frame)
+        page.addSubview(overlay, positioned: .above, relativeTo: region)
+        try gesture(NSPoint(x: 50, y: 360), consumed: false)
+        overlay.removeFromSuperview()
+        region.alphaValue = 0
+        try gesture(NSPoint(x: 50, y: 360), consumed: false)
+        XCTAssertEqual(window.dragCount, 1)
     }
 
     func testNativeDragsAcrossControlsAndPreservesClicks() async throws {
@@ -53,6 +89,7 @@ import XCTest
     }
 
     private func checkDragRegions(_ view: NSView, commands: () -> Int) async throws {
+        view.identifier = ToolbarWindowDragView.regionIdentifier
         let window = DragWindow(contentRect: NSRect(x: 100, y: 100, width: 340, height: 32),
             styleMask: [.borderless], backing: .buffered, defer: false)
         window.contentView = view
