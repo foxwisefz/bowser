@@ -12,6 +12,10 @@ class GateTests(unittest.TestCase):
         self.assertEqual(metrics['load']['p50'], 2)
         self.assertEqual(metrics['load']['p95'], 101)
         self.assertTrue(failures)
+    def test_failure_preserves_sample_order_without_dropping_outlier(self):
+        metrics, failures = evaluate(self.rows([1300, 196, 180, 210, 190]), self.budgets)
+        self.assertEqual(metrics['load']['p95'], 1300)
+        self.assertIn('1300.00, 196.00, 180.00, 210.00, 190.00', failures[0])
     def test_relative_regression_with_noise_floor(self):
         baseline = {'load': {'p95': 20}}
         self.assertFalse(evaluate(self.rows([23]*3), self.budgets, baseline)[1])

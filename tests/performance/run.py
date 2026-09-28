@@ -207,7 +207,11 @@ def main():
             for name in ('A', 'B'):
                 command([ROOT / 'bin/build-native-toolbar', work / f'{name}.bundle'], output / 'toolbar-build.log', {**ENV, 'BOWSER_SIGN_IDENTITY': '-'})
             home = work / 'swift-home'; home.mkdir()
-            command(['swift', 'test', '-c', 'release', '--package-path', 'shell', '--filter', 'BrowserPerformanceTests', '--xunit-output', output / 'swift-results.xml'], output / 'swift.log', {**ENV, 'BOWSER_HOME': str(home), 'BOWSER_PERF': '1', 'BOWSER_PERF_RESULTS': str(raw), 'BOWSER_PERF_TOOLBAR_A': str(work / 'A.bundle'), 'BOWSER_PERF_TOOLBAR_B': str(work / 'B.bundle')})
+            try:
+                command(['swift', 'test', '-c', 'release', '--package-path', 'shell', '--filter', 'BrowserPerformanceTests', '--xunit-output', output / 'swift-results.xml'], output / 'swift.log', {**ENV, 'BOWSER_HOME': str(home), 'BOWSER_PERF': '1', 'BOWSER_PERF_RESULTS': str(raw), 'BOWSER_PERF_TOOLBAR_A': str(work / 'A.bundle'), 'BOWSER_PERF_TOOLBAR_B': str(work / 'B.bundle')})
+            finally:
+                if (home / 'diagnostics').exists():
+                    shutil.copytree(home / 'diagnostics', output / 'navigation-diagnostics')
     except Exception:
         failures.append(traceback.format_exc())
     baseline = None

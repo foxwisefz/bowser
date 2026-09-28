@@ -26,5 +26,5 @@ def evaluate(rows, budgets, baseline=None):
             limit = min(limit, max(old * 1.25, old + budget['noise_floor']))
         metrics[name]['limit'] = limit
         if p95 > limit:
-            failures.append(f'{name}: p95 {p95:.2f} exceeds {limit:.2f}')
+            failures.append(f'{name}: p95 {p95:.2f} exceeds {limit:.2f}; samples in collection order: ' + ', '.join(f'{value:.2f}' for value in samples[name]))
     return metrics, failures

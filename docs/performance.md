@@ -61,6 +61,9 @@ Change the cache version when intentionally changing the workload definition.
 The desktop release workflow also enforces absolute budgets against its freshly
 built stage before publication. CI uploads raw samples, p50/p95 summaries,
 XCTest results, environment details, and build/runtime logs, including failures.
+Navigation diagnostics are retained before the disposable home is removed.
+Budget failures print samples in collection order so a slow first load remains
+visible rather than disappearing into an aggregate.
 `--baseline PATH/report.json` enables the same comparison locally. The output
 path must be new so previous samples cannot accidentally make a run pass.
 
