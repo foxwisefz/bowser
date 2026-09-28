@@ -246,7 +246,11 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
                 ])
             }
         }
-        mediaObservations = [webView.observe(\.cameraCaptureState) { [weak self] _, _ in
+        mediaObservations = [webView.observe(\.isLoading) { [weak self] _, _ in
+            MainActor.assumeIsolated {
+                if let self { BrowserWindowController.host(of: self.webviewId)?.refreshToolbarLoading() }
+            }
+        }, webView.observe(\.cameraCaptureState) { [weak self] _, _ in
             Task { @MainActor in if let self { BrowserWindowController.host(of: self.webviewId)?.syncModButtons() } }
         }, webView.observe(\.microphoneCaptureState) { [weak self] _, _ in
             Task { @MainActor in if let self { BrowserWindowController.host(of: self.webviewId)?.syncModButtons() } }

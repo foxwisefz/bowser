@@ -9,9 +9,31 @@ import XCTest
         override var occlusionState: NSWindow.OcclusionState { visibleForTest ? [.visible] : [] }
     }
 
+    func testGhostFollowsActiveTabAndStopsWhenNavigationStops() async throws {
+        let server = try BrowserFixtureServer()
+        defer { server.stop() }
+        try await wait { server.origin != nil }
+        let controller = BrowserWindowController(profile: .defaultProfile)
+        defer { controller.window?.close() }
+        let first = try XCTUnwrap(controller.activeTab)
+        first.load(urlString: try XCTUnwrap(server.origin) + "/slow-image")
+        try await wait { controller.loadingGhost.loading }
+        try await wait { first.hasRenderedContent }
+        XCTAssertTrue(controller.loadingGhost.loading, "Ghost continues while subresources load")
+        let second = controller.openTab()
+        XCTAssertFalse(controller.loadingGhost.loading, "Background loads do not animate the active tab")
+        controller.activate(first)
+        XCTAssertTrue(controller.loadingGhost.loading)
+        first.webView.stopLoading()
+        try await wait { !controller.loadingGhost.loading }
+        XCTAssertTrue(controller.loadingGhost.isHidden)
+        controller.activate(second)
+        XCTAssertFalse(controller.loadingGhost.loading)
+    }
+
     func testLoaderStopsWhenHiddenAndDetached() async throws {
         _ = NSApplication.shared
-        let view = PageLoadingView(frame: NSRect(x: 0, y: 0, width: 640, height: 420))
+        let view = ToolbarLoadingGhost(frame: NSRect(x: 0, y: 0, width: 16, height: 18))
         view.loading = true
         XCTAssertFalse(view.isAnimating)
         // WindowServer can report every test window occluded on a locked desktop.
@@ -35,24 +57,6 @@ import XCTest
         view.loading = true
         view.removeFromSuperview()
         XCTAssertFalse(view.isAnimating)
-    }
-
-    func testRenderLoader() throws {
-        guard let directory = ProcessInfo.processInfo.environment["BOWSER_LOADER_RENDER"] else {
-            throw XCTSkip("Set BOWSER_LOADER_RENDER to render native loading states")
-        }
-        _ = NSApplication.shared
-        for (name, appearance) in [("light", NSAppearance.Name.aqua), ("dark", NSAppearance.Name.darkAqua)] {
-            let view = PageLoadingView(frame: NSRect(x: 0, y: 0, width: 640, height: 420))
-            view.appearance = NSAppearance(named: appearance)
-            view.loading = true
-            view.layoutSubtreeIfNeeded()
-            view.updateLayer()
-            let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
-            view.cacheDisplay(in: view.bounds, to: bitmap)
-            try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
-                .write(to: URL(fileURLWithPath: directory).appendingPathComponent("loader-\(name).png"))
-        }
     }
 
     func testInitialAndSlowResponseAreCoveredUntilContentRenders() async throws {
