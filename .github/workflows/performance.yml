@@ -20,11 +20,12 @@ jobs:
     env:
       HOMEBREW_NO_AUTO_UPDATE: '1'
       BOWSER_TELEMETRY_DISABLED: '1'
-      BOWSER_STAGE_FILE: ${{ runner.temp }}/performance-stage
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      - name: Set performance stage path
+        run: echo "BOWSER_STAGE_FILE=$RUNNER_TEMP/performance-stage" >> "$GITHUB_ENV"
       - name: Install Elixir
         run: brew install elixir
       - name: Test budget enforcement
