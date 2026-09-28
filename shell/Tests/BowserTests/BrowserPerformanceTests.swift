@@ -111,11 +111,24 @@ import XCTest
             let view = EngineView(frame: NSRect(x: 0, y: 0, width: 1000, height: 700), configuration: configuration(store))
             defer { view.tearDown(); view.removeFromSuperview() }
             window.contentView = view
-            try await timed("cold_navigation_first_content_ms") {
-                view.load(urlString: origin + "/cold-\(index)")
-                try await wait { view.hasRenderedContent }
-            }
+            let navigationStart = ProcessInfo.processInfo.systemUptime
+            view.load(urlString: origin + "/cold-\(index)")
+            try await wait { view.hasRenderedContent }
+            let firstContent = (ProcessInfo.processInfo.systemUptime - navigationStart) * 1000
+            try record("cold_navigation_first_content_ms", firstContent)
             try await wait { !view.webView.isLoading }
+            // Collect only after the timed workload; never warm up or drop the
+            // first fresh-store navigation to make its budget pass.
+            let timing = try await view.webView.evaluateJavaScript("""
+                JSON.stringify(performance.getEntriesByType('navigation').map(n => ({
+                  fetchStart: n.fetchStart, domainLookupStart: n.domainLookupStart,
+                  domainLookupEnd: n.domainLookupEnd, connectStart: n.connectStart,
+                  connectEnd: n.connectEnd, requestStart: n.requestStart,
+                  responseStart: n.responseStart, responseEnd: n.responseEnd,
+                  domInteractive: n.domInteractive, loadEventEnd: n.loadEventEnd
+                })))
+                """) as? String ?? "unavailable"
+            print("Cold navigation sample \(index + 1), webview \(view.webviewId): first-content=\(firstContent)ms; navigation timing=\(timing)")
             let cached = origin + "/cached-\(index)"
             view.load(urlString: cached)
             try await wait { !view.webView.isLoading && view.webView.url?.absoluteString == cached }

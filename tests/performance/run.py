@@ -223,6 +223,10 @@ def main():
     for name, value in metrics.items():
         lines.append(f'| {name} | {value["samples"]} | {value["p50"]:.2f} | {value["p95"]:.2f} | {value["limit"]:.2f} |')
     lines += ['', 'PASS' if not failures else 'FAIL', *failures]
+    swift_log = output / 'swift.log'
+    if swift_log.exists():
+        lines += ['', *[line for line in swift_log.read_text(errors='replace').splitlines()
+                        if line.startswith('Cold navigation sample ')]]
     summary = '\n'.join(lines) + '\n'; (output / 'summary.md').write_text(summary)
     print(summary)
     if os.environ.get('GITHUB_STEP_SUMMARY'):
