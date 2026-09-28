@@ -4,6 +4,57 @@ import XCTest
 @testable import Bowser
 
 @MainActor final class PageLoadingTests: XCTestCase {
+    private final class VisibilityWindow: NSWindow {
+        var visibleForTest = true
+        override var occlusionState: NSWindow.OcclusionState { visibleForTest ? [.visible] : [] }
+    }
+
+    func testLoaderStopsWhenHiddenAndDetached() async throws {
+        _ = NSApplication.shared
+        let view = PageLoadingView(frame: NSRect(x: 0, y: 0, width: 640, height: 420))
+        view.loading = true
+        XCTAssertFalse(view.isAnimating)
+        // WindowServer can report every test window occluded on a locked desktop.
+        let window = VisibilityWindow(contentRect: view.bounds, styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = view
+        defer { window.close() }
+        if !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            try await wait { view.isAnimating }
+        }
+        window.visibleForTest = false
+        NotificationCenter.default.post(name: NSWindow.didChangeOcclusionStateNotification, object: window)
+        XCTAssertFalse(view.isAnimating)
+        window.visibleForTest = true
+        NotificationCenter.default.post(name: NSWindow.didChangeOcclusionStateNotification, object: window)
+        view.isHidden = true
+        XCTAssertFalse(view.isAnimating)
+        view.isHidden = false
+        view.loading = false
+        XCTAssertFalse(view.isAnimating)
+        view.loading = true
+        view.removeFromSuperview()
+        XCTAssertFalse(view.isAnimating)
+    }
+
+    func testRenderLoader() throws {
+        guard let directory = ProcessInfo.processInfo.environment["BOWSER_LOADER_RENDER"] else {
+            throw XCTSkip("Set BOWSER_LOADER_RENDER to render native loading states")
+        }
+        _ = NSApplication.shared
+        for (name, appearance) in [("light", NSAppearance.Name.aqua), ("dark", NSAppearance.Name.darkAqua)] {
+            let view = PageLoadingView(frame: NSRect(x: 0, y: 0, width: 640, height: 420))
+            view.appearance = NSAppearance(named: appearance)
+            view.loading = true
+            view.layoutSubtreeIfNeeded()
+            view.updateLayer()
+            let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+            view.cacheDisplay(in: view.bounds, to: bitmap)
+            try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+                .write(to: URL(fileURLWithPath: directory).appendingPathComponent("loader-\(name).png"))
+        }
+    }
+
     func testInitialAndSlowResponseAreCoveredUntilContentRenders() async throws {
         try await withPage { view, origin in
             XCTAssertTrue(view.isShowingLoadingCover)
