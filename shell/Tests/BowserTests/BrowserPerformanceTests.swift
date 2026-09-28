@@ -107,7 +107,7 @@ import XCTest
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 700), styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false; window.orderFront(nil)
         defer { window.close() }
-        for index in 0..<samples {
+        for index in 0...samples {
             let view = EngineView(frame: NSRect(x: 0, y: 0, width: 1000, height: 700), configuration: configuration(store))
             defer { view.tearDown(); view.removeFromSuperview() }
             window.contentView = view
@@ -115,7 +115,7 @@ import XCTest
             view.load(urlString: origin + "/cold-\(index)")
             try await wait { view.hasRenderedContent }
             let firstContent = (ProcessInfo.processInfo.systemUptime - navigationStart) * 1000
-            try record("cold_navigation_first_content_ms", firstContent)
+            try record(index == 0 ? "fresh_profile_first_content_ms" : "cold_navigation_first_content_ms", firstContent)
             try await wait { !view.webView.isLoading }
             // Collect only after the timed workload; never warm up or drop the
             // first fresh-store navigation to make its budget pass.
@@ -129,6 +129,7 @@ import XCTest
                 })))
                 """) as? String ?? "unavailable"
             print("Cold navigation sample \(index + 1), webview \(view.webviewId): first-content=\(firstContent)ms; navigation timing=\(timing)")
+            if index == 0 { continue }
             let cached = origin + "/cached-\(index)"
             view.load(urlString: cached)
             try await wait { !view.webView.isLoading && view.webView.url?.absoluteString == cached }
@@ -235,10 +236,10 @@ import XCTest
         defer { slot.retire(); window.close() }
         // Live upgrade starts with the existing toolbar already mounted.
         XCTAssertTrue(slot.install(try NativeModuleLibrary(bundle: URL(fileURLWithPath: paths[0]), team: nil, bundled: true)))
-        for index in 0..<samples {
+        for index in 0...samples {
             try await timed("native_toolbar_upgrade_ms") {
                 let library = try NativeModuleLibrary(bundle: URL(fileURLWithPath: paths[(index + 1) % 2]), team: nil, bundled: true)
-                try await timed("native_toolbar_adopt_ms") {
+                try await timed(index == 0 ? "native_toolbar_first_adopt_ms" : "native_toolbar_adopt_ms") {
                     XCTAssertTrue(slot.install(library))
                     XCTAssertEqual(slot.build, library.build)
                 }

@@ -75,7 +75,7 @@
     "noise_floor": 5
   },
   "native_toolbar_upgrade_ms": {
-    "min_samples": 5,
+    "min_samples": 6,
     "max_p95": 750,
     "noise_floor": 50
   },
@@ -93,5 +93,15 @@
     "min_samples": 5,
     "max_p95": 16.67,
     "noise_floor": 2
+  },
+  "fresh_profile_first_content_ms": {
+    "min_samples": 1,
+    "max_p95": 2000,
+    "noise_floor": 100
+  },
+  "native_toolbar_first_adopt_ms": {
+    "min_samples": 1,
+    "max_p95": 50,
+    "noise_floor": 5
   }
 }

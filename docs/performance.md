@@ -20,10 +20,11 @@ unlocked; visible WebKit windows are required for paint and animation callbacks.
 | Backend startup, 3 fresh processes | Spawn the shipped backend helper to agent socket and initialized fixture mod. Uses a synthetic native peer. |
 | Live backend upgrade, 3 | Candidate preparation to update acknowledgment, with a separate freeze/handoff pause measurement. Checks mod state and native connection survive. |
 | Offline upgrade, 3 | Verified backup and activation with 32 MiB in 128 persistent files; checks backup, completion and preserved previous pair. Uses minimal bundle/runtime contents; download and app relaunch are excluded. |
-| Live toolbar upgrade, 5 | Verify/load/adopt alternate signed native modules into a visible slot, plus a separate main-thread adoption budget. Signature verification normally runs off the main thread. |
+| Live toolbar upgrade, 6 | Verify/load/adopt alternate signed native modules into a visible slot. First adoption of the replacement generation has its own budget; the next five alternate already-used generations with a separate main-thread adoption budget. Signature verification normally runs off the main thread. |
 | New tab, 5 | Create, activate and lay out a blank tab. |
 | 100 restored tabs, 3 batches | Construct deferred tabs; assert no background navigation starts. Also records native host resident memory. |
-| Cold navigation, 5 | Fresh webview and uncached loopback URL to native page reveal (visible layout, with load-finish fallback). |
+| Fresh-profile navigation, 1 | First navigation in a unique persistent WebKit store to native page reveal. Includes first-use work after navigation begins; store/view construction is outside the interval. |
+| Cold navigation, 5 | Fresh webview in the initialized store and uncached loopback URL to native page reveal (visible layout, with load-finish fallback). |
 | Cached tab, 5 | Mount a deferred fresh webview to native page reveal; assert no extra HTTP request. |
 | Loaded tab switch, 30 | Activate and lay out tabs in an eight-tab loaded session. |
 | Sleeping tab, 5 | Mount with cached preview/loading cover, then separately wait for native page reveal. |
@@ -46,6 +47,15 @@ comparisons; they cannot reproduce remote network congestion or every website.
 
 `tests/performance/budgets.json` defines required sample counts, absolute p95
 limits, and noise allowances. `_ms` metrics use milliseconds; `_mb` uses MiB.
+Fresh-profile first content has a 2,000 ms cap and first-generation toolbar
+adoption a 50 ms cap. These explicit first-use allowances are separate from the
+unchanged 750 ms uncached-navigation and 16.67 ms repeat-adoption caps. First-use
+measurements are required single samples, not discarded warmups; their reported
+p50 and p95 both equal that observation. This separation does not make a 50 ms
+main-thread adoption frame-smooth. All six toolbar upgrades also retain the
+750 ms total-upgrade gate. Baseline schema/cache version 2 isolates these workloads
+from reports that mixed initialization and repeat use.
+
 The evaluator uses nearest-rank percentiles. Missing workloads, short runs,
 invalid values, failed behavioral assertions, and exceeded limits all fail.
 Tests are opt-in (`BOWSER_PERF=1`) and run serially in the release configuration.

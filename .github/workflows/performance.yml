@@ -38,8 +38,8 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: .performance-baseline/report.json
-          key: performance-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
-          restore-keys: performance-v1-${{ runner.os }}-${{ runner.arch }}-
+          key: performance-v2-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
+          restore-keys: performance-v2-${{ runner.os }}-${{ runner.arch }}-
       - name: Build the shared release stage
         env:
           BOWSER_SIGN_IDENTITY: '-'
@@ -59,7 +59,7 @@ jobs:
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         with:
           path: .performance-baseline/report.json
-          key: performance-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
+          key: performance-v2-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
       - name: Upload timings and diagnostics
         if: always()
         uses: actions/upload-artifact@v4

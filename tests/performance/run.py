@@ -176,7 +176,7 @@ def main():
     raw = output / 'samples.jsonl'; raw.touch()
     def record(metric, value):
         with raw.open('a') as file: file.write(json.dumps(dict(metric=metric, value=value)) + '\n')
-    metadata = dict(schema=1, os=platform.mac_ver()[0], arch=platform.machine(), cpu=subprocess.check_output(['sysctl', '-n', 'machdep.cpu.brand_string'], text=True).strip(), swift=subprocess.check_output(['swift', '--version'], text=True).strip(), source=os.environ.get('GITHUB_SHA', 'local'), timestamp=time.time())
+    metadata = dict(schema=2, os=platform.mac_ver()[0], arch=platform.machine(), cpu=subprocess.check_output(['sysctl', '-n', 'machdep.cpu.brand_string'], text=True).strip(), swift=subprocess.check_output(['swift', '--version'], text=True).strip(), source=os.environ.get('GITHUB_SHA', 'local'), timestamp=time.time())
     failures = []
     os.environ.update({key: ENV[key] for key in ('BOWSER_TELEMETRY_DISABLED', 'BOWSER_API_ENDPOINT', 'BOWSER_NO_SPAWN')})
     try:
