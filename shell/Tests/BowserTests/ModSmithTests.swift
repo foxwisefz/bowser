@@ -11,8 +11,27 @@ final class ModSmithTests: XCTestCase {
         return data
     }
 
+    @MainActor func testStopTargetsActiveRunWhenItsConversationIsFilteredOut() {
+        let model = ModSmithModel()
+        model.connected = { true }
+        var sent: [String: Any] = [:]
+        model.send = { sent = $0 }
+        var data = snapshot(selected: "another-chat")
+        data["busy"] = true
+        data["running_run"] = "run-token"
+        data["running_project"] = "running-chat"
+        model.receive(data)
+        XCTAssertTrue(model.snapshot.projects.isEmpty)
+        XCTAssertTrue(model.snapshot.canStop)
+        model.action("cancel")
+        XCTAssertEqual(sent["run"] as? String, "run-token")
+        XCTAssertEqual(sent["project"] as? String, "running-chat")
+    }
+
     @MainActor func testDraftsSurviveSwitchingConversations() {
         let model = ModSmithModel()
+        model.targetURL = "https://example.com"
+        model.scopeChoice.reset(url: model.targetURL)
         model.draft = "New mod idea"
         model.receive(snapshot(selected: "existing"))
         XCTAssertEqual(model.draft, "")
@@ -23,8 +42,27 @@ final class ModSmithTests: XCTestCase {
         XCTAssertEqual(model.draft, "Refinement idea")
     }
 
+    @MainActor func testDeletingConversationClearsItsDraftAfterAcknowledgement() {
+        let model = ModSmithModel()
+        model.connected = { true }
+        var sent: [String: Any] = [:]
+        model.send = { sent = $0 }
+        model.draft = "Keep new idea"
+        model.receive(snapshot(selected: "deleted"))
+        model.draft = "Private refinement"
+        model.action("delete")
+        XCTAssertEqual(sent["project"] as? String, "deleted")
+        XCTAssertEqual(sent["action"] as? String, "delete")
+        model.receive(snapshot())
+        XCTAssertEqual(model.draft, "Keep new idea")
+        model.receive(snapshot(selected: "deleted"))
+        XCTAssertEqual(model.draft, "")
+    }
+
     @MainActor func testOnlyAcceptedSubmissionClearsDraft() {
         let model = ModSmithModel()
+        model.targetURL = "https://example.com"
+        model.scopeChoice.reset(url: model.targetURL)
         model.connected = { true }
         var sent: [String: Any] = [:]
         model.send = { sent = $0 }
@@ -38,6 +76,8 @@ final class ModSmithTests: XCTestCase {
 
     @MainActor func testNewTypingIsNotLostBySubmissionAcknowledgement() {
         let model = ModSmithModel()
+        model.targetURL = "https://example.com"
+        model.scopeChoice.reset(url: model.targetURL)
         model.connected = { true }
         var sent: [String: Any] = [:]
         model.send = { sent = $0 }
@@ -50,6 +90,8 @@ final class ModSmithTests: XCTestCase {
 
     @MainActor func testDisconnectedSubmissionKeepsDraftAndDoesNotSend() {
         let model = ModSmithModel()
+        model.targetURL = "https://example.com"
+        model.scopeChoice.reset(url: model.targetURL)
         model.connected = { false }
         model.send = { _ in XCTFail("Must not send while disconnected") }
         model.draft = "Keep this"
@@ -59,6 +101,8 @@ final class ModSmithTests: XCTestCase {
     }
     @MainActor func testExistingPickerUsesExplicitPathAndKeepsNewDraft() {
         let model = ModSmithModel()
+        model.targetURL = "https://example.com"
+        model.scopeChoice.reset(url: model.targetURL)
         model.connected = { true }
         var sent: [String: Any] = [:]
         model.send = { sent = $0 }
@@ -74,6 +118,8 @@ final class ModSmithTests: XCTestCase {
 
     @MainActor func testStopRunningProjectWhileDraftingAnotherConversation() {
         let model = ModSmithModel()
+        model.targetURL = "https://example.com"
+        model.scopeChoice.reset(url: model.targetURL)
         model.connected = { true }
         model.receive(snapshot(selected: "other"))
         model.draft = "Keep this next idea"
@@ -86,8 +132,57 @@ final class ModSmithTests: XCTestCase {
         XCTAssertEqual(model.snapshot.selected, "other")
     }
 
+    @MainActor func testDisabledResultOffersEnableAndTestWithoutLosingDraft() {
+        let model = ModSmithModel()
+        model.connected = { true }
+        var sent: [String: Any] = [:]
+        model.send = { sent = $0 }
+        var project: [String: Any] = [
+            "id": "downloader", "name": "Downloader", "scope": "site", "url": "https://youtube.com",
+            "status": "needs_help", "summary": "", "files": ["mods/downloader.ex.off"],
+            "turns": [["id": "reply", "role": "assistant", "text": "NEEDS THE RESIDENT AGENT: Mod is disabled."]],
+            "enabled": false, "can_undo": true
+        ]
+        func receive() { model.receive(["projects": [project], "selected": "downloader", "busy": false, "progress": [], "stage": "Ready"]) }
+        receive()
+        XCTAssertEqual(model.project?.statusLabel, "Disabled")
+        XCTAssertEqual(model.project?.canEnableAndTest, true)
+        XCTAssertEqual(model.project?.turns.first?.displayText, "Mod is disabled.")
+        model.draft = "Keep my request"
+        model.action("enable_and_test")
+        XCTAssertEqual(sent["action"] as? String, "enable_and_test")
+        XCTAssertEqual(sent["project"] as? String, "downloader")
+        XCTAssertEqual(model.draft, "Keep my request")
+        project["status"] = "working"; receive()
+        XCTAssertEqual(model.project?.canEnableAndTest, false)
+        project["status"] = "needs_help"; project["enabled"] = true; receive()
+        XCTAssertEqual(model.project?.canEnableAndTest, false)
+        project["enabled"] = false; project["files"] = [String](); receive()
+        XCTAssertEqual(model.project?.canEnableAndTest, false)
+    }
+
+    @MainActor func testGenericNextStepsAndRepairNoticesAreIndependent() {
+        let model = ModSmithModel()
+        for action in ["reply", "resume"] {
+            let project: [String: Any] = [
+                "id": "organizer", "name": "Organizer", "scope": "browser", "url": "",
+                "status": "needs_help", "summary": "Choose where to apply this change.",
+                "files": ["mods/organizer.ex"], "enabled": true, "can_undo": true, "turns": [],
+                "next_step": ["title": "Choose a workspace", "detail": "Select the workspace to use.", "action": action],
+                "repair_notice": "A proposed change was not installed."
+            ]
+            model.receive(["projects": [project], "selected": "organizer", "busy": false, "progress": [], "stage": "Ready"])
+            XCTAssertEqual(model.project?.needsNextStep, true)
+            XCTAssertEqual(model.project?.nextStep?.action, action)
+            XCTAssertEqual(model.project?.nextStep?.detail, "Select the workspace to use.")
+            XCTAssertNotNil(model.project?.repairNotice)
+        }
+    }
+
     @MainActor func testContinueEligibilityAndActionPreserveDraft() {
         let model = ModSmithModel()
+        model.targetURL = "https://example.com"
+        model.scopeChoice.reset(url: model.targetURL)
         model.connected = { true }
         var sent: [String: Any] = [:]
         model.send = { sent = $0 }
@@ -108,32 +203,115 @@ final class ModSmithTests: XCTestCase {
         XCTAssertEqual(model.draft, "Keep this next idea")
     }
 
+    @MainActor func testOmnibarStartsNewProjectOnceAndPreservesCapturedTarget() {
+        let model = ModSmithModel()
+        model.connected = { true }
+        model.targetURL = "https://example.com/article"
+        model.targetWebview = 42
+        model.receive(snapshot(selected: "existing"))
+        var messages: [[String: Any]] = []
+        model.send = { messages.append($0) }
+        model.prepareNewDraft("Hide distractions", scope: "site", start: true)
+        model.submit()
+        XCTAssertEqual(messages.count, 1)
+        XCTAssertEqual(messages.first?["action"] as? String, "submit")
+        XCTAssertNil(messages.first?["project"])
+        XCTAssertEqual(messages.first?["url"] as? String, "https://example.com/article")
+        XCTAssertEqual(messages.first?["webview"] as? UInt64, 42)
+        XCTAssertEqual(model.draft, "Hide distractions")
+    }
+
+    @MainActor func testBusyOmnibarKeepsRequestWithoutStartingAnotherBuild() {
+        let model = ModSmithModel()
+        model.connected = { true }
+        model.receive(["projects": [], "busy": true, "progress": [], "stage": "Building"])
+        model.send = { _ in XCTFail("Busy must not submit") }
+        model.prepareNewDraft("Organize tabs", scope: "browser", start: true)
+        XCTAssertEqual(model.draft, "Organize tabs")
+        XCTAssertNotNil(model.connectionError)
+    }
+
     @MainActor func testRenderNativeWorkspace() throws {
         guard let directory = ProcessInfo.processInfo.environment["BOWSER_MODSMITH_RENDER"] else {
             throw XCTSkip("Set BOWSER_MODSMITH_RENDER for native visual verification")
         }
         _ = NSApplication.shared
         let model = ModSmithModel()
+        model.targetURL = "https://example.com"
+        model.scopeChoice.reset(url: model.targetURL)
         model.targetURL = "https://example.com/article"
+        let icon = NSImage(size: NSSize(width: 32, height: 32), flipped: false) { rect in
+            NSColor.systemTeal.setFill()
+            NSBezierPath(roundedRect: rect, xRadius: 7, yRadius: 7).fill()
+            return true
+        }
+        let iconPath = URL(fileURLWithPath: directory).appendingPathComponent("fixture-favicon.png")
+        let iconData = try XCTUnwrap(NSBitmapImageRep(data: XCTUnwrap(icon.tiffRepresentation))?.representation(using: .png, properties: [:]))
+        try iconData.write(to: iconPath)
+        model.scopeChoice.reset(url: model.targetURL, faviconPath: iconPath.path)
         let project: [String: Any] = [
-            "id": "reading", "name": "Comfortable reading", "scope": "site", "url": model.targetURL,
+            "id": "reading", "name": "Comfortable reading", "scope": "site", "url": model.targetURL, "favicon": iconPath.path,
             "status": "partial", "summary": "Larger text and a calmer layout.", "files": ["sites/example.com/reading.css"],
             "enabled": true, "can_undo": true, "undo_label": "Make the text larger",
+            "usage": ["entry_point": "Reading mode runs automatically on this website.",
+                      "steps": ["Open an article on example.com.", "Read with larger text and a narrower column."], "tips": "Reload an already-open article if needed."],
             "turns": [
                 ["id": "u", "role": "user", "text": "Make this page easier to read. Hide distractions and make the text larger."],
                 ["id": "a", "role": "assistant", "text": "Added a warm background, a narrower reading column, and larger text.",
                  "notes": "The sticky navigation still needs work.", "checks": ["Confirmed the paragraph font is 20px.", "Checked that the article stays scrollable."]]
             ]
         ]
-        for (name, width, filled) in [("empty", 760, false), ("result", 760, true), ("compact", 620, true), ("running-other", 620, true)] {
+        for (name, width, filled) in [("empty", 1060, false), ("result", 1060, true), ("compact", 880, true), ("success", 1060, true), ("input", 1060, true), ("prerequisite", 880, true), ("disabled", 1060, true), ("running-other", 880, true), ("running-filtered", 880, true)] {
             if filled {
                 model.receive(["projects": [project], "selected": "reading", "busy": false, "progress": [], "stage": "Ready"])
+            }
+            if name == "success" {
+                var success = project
+                success["status"] = "active"
+                model.receive(["projects": [success], "selected": "reading", "busy": false, "progress": [], "stage": "Ready"])
             }
             if name == "running-other" {
                 var running = project
                 running["status"] = "working"
                 model.receive(["projects": [running], "busy": true, "progress": [], "stage": "Checking your mod"])
             }
+            if name == "running-filtered" {
+                model.receive(["projects": [], "busy": true, "running_run": "fixture-run", "running_project": "hidden-chat", "progress": [], "stage": "Verifying the outcome"])
+            }
+            if ["input", "prerequisite", "disabled"].contains(name) {
+                var blocked = project
+                blocked["status"] = "needs_help"
+                blocked["enabled"] = name != "disabled"
+                blocked["turns"] = [["id": "activity", "role": "activity", "text": "Checking what’s needed next…"]]
+                if name != "disabled" {
+                    var nextStep: [String: Any] = ["title": name == "input" ? "Choose a reading style" : "Open the document",
+                        "detail": name == "input" ? "Would you prefer a warm background or the website’s original colors?" : "Open the document you want to format, then resume testing.",
+                        "action": name == "input" ? "reply" : "resume"]
+                    if name == "input" {
+                        nextStep["options"] = [
+                            ["id": "q|0", "label": "Warm background", "description": "Use soft colors for longer reading sessions."],
+                            ["id": "q|1", "label": "Original colors", "description": "Keep the website’s appearance and adjust the layout."]]
+                    }
+                    blocked["next_step"] = nextStep
+                    blocked["repair_notice"] = "A proposed change could not pass security review and was not installed. Any earlier saved changes remain."
+                }
+                model.receive(["projects": [blocked], "selected": "reading", "busy": false, "progress": [], "stage": "Ready"])
+            }
+            if filled {
+                var older = project
+                older["id"] = "older-mod"
+                older["name"] = "Focus mode"
+                older["scope"] = "browser"
+                older["status"] = "active"
+                older["favicon"] = nil
+                older["files"] = ["mods/focus.ex"]
+                model.snapshot.projects.append(try JSONDecoder().decode(ModSmithProject.self,
+                    from: JSONSerialization.data(withJSONObject: older)))
+            }
+            model.snapshot.workspace_profile = try JSONDecoder().decode(ModSmithProfile.self,
+                from: Data(#"{"id":"work","name":"Work","icon":"💼"}"#.utf8))
+            model.snapshot.running_profile = model.snapshot.busy ? try JSONDecoder().decode(ModSmithProfile.self,
+                from: Data(#"{"id":"personal","name":"Personal","icon":"🏠"}"#.utf8)) : nil
             let view = NSHostingView(rootView: ModSmithRootView(model: model))
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: width, height: 660),
                                   styleMask: [.titled, .resizable], backing: .buffered, defer: false)

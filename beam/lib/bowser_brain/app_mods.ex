@@ -106,6 +106,13 @@ defmodule BowserBrain.AppMods do
   defp dispatch_scoped("list_tabs", _args, id, config),
     do: %{ok: true, active: 0, tabs: [%{webview: 0, url: config["url"], app: id}]}
 
+  defp dispatch_scoped("page_screenshot", args, id, _) do
+    case GenServer.call(Bridge, {:native_verify, "site_screenshot", %{"app" => id, "max_width" => args["max_width"] || 1280}}, 15_000) do
+      {:ok, result} -> Map.put(result, "ok", true)
+      {:error, reason} -> %{ok: false, error: inspect(reason)}
+    end
+  end
+
   defp dispatch_scoped("page_eval", args, id, _), do: evaluate(id, args["js"] || "")
 
   defp dispatch_scoped("page_html", args, id, _) do

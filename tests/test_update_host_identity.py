@@ -50,7 +50,7 @@ class HostIdentityTests(unittest.TestCase):
             self.write(relative, b'new version')
         path = self.app/'Contents/Info.plist'
         info = plistlib.loads(path.read_bytes())
-        info.update(CFBundleVersion='200', CFBundleShortVersionString='2', BowserHostIdentity=before)
+        info.update(CFBundleVersion='200', CFBundleShortVersionString='2', BowserHostIdentity=before, BowserDevelopmentFingerprint='changed-checkout')
         path.write_bytes(plistlib.dumps(info))
         self.write('MacOS/Bowser', self.macho(1) + b'different signature timestamp')
         self.assertEqual(before, self.fingerprint())
@@ -65,6 +65,15 @@ class HostIdentityTests(unittest.TestCase):
         before = self.fingerprint()
         self.entitlements.write_text('different exceptions')
         self.assertNotEqual(before, self.fingerprint())
+
+    def test_external_runtime_has_same_host_identity_as_bundled(self):
+        import shutil
+        before = self.fingerprint()
+        runtime = self.root/'runtime'
+        shutil.move(self.app/'Contents/Resources/runtime', runtime)
+        self.assertEqual(before, identity.host_identity(self.app, self.entitlements, runtime))
+        (runtime/'bin/backend-host').write_bytes(self.macho(8))
+        self.assertNotEqual(before, identity.host_identity(self.app, self.entitlements, runtime))
 
     def test_unidentified_code_and_symlinks_fail_closed(self):
         self.write('MacOS/Bowser', struct.pack('<8I', 0xFEEDFACF, 0, 0, 0, 0, 0, 0, 0))

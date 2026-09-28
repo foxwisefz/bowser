@@ -1,5 +1,19 @@
 User mods belong to one browser profile. ModSmith stamps new Elixir, CSS, and JS files with a `bowser-profile` comment; untagged files belong to Default. Keep this comment when editing. Existing filenames owned by another profile cannot be overwritten; choose a distinct file and module name. Browser-wide means all windows in the owning profile, not all profiles.
 
+Page hooks must mount idempotently and ignore their own DOM changes. The injected
+`MutationObserver` constructor tracks observers per script. Bowser disconnects
+that script's observers after 100 callbacks or 50 ms of callback work without
+yielding to the event loop. Website-owned observers remain unchanged. Reinstalling
+the same script disconnects its previous tracked observers; disabling a mod
+removes its registered content and reloads affected pages. `mod_diagnostics`
+reports `script_paused` with `observer_loop` for owned Elixir scripts.
+
+This guard is cooperative: it cannot interrupt a callback that never returns,
+and explicit `window.MutationObserver` / `globalThis.MutationObserver` bypasses
+the injected constructor. Use the injected constructor, narrow observation scope,
+reuse existing DOM nodes, and verify responsiveness after repeated changes.
+Timers and arbitrary page JavaScript are not covered by this observer budget.
+
 Mod callbacks receive only their profile’s events and tabs in `hello`. `Surface.show/3`, chrome buttons, menu entries, toolbars, themes, and user content stay with that profile. Surface IDs remain local to the mod API; do not add profile prefixes yourself. `Chrome.open_tab/0,1,2` and `open_window/1` from a mod use its owning profile. Core browser features remain shared. Mods are trusted Elixir code, not a security sandbox.
 
 # Native mod UI

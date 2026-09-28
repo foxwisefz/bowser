@@ -1,9 +1,81 @@
 import Foundation
 let toolCatalogJSON = #"""
 [
+  {
+    "name": "discover_native_tools",
+    "description": "Read-only discovery of 1–8 native executable names on this Mac. Checks the browser PATH plus standard macOS/Homebrew and user-local bin directories; returns available and absolute path. Runs nothing, installs nothing, and does not verify versions or successful feature execution. Use before claiming a dependency is missing or asking for a restart. Not available in saved-app ModSmith runs.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "names": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._+-]{0,79}$"
+          }
+        }
+      },
+      "required": [
+        "names"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "ask_user",
+    "description": "Ask the owner one necessary question in ModSmith with 2–5 selectable options and a custom reply. Saves the question and pauses work: end this turn immediately after success; the answer resumes the same mod conversation. Requires a scoped ModSmith run. Do not use for routine implementation choices or invent permissions. Options are plain text, never executable actions.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "question": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "detail": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1500
+        },
+        "options": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 5,
+          "items": {
+            "type": "object",
+            "properties": {
+              "label": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80
+              },
+              "description": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 300
+              }
+            },
+            "required": [
+              "label",
+              "description"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "question",
+        "detail",
+        "options"
+      ],
+      "additionalProperties": false
+    }
+  },
 {
   "name": "mod_diagnostics",
-  "description": "Read bounded runtime receipts for an owned Elixir mod: page delivery/callback completion, Jev outcomes, and instrumented application counts. No prompts or page content. New receipts are chronological; compare timestamps and webview for the current run. Empty receipts do not prove failure; all-keep and zero hidden are valid outcomes. Desktop only.",
+  "description": "Read bounded runtime receipts for an owned Elixir mod: page delivery/callback completion, Jev outcomes, instrumented application counts, and script_paused with observer_loop when native protection disconnects runaway mod observers. A paused hook is a failed performance check. No prompts or page content. New receipts are chronological; compare timestamps and webview for the current run. Empty receipts do not prove failure; all-keep and zero hidden are valid outcomes. Desktop only.",
   "inputSchema": {
     "type": "object",
     "properties": {
@@ -147,6 +219,26 @@ let toolCatalogJSON = #"""
     }
   },
   {
+    "name": "page_screenshot",
+    "description": "Capture a loaded tab viewport directly from WebKit as a PNG image, without macOS screen-recording permission. No browser chrome or other apps. Activate deferred/unloaded tabs first. Coordinates are viewport points from top-left; width/height are pixels, point_width/point_height and scale describe resizing. max_width bounds the longest image edge (default 1280, range 320..1920). Captures the viewport, not the full document; protected video may be omitted. In ModSmith the run fixes the target tab; saved-app calls capture only that app.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "webview": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Tab id from list_tabs; 0 selects the first tab. Ignored in scoped ModSmith and saved-app calls."
+        },
+        "max_width": {
+          "type": "integer",
+          "minimum": 320,
+          "maximum": 1920
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
     "name": "native_screenshot",
     "description": "Capture the selected visible browser window including native toolbars. Returns an image and window id; coordinates are points from top-left. Requires macOS screen capture permission; errors are not visual verification.",
     "inputSchema": {
@@ -235,7 +327,7 @@ let toolCatalogJSON = #"""
   },
   {
     "name": "list_tabs",
-    "description": "List open tabs (webview id + url) and which is active.",
+    "description": "List open tabs (webview id + url) and which is active. In ModSmith, returns matching tabs in the owning profile, target_available and expected_url; automatically selects another matching tab when the target leaves scope. Discovery and source/diagnostic reads remain available without a matching tab; page actions remain blocked.",
     "inputSchema": {
       "type": "object",
       "properties": {}

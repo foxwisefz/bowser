@@ -10,7 +10,8 @@ build="$(uuidgen | tr -d '-' | tr '[:upper:]' '[:lower:]')"
 mkdir -p "$output/Contents/MacOS"
 swiftc -target arm64-apple-macos15.0 -swift-version 6 -O -parse-as-library -emit-library -module-name "BowserToolbar_$build" \
   -Xlinker -rpath -Xlinker /usr/lib/swift \
-  "$repo/shell/NativeModules/CommandToolbar/Toolbar.swift" -o "$output/Contents/MacOS/CommandToolbar"
+  "$repo/shell/NativeModules/CommandToolbar/Toolbar.swift" \
+  "$repo/shell/Sources/Bowser/ToolbarWindowDragHandle.swift" -o "$output/Contents/MacOS/CommandToolbar"
 cat > "$output/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict>
 <key>CFBundleIdentifier</key><string>com.foxwiseai.bowser.command-toolbar</string>

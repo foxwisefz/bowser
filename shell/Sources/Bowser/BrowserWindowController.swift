@@ -34,6 +34,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     private let notch = ToolbarNotchView()
     private let profileNotch = ToolbarNotchView()
     private let toolbarFavicon = NSImageView()
+    let loadingLine = ToolbarLoadingLine()
     private let profileIdentity = NSStackView()
     private var notchTitleWidth: NSLayoutConstraint?
     private var clusterWidth: NSLayoutConstraint?
@@ -108,6 +109,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         if !isSiteApp {
         let fallback = NSHostingView(rootView: AnyView(clusterView()))
         let hosting = NativeModuleSlot(fallback: fallback)
+        hosting.identifier = ToolbarWindowDragView.regionIdentifier
         hosting.interactionInProgress = { TabDragPreview.shared.source != nil }
         hosting.onAction = { [weak self] event in self?.nativeToolbarAction(event) }
         nativeToolbar = hosting
@@ -171,7 +173,13 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
                     button.heightAnchor.constraint(equalToConstant: 29 * scale),
                 ])
             }
+            loadingLine.translatesAutoresizingMaskIntoConstraints = false
+            notch.addSubview(loadingLine)
             NSLayoutConstraint.activate([
+                loadingLine.leadingAnchor.constraint(equalTo: notch.leadingAnchor, constant: 12),
+                loadingLine.trailingAnchor.constraint(equalTo: notch.trailingAnchor, constant: -12),
+                loadingLine.bottomAnchor.constraint(equalTo: notch.bottomAnchor, constant: -2),
+                loadingLine.heightAnchor.constraint(equalToConstant: 2),
                 hosting.leadingAnchor.constraint(equalTo: lights.trailingAnchor, constant: 12),
                 hosting.centerYAnchor.constraint(equalTo: lights.centerYAnchor),
                 hosting.heightAnchor.constraint(equalToConstant: 24), controlsWidth,
@@ -692,7 +700,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
 
     func setToolbarVisible(_ visible: Bool, animated: Bool = true) {
         guard !isCaptureMode else { return }
-        let visible = visible && !toolbarYielded
+        let visible = (visible || activeTab?.webView.isLoading == true) && !toolbarYielded
         toolbarIsVisible = visible
         let buttons = [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton].compactMap { window?.standardWindowButton($0) }
         let offset = visible ? ToolbarCornerGeometry.inset : -ToolbarCornerGeometry.height * min(0.75, max(0, toolbarHiddenFraction))
@@ -723,8 +731,14 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
 
     private func refreshToolbarFavicon() {
         let image = activeTab?.faviconPath.flatMap { NSImage(contentsOfFile: $0) }
+        refreshToolbarLoading()
         toolbarFavicon.image = image ?? NSImage(systemSymbolName: "globe", accessibilityDescription: "Website")
         toolbarFavicon.contentTintColor = image == nil ? .labelColor : nil
+    }
+
+    func refreshToolbarLoading() {
+        loadingLine.loading = activeTab?.webView.isLoading == true
+        if loadingLine.loading { setToolbarVisible(true) }
     }
 
     private func applyTitle(_ title: String) {
@@ -1049,8 +1063,8 @@ struct CmdCluster: View {
         }
         .animation(.easeOut(duration: 0.15), value: reveal.lights)
         .frame(maxHeight: .infinity)
-        .contentShape(Rectangle())
         .frame(maxWidth: .infinity, alignment: .leading)
+        .background(ToolbarWindowDragHandle())
         .onHover { onHoverChanged($0) }
     }
 

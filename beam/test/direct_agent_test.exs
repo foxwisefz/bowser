@@ -34,6 +34,29 @@ defmodule BowserBrain.DirectAgentTest do
     :ok
   end
 
+  test "screenshots stay multimodal instead of hitting the JSON tool-size limit" do
+    image = Base.encode64(:binary.copy("pixels", 20_000))
+    [receipt, message] = DirectAgent.tool_output("capture-1", %{ok: true, image: image, mimeType: "image/png", width: 320})
+    assert JSON.decode!(receipt["output"])["width"] == 320
+    refute receipt["output"] =~ image
+    assert List.last(message["content"])["image_url"] == "data:image/png;base64," <> image
+    Application.put_env(:bowser_brain, :ai_transport, fn _, _, body, _ ->
+      content = List.last(body["messages"])["content"]
+      assert List.last(content) == %{"type" => "image", "source" => %{"type" => "base64", "media_type" => "image/png", "data" => image}}
+      {:ok, %{"content" => [%{"type" => "text", "text" => "seen"}]}}
+    end)
+    assert {:ok, _} = DirectAgent.completion({:anthropic, "https://api.anthropic.com/v1/messages", "key", "model"}, [message], [], "inspect")
+    assert [_] = DirectAgent.tool_output("failed", %{ok: false, image: image, mimeType: "image/png"})
+  end
+
+  test "only the latest two images are replayed while earlier tool receipts remain" do
+    input = Enum.flat_map(1..4, fn id -> DirectAgent.tool_output(to_string(id), %{ok: true, image: to_string(id), mimeType: "image/png"}) end)
+    retained = DirectAgent.retain_images(input)
+    assert Enum.count(retained, &(&1["type"] == "function_call_output")) == 4
+    images = Enum.flat_map(retained, &(&1["content"] || [])) |> Enum.filter(&(&1["type"] == "input_image"))
+    assert Enum.map(images, & &1["image_url"]) == ["data:image/png;base64,3", "data:image/png;base64,4"]
+  end
+
   test "personal keys route directly and hosted is the default" do
     assert {:responses, "https://api.openai.com/v1/responses", "openai-secret", _} =
              AI.route(%{"ai_provider" => "openai", "openai_api_key" => "openai-secret"})

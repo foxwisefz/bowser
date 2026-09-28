@@ -35,6 +35,8 @@ final class NavigationNetworkMonitor {
 struct NavigationDiagnosticError: Codable {
     let domain: String
     let code: Int
+    var streamErrorDomain: Int?
+    var streamErrorCode: Int?
     static func chain(_ error: NSError) -> [Self] {
         var result: [Self] = []
         var current: NSError? = error
@@ -42,7 +44,9 @@ struct NavigationDiagnosticError: Codable {
             // Arbitrary domains/descriptions/userInfo may contain private URL data.
             let known = [NSURLErrorDomain, NSPOSIXErrorDomain, NSOSStatusErrorDomain,
                          "WKErrorDomain", "WebKitErrorDomain", "kCFErrorDomainCFNetwork", "kCFErrorDomainSystemConfiguration"]
-            result.append(Self(domain: known.contains(item.domain) ? item.domain : "other", code: item.code))
+            result.append(Self(domain: known.contains(item.domain) ? item.domain : "other", code: item.code,
+                streamErrorDomain: (item.userInfo["_kCFStreamErrorDomainKey"] as? NSNumber)?.intValue,
+                streamErrorCode: (item.userInfo["_kCFStreamErrorCodeKey"] as? NSNumber)?.intValue))
             current = item.userInfo[NSUnderlyingErrorKey] as? NSError
         }
         return result
@@ -53,6 +57,13 @@ struct NavigationDiagnosticRecord: Codable {
     var timestamp = Date()
     var appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown"
     var osVersion = ProcessInfo.processInfo.operatingSystemVersionString
+    var sessionID = NavigationDiagnosticLog.sessionID
+    var webviewID: UInt64?
+    var profileID: String?
+    var isLoading: Bool?
+    var estimatedProgress: Double?
+    var httpStatus: Int?
+    var visible: Bool?
     let navigationID: UUID
     let stage: String
     let elapsedMilliseconds: Int?
@@ -75,8 +86,20 @@ struct NavigationDiagnosticTrace {
         id = ObjectIdentifier(navigation); recordID = UUID(); started = now
         self.network = network; self.revision = revision; redirects = 0
     }
+    func isCurrent(_ navigation: AnyObject?) -> Bool {
+        navigation.map { id == ObjectIdentifier($0) } ?? false
+    }
     mutating func redirect(_ navigation: AnyObject) {
         if id == ObjectIdentifier(navigation) { redirects += 1 }
+    }
+    func event(_ navigation: AnyObject? = nil, stage: String, now: TimeInterval,
+               network current: NavigationNetworkSnapshot, revision currentRevision: Int) -> NavigationDiagnosticRecord {
+        let matches = navigation.map { id == ObjectIdentifier($0) } ?? (id != nil)
+        return NavigationDiagnosticRecord(navigationID: matches ? recordID : UUID(), stage: stage,
+            elapsedMilliseconds: matches ? started.map { Int(max(0, now - $0) * 1000) } : nil,
+            redirects: matches ? redirects : 0, networkAtStart: matches ? network : NavigationNetworkSnapshot(),
+            networkAtFailure: current, networkUpdates: matches ? max(0, currentRevision - revision) : 0,
+            errors: [])
     }
     func failure(_ navigation: AnyObject?, error: NSError, stage: String, now: TimeInterval,
                  network current: NavigationNetworkSnapshot, revision currentRevision: Int) -> NavigationDiagnosticRecord {
@@ -91,6 +114,7 @@ struct NavigationDiagnosticTrace {
 
 /// Serial, private, bounded files. No network uploads and no browsing URLs or text.
 enum NavigationDiagnosticLog {
+    static let sessionID = UUID()
     private static let queue = DispatchQueue(label: "bowser.navigation.diagnostics", qos: .utility)
     @MainActor static func record(_ record: NavigationDiagnosticRecord) {
         let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601

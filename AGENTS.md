@@ -13,6 +13,45 @@ This project uses **bd** (beads) for issue tracking. Run `bd prime` for full wor
 > source of truth; don't `bd import` during normal operation; don't
 > reach for third-party Dolt hosting before trying the default).
 
+## Working across repositories
+
+Bowser's owner workspace contains two sibling code repositories:
+
+- `../bowser` — public browser, native UI, mod runtime, and desktop releases.
+- `../bowser-services` — private website, API, database, and service deployment.
+
+Read the destination repository's `AGENTS.md` before editing there. Work in the
+repository that owns the behavior; a task may span both. Continue across these
+repositories within the user's authorized task rather than treating the directory
+change as a new task or asking for permission solely because it crosses repos.
+Public browser contributors do not need access to the private services repository.
+
+Both owner checkouts use one private tracker at `../bowser-tracking/.beads`,
+resolved through locally ignored `.beads/redirect` files. Run `bd where` and
+`bd prime`, then inspect and claim the relevant issue before starting. Do not
+initialize a second database if the shared tracker is missing; report the missing
+setup. Use `bd remember` for durable context and retain existing issue IDs.
+
+Use one Beads issue for a coordinated change, labeled `browser`, `services`, or
+`shared`. Read the relevant code on both sides of an API contract. Run checks in
+each affected repository, record validation in the issue, and report all changed
+repositories before closing it. When commits are authorized, keep them separate
+per repository and reference the same issue. Use `jj` for version control; existing
+commit, push, and deployment authorization rules still apply.
+
+Keep private service code, credentials, database contents, and tracking exports
+out of the public browser repository. Dolt synchronization belongs only to the
+private tracking repository, never the public browser remote.
+
+Agent sessions spanning both projects need filesystem access to the `bowser`,
+`bowser-services`, and `bowser-tracking` directories. These instructions do not
+grant sandbox permissions; use the available approval mechanism if access is
+blocked. Do not broaden access to unrelated projects.
+
+Use the primary code checkouts rather than creating per-task worktrees. Before
+building or installing the browser, check which checkout the running development
+or staging runtime actually uses; do not assume it follows a repository rename.
+
 ## Quick Reference
 
 ```bash
@@ -125,6 +164,18 @@ bd prime                # Refresh Beads context
 
 **Architecture in one line:** issues live in a local Dolt DB; sync uses `refs/dolt/data` on your git remote; `.beads/issues.jsonl` is a passive export. See https://github.com/gastownhall/beads/blob/main/docs/SYNC_CONCEPTS.md for details and anti-patterns.
 <!-- END BEADS CODEX SETUP -->
+
+## Scope of mod fixes
+
+When discussing or fixing mods, improve **mod creation and management for all
+mods**: ModSmith's workflow, runtime contracts, verification, state, and UI.
+Treat a reported mod as a reproduction case for a general problem. Do not
+hard-code its website, behavior, prompts, or next actions into the product,
+or repair that user's generated mod as the task's solution.
+
+Target a specific mod only when the user explicitly requests it **and** that
+mod is shipped as part of Bowser core. Apply this rule when reviewing past
+fixes as well as when making new ones.
 
 ## ModSmith API documentation
 

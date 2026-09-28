@@ -34,6 +34,12 @@ defmodule BowserBrain.ModDiagnosticsTest do
     assert length(:sys.get_state(ModLog).diagnostics) == 1000
   end
 
+  test "native observer pauses are attributed without script contents" do
+    event = %{"event" => "mod_script_fault", "mod" => "ObserverFixture", "webview" => 73, "reason" => "observer_loop"}
+    assert {:noreply, %{}} = ModLog.handle_info({:browser_event, event}, %{})
+    assert [%{stage: :script_paused, error: :observer_loop, webview: 73, count: 1}] = ModLog.diagnostics("ObserverFixture")
+  end
+
   test "all-keep Jev replies are successful evaluations and timeouts retain their cause" do
     root = Path.join(System.tmp_dir!(), "jev-diag-#{System.unique_integer([:positive])}")
     File.mkdir_p!(root)

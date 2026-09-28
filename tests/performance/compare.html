@@ -1,0 +1,61 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Bowser / Safari performance fixture</title>
+<style>
+  html { background: #203040; color: white; font: 16px system-ui }
+  body { margin: 0 }
+  #stage { width: 1000px; height: 650px; overflow: auto; contain: strict }
+  article { height: 48px; border-bottom: 1px solid #789; display: flex; align-items: center }
+  span { width: 200px; margin-left: 16px }
+</style>
+<div id="stage"></div>
+<script>
+'use strict';
+const stage = document.querySelector('#stage');
+for (let index = 0; index < 1000; index++) {
+  const row = document.createElement('article');
+  row.innerHTML = `<span>Item ${index}</span><span>Fixed local fixture</span>`;
+  stage.append(row);
+}
+const frame = () => new Promise(resolve => requestAnimationFrame(resolve));
+const token = new URL(location).searchParams.get('token');
+(async () => {
+  const result = {token, userAgent: navigator.userAgent, samples: [],
+    viewport: [innerWidth, innerHeight], fixture: [stage.getBoundingClientRect().width, stage.getBoundingClientRect().height],
+    client: [stage.clientWidth, stage.clientHeight],
+    devicePixelRatio, visibility: document.visibilityState};
+  const sample = (metric, value) => result.samples.push({metric, value});
+  try {
+    if (document.visibilityState !== 'visible') throw new Error('Benchmark page is hidden');
+    if (innerWidth < 1000 || innerHeight < 650) throw new Error('Viewport clips the fixed workload');
+    let hidden = false;
+    const visibility = () => { if (document.visibilityState !== 'visible') hidden = true; };
+    document.addEventListener('visibilitychange', visibility);
+    await frame(); await frame();
+    sample('navigation_two_frames_ms', performance.now());
+    const navigation = performance.getEntriesByType('navigation')[0];
+    sample('dom_content_loaded_ms', navigation.domContentLoadedEventEnd);
+    // Layout and scroll use the same fixed surface, independent of browser chrome.
+    for (let pass = 0; pass < 20; pass++) {
+      const start = performance.now();
+      for (const row of stage.children) row.style.paddingLeft = `${pass % 2 * 8}px`;
+      stage.lastElementChild.getBoundingClientRect();
+      sample('layout_1000_rows_ms', performance.now() - start);
+      await frame();
+    }
+    let previous = await frame();
+    const intervals = [];
+    for (let index = 0; index < 120; index++) {
+      stage.scrollTop += 32;
+      const now = await frame(); intervals.push(now - previous); previous = now;
+    }
+    for (const value of intervals) sample('scroll_frame_interval_ms', value);
+    sample('scroll_long_frames_percent', intervals.filter(v => v > 50).length / intervals.length * 100);
+    if (hidden) throw new Error('Page became hidden during measurement');
+    document.removeEventListener('visibilitychange', visibility);
+    result.scrollTop = stage.scrollTop;
+    if (stage.scrollTop !== 3840) throw new Error('Fixture did not scroll the expected distance');
+  } catch (error) { result.error = String(error); }
+  await fetch('/result', {method: 'POST', body: JSON.stringify(result)});
+})().catch(error => { document.title = 'Benchmark failed: ' + error; });
+</script>

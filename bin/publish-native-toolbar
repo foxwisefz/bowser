@@ -2,7 +2,7 @@
 # Publish only immutable module generations. The running host independently
 # verifies the complete signature, Team ID, ABI and dependencies before loading.
 set -euo pipefail
-[ "$#" = 2 ] || { echo 'usage: bin/publish-native-toolbar MODULE.bundle BOWSER_HOME' >&2; exit 2; }
+[ "$#" = 2 ] || [ "$#" = 3 ] || { echo 'usage: bin/publish-native-toolbar MODULE.bundle BOWSER_HOME [stable|staging]' >&2; exit 2; }
 source="$1"
 identifier="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$source/Contents/Info.plist")"
 case "$identifier" in
@@ -10,7 +10,8 @@ case "$identifier" in
   com.foxwiseai.bowser.surfaces) kind=surfaces;;
   *) echo 'unknown native module identity' >&2; exit 1;;
 esac
-root="$2/native-modules/$kind"
+channel="${3:-stable}"
+case "$channel" in stable) root="$2/native-modules/$kind";; staging) root="$2/native-modules/staging/$kind";; *) echo "invalid channel" >&2; exit 2;; esac
 build="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$source/Contents/Info.plist")"
 [[ "$build" =~ ^[0-9a-f]{32}$ ]] || { echo 'invalid module build' >&2; exit 1; }
 codesign --verify --strict "$source"

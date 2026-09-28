@@ -369,19 +369,57 @@ struct OnboardingTermsWebView: NSViewRepresentable {
     }
 }
 
+struct ModScopeCards: View {
+    @ObservedObject var choice: ModScopeChoice
+    var compact = false
+    var onChoose: () -> Void = {}
+    var body: some View {
+        HStack(spacing: 12) {
+            card("site", title: "This website", detail: choice.host ?? "Open a website first", icon: "globe", tint: .blue)
+            card("browser", title: "Across Bowser", detail: "Browser-wide customization", icon: "macwindow", tint: .purple)
+        }
+    }
+    private func card(_ scope: String, title: String, detail: String, icon: String, tint: Color) -> some View {
+        let selected = choice.selected == scope
+        return Button { choice.choose(scope); onChoose() } label: {
+            VStack(alignment: .leading, spacing: compact ? 5 : 9) {
+                HStack {
+                    if scope == "site", let path = choice.faviconPath, let favicon = ImageCache.load(path) {
+                        Image(nsImage: favicon).resizable().scaledToFit()
+                            .frame(width: compact ? 18 : 24, height: compact ? 18 : 24)
+                    } else {
+                        Image(systemName: icon).font(.system(size: compact ? 16 : 22)).foregroundStyle(tint)
+                    }
+                    Spacer()
+                    if choice.suggested == scope { Text("Suggested").font(.system(size: 9, weight: .medium)).foregroundStyle(tint) }
+                    Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                        .foregroundStyle(selected ? tint : Color.secondary.opacity(0.35))
+                }
+                Text(title).font(.system(size: 13, weight: .semibold))
+                Text(detail + (compact && scope == "site" && choice.host != nil ? " · includes subdomains" : "")).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                if !compact && scope == "site" { Text("Includes subdomains").font(.system(size: 10)).foregroundStyle(.secondary) }
+                if !compact && scope == "browser" { Text("Across websites and browser UI").font(.system(size: 10)).foregroundStyle(.secondary) }
+            }
+            .padding(compact ? 12 : 16).frame(maxWidth: .infinity, alignment: .leading)
+            .background(tint.opacity(selected ? 0.10 : 0.025), in: RoundedRectangle(cornerRadius: 14))
+            .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(selected ? tint.opacity(0.6) : Color.primary.opacity(0.08)))
+            .contentShape(RoundedRectangle(cornerRadius: 14))
+        }.buttonStyle(.plain)
+            .disabled(scope == "site" && choice.host == nil)
+            .accessibilityLabel("\(title), \(detail)\(scope == "site" ? ", includes subdomains" : "")")
+            .accessibilityAddTraits(selected ? [.isSelected] : [])
+    }
+}
+
 struct ModSmithScreen: View {
     @ObservedObject var context: BrowserScreenContext
     private var model: any ModSmithPresentation { context.model as! any ModSmithPresentation }
     @FocusState private var composerFocused: Bool
+    @State private var deletingProject: String?
     private var showDetails: Bool {
         get { context.binding("showDetails", default: false).wrappedValue }
         nonmutating set { context.binding("showDetails", default: false).wrappedValue = newValue }
     }
-    private var showExisting: Bool {
-        get { context.binding("showExisting", default: false).wrappedValue }
-        nonmutating set { context.binding("showExisting", default: false).wrappedValue = newValue }
-    }
-
     var body: some View {
         HStack(spacing: 0) {
             sidebar
@@ -392,98 +430,157 @@ struct ModSmithScreen: View {
                 conversation
                 activeBuild
                 composer
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }.frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background {
+            Color(nsColor: .windowBackgroundColor)
+            LinearGradient(colors: [Color.purple.opacity(0.045), .clear], startPoint: .topLeading, endPoint: .bottomTrailing)
+        }
+        .alert("Delete this mod?", isPresented: Binding(
+            get: { deletingProject != nil }, set: { if !$0 { deletingProject = nil } }
+        )) {
+            Button("Delete mod", role: .destructive) {
+                if let id = deletingProject { model.action("delete", project: id, path: nil) }
+                deletingProject = nil
+            }
+            Button("Cancel", role: .cancel) { deletingProject = nil }
+        } message: {
+            Text("This removes the mod’s files and all its ModSmith conversation and undo history. This can’t be undone. Website actions and saved mod data stay as they are.")
+        }
+        .onChange(of: model.draft) { _, text in
+            if model.project == nil && !model.isSiteApp { model.scopeChoice.update(text) }
+        }
         .onAppear {
             if context.values["hasAppeared"] as? Bool != true { composerFocused = true; context.values["hasAppeared"] = true }
-        }
-        .sheet(isPresented: context.binding("showExisting", default: false)) {
-            VStack(alignment: .leading, spacing: 16) {
-                Text("Continue working on a mod").font(.title2.weight(.semibold))
-                Text("Choose an installed mod. Its existing conversation will reopen when available.").foregroundStyle(.secondary)
-                if (model.snapshot.available_mods ?? []).isEmpty {
-                    Text("No installed mods are available in this window yet.").padding(.vertical, 24)
-                } else {
-                    ScrollView {
-                        VStack(spacing: 8) {
-                            ForEach(model.snapshot.available_mods ?? []) { mod in
-                                Button {
-                                    model.action("edit_existing", path: mod.path)
-                                    showExisting = false
-                                    composerFocused = true
-                                } label: {
-                                    HStack {
-                                        VStack(alignment: .leading, spacing: 4) {
-                                            Text(mod.name).font(.headline)
-                                            Text(mod.scope).font(.caption).foregroundStyle(.secondary)
-                                        }
-                                        Spacer()
-                                        Text(mod.enabled ? "Enabled" : "Disabled").font(.caption)
-                                        Image(systemName: "chevron.right")
-                                    }.padding(12).contentShape(Rectangle())
-                                }.buttonStyle(.plain)
-                            }
-                        }
-                    }.frame(maxHeight: 300)
-                }
-                HStack { Spacer(); Button("Cancel") { showExisting = false }.keyboardShortcut(.cancelAction) }
-            }.padding(24).frame(width: 440)
         }
     }
 
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Label("Your mods", systemImage: "sparkles").font(.headline).padding(.top, 8)
-            Button { model.action("new") } label: {
-                Label("New mod", systemImage: "plus").frame(maxWidth: .infinity)
-            }.controlSize(.large)
-            Button("Edit existing mod…", systemImage: "square.and.pencil") {
-                model.action("open")
-                showExisting = true
-            }.controlSize(.small)
+            Label("ModSmith", systemImage: "sparkles")
+                .font(.system(size: 16, weight: .semibold, design: .rounded))
+                .padding(.horizontal, 12).padding(.top, 8)
+            if let profile = model.snapshot.workspace_profile {
+                profileIdentity(profile, caption: "Profile")
+                    .padding(10).frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.accentColor.opacity(0.07), in: RoundedRectangle(cornerRadius: 10))
+            } else if model.isSiteApp {
+                Label("This app", systemImage: "app").font(.caption).foregroundStyle(.secondary)
+                    .padding(.horizontal, 12)
+            }
+            Button { model.action("new"); composerFocused = true } label: {
+                Label("New mod", systemImage: "plus").frame(maxWidth: .infinity, alignment: .leading)
+            }.buttonStyle(.bordered).controlSize(.large)
+            Text("MODS & HISTORY").font(.system(size: 10, weight: .semibold))
+                .tracking(0.8).foregroundStyle(.secondary).padding(.horizontal, 12)
             ScrollView {
-                VStack(spacing: 5) {
+                LazyVStack(alignment: .leading, spacing: 5) {
                     ForEach(model.snapshot.projects) { project in
-                        Button { model.action("select", project: project.id) } label: {
-                            VStack(alignment: .leading, spacing: 5) {
-                                Text(project.name).font(.system(size: 12, weight: .medium)).lineLimit(2)
-                                Text(project.statusLabel).font(.caption).foregroundStyle(.secondary)
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading).padding(10)
-                            .background(model.snapshot.selected == project.id ? Color.accentColor.opacity(0.12) : .clear,
-                                        in: RoundedRectangle(cornerRadius: 9))
-                            .contentShape(Rectangle())
+                        Button {
+                            model.action("select", project: project.id)
+                            composerFocused = true
+                        } label: {
+                            HStack(alignment: .top, spacing: 9) {
+                                modIcon(project.favicon, fallback: project.scope == "browser" ? "macwindow" : "globe", size: 20)
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(project.name).font(.system(size: 12, weight: .medium)).lineLimit(2)
+                                    Text(project.files.isEmpty && project.status != "working" ? "Draft · saved chat" : project.statusLabel)
+                                        .font(.system(size: 10)).foregroundStyle(.secondary)
+                                }
+                                Spacer(minLength: 0)
+                            }.padding(10).frame(maxWidth: .infinity, alignment: .leading)
+                                .background(model.snapshot.selected == project.id ? Color.accentColor.opacity(0.13) : .clear,
+                                            in: RoundedRectangle(cornerRadius: 9))
+                                .contentShape(Rectangle())
                         }.buttonStyle(.plain)
+                            .accessibilityAddTraits(model.snapshot.selected == project.id ? [.isSelected] : [])
+                    }
+                    ForEach((model.snapshot.available_mods ?? []).filter { mod in
+                        !model.snapshot.projects.contains { $0.files.contains(mod.path) }
+                    }) { mod in
+                        Button {
+                            model.action("edit_existing", path: mod.path)
+                            composerFocused = true
+                        } label: {
+                            HStack(alignment: .top, spacing: 9) {
+                                modIcon(mod.favicon, fallback: mod.scope == "Across Bowser" ? "macwindow" : "globe", size: 20)
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(mod.name).font(.system(size: 12, weight: .medium)).lineLimit(2)
+                                    Text("Open mod chat").font(.system(size: 10)).foregroundStyle(.secondary)
+                                }
+                                Spacer(minLength: 0)
+                            }.padding(10).frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+                        }.buttonStyle(.plain)
+                    }
+                    if model.snapshot.projects.isEmpty && (model.snapshot.available_mods ?? []).isEmpty {
+                        Text("Your mods and saved conversations will appear here.")
+                            .font(.callout).foregroundStyle(.secondary).padding(12)
                     }
                 }
             }
-            Text("Changes happen live.\nMake a mod, then make it yours.")
-                .font(.caption).foregroundStyle(.secondary).lineSpacing(3)
-        }.padding(16).frame(width: 190).background(.quaternary.opacity(0.25))
+            Text("One mod. One conversation.").font(.system(size: 10)).foregroundStyle(.secondary)
+                .padding(.horizontal, 12)
+        }.padding(12).frame(width: 210).frame(maxHeight: .infinity)
+            .background(Color.primary.opacity(0.025))
+    }
+
+    @ViewBuilder private func modIcon(_ path: String?, fallback: String, size: CGFloat = 24) -> some View {
+        if let path, let image = ImageCache.load(path) {
+            Image(nsImage: image).resizable().scaledToFit().frame(width: size, height: size)
+                .accessibilityHidden(true)
+        } else {
+            Image(systemName: fallback).frame(width: size, height: size)
+                .foregroundStyle(.secondary).accessibilityHidden(true)
+        }
+    }
+
+    private func profileIdentity(_ profile: ModSmithProfile, caption: String) -> some View {
+        HStack(spacing: 8) {
+            Group {
+                if let character = profile.character {
+                    SurfaceServices.shared.portrait(character, 26)
+                } else if let icon = profile.icon {
+                    Text(icon).font(.system(size: 22))
+                } else {
+                    Image(systemName: "person.crop.circle.fill").font(.system(size: 24)).foregroundStyle(.secondary)
+                }
+            }.frame(width: 28, height: 28).accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(caption).font(.system(size: 10)).foregroundStyle(.secondary)
+                Text(profile.name).font(.caption.weight(.semibold)).lineLimit(1)
+            }
+        }.accessibilityElement(children: .combine).help("\(caption): \(profile.name)")
     }
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 9) {
-            Text(model.project?.name ?? "What would you change?")
-                .font(.system(size: 20, weight: .semibold)).lineLimit(2)
+            if let project = model.project {
+                Text(project.name).font(.system(size: 24, weight: .semibold, design: .rounded)).lineLimit(2)
+            }
             if let project = model.project {
                 HStack {
-                    Label(project.scopeLabel, systemImage: project.scope == "browser" ? "macwindow" : "globe")
-                        .font(.caption).foregroundStyle(.secondary)
+                    HStack(spacing: 6) {
+                        modIcon(project.favicon, fallback: project.scope == "browser" ? "macwindow" : "globe", size: 16)
+                        Text(project.scopeLabel)
+                    }.font(.caption).foregroundStyle(.secondary)
                     Spacer()
                     Text(project.statusLabel).font(.caption.weight(.medium))
                 }
                 HStack {
+                    Button("Delete mod", systemImage: "trash", role: .destructive) {
+                        deletingProject = project.id
+                    }.help("Delete this mod and its ModSmith history")
                     if project.canUndo {
                         Button("Undo last change", systemImage: "arrow.uturn.backward") { model.action("undo") }
                             .help("Restore mod files before: \(project.undoLabel ?? "last change"). Website actions and stored mod data are not reversed.")
                     }
                     if !project.files.isEmpty {
-                        Button(project.enabled ? "Disable" : "Enable", systemImage: project.enabled ? "pause.circle" : "play.circle") {
-                            model.action("toggle")
-                        }
+                        Spacer()
+                        Toggle(project.enabled ? "Enabled" : "Disabled", isOn: Binding(
+                            get: { project.enabled },
+                            set: { if $0 != project.enabled { model.action("toggle") } }
+                        )).toggleStyle(.switch).fixedSize()
+                            .accessibilityIdentifier("modsmith-enabled")
                     }
                 }.controlSize(.small).disabled(model.snapshot.busy)
                 if project.canUndo {
@@ -493,14 +590,22 @@ struct ModSmithScreen: View {
             } else if model.isSiteApp {
                 Label("Only this app", systemImage: "app").font(.caption).foregroundStyle(.secondary)
             } else {
-                Picker("Applies to", selection: Binding(get: { model.scope }, set: { model.scope = $0 })) {
-                    Text("This site").tag("site")
-                    Text("Across Bowser").tag("browser")
-                }.pickerStyle(.segmented).frame(maxWidth: 270)
-                Text(model.scope == "browser" ? "Browser-wide customization" : "\(URL(string: model.targetURL)?.host ?? "Open a website") · includes subdomains")
-                    .font(.caption).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 14) {
+                    Text("What would you change?")
+                        .font(.system(size: 28, weight: .semibold, design: .rounded))
+                    Text("Make a little change. Make it yours.").font(.callout).foregroundStyle(.secondary)
+                    ModScopeCards(choice: model.scopeChoice)
+                }
+
             }
         }.padding(20).frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var resultAnchor: String {
+        guard let project = model.project else { return "bottom" }
+        if project.needsNextStep { return "required-input" }
+        if project.canEnableAndTest { return "next-action" }
+        return project.status == "active" ? "completion" : "bottom"
     }
 
     private var conversation: some View {
@@ -508,34 +613,136 @@ struct ModSmithScreen: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     if let project = model.project {
+                        if project.needsNextStep {
+                            VStack(alignment: .leading, spacing: 12) {
+                                Text(project.nextStep?.title ?? "The next step needs clarification")
+                                    .font(.system(size: 20, weight: .semibold, design: .rounded))
+                                Text(project.nextStep?.detail ?? "This result didn’t record what you need to provide or do. Ask ModSmith to explain before proceeding.")
+                                    .font(.callout).foregroundStyle(.secondary)
+                                if let step = project.nextStep {
+                                    if step.action == "reply" {
+                                        if let options = step.options {
+                                            ForEach(options) { option in
+                                                Button {
+                                                    model.action("answer", project: project.id, path: option.id)
+                                                } label: {
+                                                    HStack(spacing: 12) {
+                                                        VStack(alignment: .leading, spacing: 4) {
+                                                            Text(option.label).font(.callout.weight(.semibold))
+                                                            Text(option.description).font(.caption).foregroundStyle(.secondary)
+                                                        }.frame(maxWidth: .infinity, alignment: .leading)
+                                                        Image(systemName: "arrow.right").foregroundStyle(.secondary)
+                                                    }.padding(12).contentShape(Rectangle())
+                                                }.buttonStyle(.plain)
+                                                    .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 10))
+                                                    .disabled(model.snapshot.busy)
+                                            }
+                                        }
+                                        Button(step.options == nil ? "Reply" : "Answer another way", systemImage: "text.bubble") { composerFocused = true }
+                                            .buttonStyle(.bordered).disabled(model.snapshot.busy)
+                                    } else if step.action == "resume" {
+                                        Button("I’ve done this — resume", systemImage: "play.fill") { model.action("continue", project: project.id) }
+                                            .buttonStyle(.borderedProminent).disabled(model.snapshot.busy)
+                                    }
+                                } else {
+                                    Button("Clarify next step", systemImage: "questionmark.bubble") { model.action("clarify", project: project.id) }
+                                        .buttonStyle(.borderedProminent).disabled(model.snapshot.busy)
+                                }
+                            }.padding(20).frame(maxWidth: .infinity, alignment: .leading)
+                                .background(Color.accentColor.opacity(0.07), in: RoundedRectangle(cornerRadius: 18))
+                                .id("required-input")
+                        }
+                        if let notice = project.repairNotice, !notice.isEmpty {
+                            Label(notice, systemImage: "exclamationmark.shield")
+                                .font(.callout).foregroundStyle(.orange)
+                                .padding(14).frame(maxWidth: .infinity, alignment: .leading)
+                                .background(Color.orange.opacity(0.06), in: RoundedRectangle(cornerRadius: 12))
+                        }
+                        if project.canEnableAndTest && project.nextStep?.options == nil {
+                            VStack(alignment: .leading, spacing: 12) {
+                                Label("Enable your mod to test it", systemImage: "power")
+                                    .font(.system(size: 20, weight: .semibold, design: .rounded))
+                                Text("Your mod is saved but switched off. Enable it so ModSmith can check how it works and fix any remaining issues.")
+                                    .font(.callout).foregroundStyle(.secondary)
+                                Button("Enable & test", systemImage: "play.fill") {
+                                    model.action("enable_and_test", project: project.id)
+                                }.buttonStyle(.borderedProminent).disabled(model.snapshot.busy)
+                                    .accessibilityIdentifier("modsmith-enable-and-test")
+                            }.padding(20).frame(maxWidth: .infinity, alignment: .leading)
+                                .background(Color.accentColor.opacity(0.07), in: RoundedRectangle(cornerRadius: 18))
+                                .id("next-action")
+                        }
                         if project.turns.isEmpty {
                             Text("What would you like to change about this mod?").font(.headline)
                             Text("Describe the next change below. Your existing files will be refined in place.").foregroundStyle(.secondary)
+                        }
+                        if project.status == "active" && project.enabled && !project.files.isEmpty {
+                            VStack(alignment: .leading, spacing: 14) {
+                                HStack(spacing: 12) {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .font(.system(size: 32)).foregroundStyle(.green)
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text("Your mod is ready").font(.system(size: 20, weight: .semibold, design: .rounded))
+                                        Text(project.enabled ? "Enabled · \(project.scopeLabel)" : "Disabled · Turn it on above to try it")
+                                            .font(.caption).foregroundStyle(.secondary)
+                                    }
+                                }
+                                HStack(spacing: 12) {
+                                    Button("Try it", systemImage: "arrow.up.right") { model.action("try") }
+                                        .buttonStyle(.borderedProminent)
+                                    Button("Make changes", systemImage: "square.and.pencil") { composerFocused = true }
+                                    Spacer()
+                                }.controlSize(.regular)
+                            }.padding(20).frame(maxWidth: .infinity, alignment: .leading)
+                                .background(Color.green.opacity(0.07), in: RoundedRectangle(cornerRadius: 18))
+                                .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(Color.green.opacity(0.2)))
+                                .id("completion")
+                        }
+                        if !project.files.isEmpty {
+                            VStack(alignment: .leading, spacing: 12) {
+                                Label("How to use", systemImage: "book")
+                                    .font(.system(size: 20, weight: .semibold, design: .rounded))
+                                if let guide = project.usage {
+                                    Text(guide.entryPoint).font(.headline)
+                                    ForEach(Array(guide.steps.enumerated()), id: \.offset) { index, step in
+                                        HStack(alignment: .top, spacing: 10) {
+                                            Text("\(index + 1).").foregroundStyle(.secondary)
+                                            Text(step).frame(maxWidth: .infinity, alignment: .leading)
+                                        }
+                                    }
+                                    if !guide.tips.isEmpty { Text(guide.tips).font(.callout).foregroundStyle(.secondary) }
+                                    Button("Update instructions", systemImage: "arrow.clockwise") { model.action("document") }
+                                        .disabled(model.snapshot.busy)
+                                } else {
+                                    Text("Get a guide to this mod’s controls and how to use them.").foregroundStyle(.secondary)
+                                    Button("Generate instructions", systemImage: "book") { model.action("document") }
+                                        .buttonStyle(.borderedProminent).disabled(model.snapshot.busy)
+                                }
+                                Divider()
+                                Text("Turn this mod on or off using Enabled above or Settings → Mods. To change it, describe what you want below. Select this mod in the sidebar to return to its guide and chat history.")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }.padding(20).frame(maxWidth: .infinity, alignment: .leading)
+                                .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 18))
+                                .textSelection(.enabled)
                         }
                         ForEach(project.turns) { turn in turnView(turn) }
                         if project.status == "interrupted" || project.status == "restored" {
                             Text(project.summary).font(.callout).foregroundStyle(.secondary)
                         }
                     } else {
-                        VStack(alignment: .leading, spacing: 18) {
-                            Image(systemName: "sparkles").font(.system(size: 30)).foregroundStyle(Color.accentColor)
-                            Text("A small change.\nA browser that feels like you.")
-                                .font(.system(size: 25, weight: .medium, design: .rounded))
-                            Text("Describe what you want. Try it on the page, then keep refining the same mod.")
-                                .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("START WITH AN IDEA").font(.system(size: 10, weight: .semibold)).tracking(1.5).foregroundStyle(.secondary)
                             ForEach(["Hide distractions and leave only the main content", "Make this page easier to read"], id: \.self) { example in
                                 Button { model.draft = example; composerFocused = true } label: {
-                                    HStack { Text(example); Spacer(); Image(systemName: "arrow.up.left") }
-                                        .padding(10).background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+                                    HStack(spacing: 12) {
+                                        Image(systemName: "sparkles").foregroundStyle(.purple)
+                                        Text(example).font(.system(size: 13))
+                                        Spacer()
+                                        Image(systemName: "arrow.up.left").foregroundStyle(.secondary)
+                                    }.padding(14).background(Color.primary.opacity(0.025), in: RoundedRectangle(cornerRadius: 12))
                                 }.buttonStyle(.plain)
                             }
-                        }.padding(.vertical, 25)
-                    }
-                    if model.project?.status == "working" {
-                        HStack(spacing: 10) {
-                            ProgressView().controlSize(.small)
-                            Text(model.snapshot.stage).font(.callout).foregroundStyle(.secondary)
-                        }
+                        }.padding(.vertical, 8)
                     }
                     if !model.snapshot.progress.isEmpty && model.project?.status == "working" {
                         DisclosureGroup("Activity details", isExpanded: context.binding("showDetails", default: false)) {
@@ -547,16 +754,23 @@ struct ModSmithScreen: View {
                     Color.clear.frame(height: 1).id("bottom")
                 }.padding(22).frame(maxWidth: .infinity, alignment: .leading)
             }
-            .onChange(of: model.project?.turns.count) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
-            .onChange(of: model.snapshot.selected) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
+            .onChange(of: model.project?.turns.count) { _, _ in
+                proxy.scrollTo(resultAnchor, anchor: resultAnchor == "bottom" ? .bottom : .top)
+            }
+            .onChange(of: model.project?.status) { _, status in
+                if resultAnchor != "bottom" { proxy.scrollTo(resultAnchor, anchor: .top) }
+            }
+            .onChange(of: model.snapshot.selected) { _, _ in
+                proxy.scrollTo(resultAnchor, anchor: resultAnchor == "bottom" ? .bottom : .top)
+            }
         }
     }
 
     private func turnView(_ turn: ModSmithTurn) -> some View {
         VStack(alignment: .leading, spacing: 9) {
-            Text(turn.role == "user" ? "You" : turn.role == "system" ? "Revision history" : "ModSmith")
+            Text(turn.role == "user" ? "You" : turn.role == "system" ? "Revision history" : turn.role == "activity" ? "Activity" : "ModSmith")
                 .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-            Text(turn.text).font(.system(size: 13)).textSelection(.enabled)
+            Text(turn.displayText).font(.system(size: 13)).textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
             if let notes = turn.notes, !notes.isEmpty {
                 DisclosureGroup("Details and limitations") {
@@ -569,10 +783,11 @@ struct ModSmithScreen: View {
                 if checks.isEmpty {
                     Text("No verification reported.").font(.caption).foregroundStyle(.secondary)
                 } else {
-                    Text("Checks reported by the agent").font(.caption.weight(.medium)).foregroundStyle(.secondary)
-                    ForEach(Array(checks.enumerated()), id: \.offset) { _, check in
-                        Label(check, systemImage: "checkmark").font(.caption).foregroundStyle(.secondary)
-                    }
+                    DisclosureGroup("Verification details") {
+                        ForEach(Array(checks.enumerated()), id: \.offset) { _, check in
+                            Text(check).font(.caption).foregroundStyle(.secondary)
+                        }
+                    }.font(.caption).foregroundStyle(.secondary)
                 }
             }
         }
@@ -591,12 +806,13 @@ struct ModSmithScreen: View {
                     Text(model.snapshot.stage).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
                 Spacer(minLength: 4)
+                if let profile = model.snapshot.running_profile {
+                    profileIdentity(profile, caption: "Running in")
+                }
                 if let running = model.snapshot.projects.first(where: { $0.status == "working" }) {
                     if running.id != model.snapshot.selected {
                         Button("View") { model.action("select", project: running.id) }
                     }
-                    Button("Stop build", role: .destructive) { model.action("cancel", project: running.id) }
-                        .accessibilityIdentifier("modsmith-stop-build")
                 }
             }.controlSize(.small).padding(.horizontal, 18).padding(.vertical, 10)
                 .background(Color.accentColor.opacity(0.07))
@@ -608,8 +824,8 @@ struct ModSmithScreen: View {
             if let error = model.connectionError ?? model.snapshot.error {
                 Text(error).font(.caption).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
             }
-            TextField(model.project == nil ? "Describe your mod…" : "What should we change next?", text: Binding(get: { model.draft }, set: { model.draft = $0 }), axis: .vertical)
-                .textFieldStyle(.plain).lineLimit(2...6).focused($composerFocused)
+            TextField(model.project == nil ? "Describe what you want to change…" : "What should we change next?", text: Binding(get: { model.draft }, set: { model.draft = $0 }), axis: .vertical)
+                .textFieldStyle(.plain).lineLimit(3...6).focused($composerFocused)
                 .padding(13).background(.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 12))
                 .overlay(RoundedRectangle(cornerRadius: 10).stroke(.quaternary))
             HStack {
@@ -617,14 +833,24 @@ struct ModSmithScreen: View {
                     .font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 if let project = model.project {
-                    if !model.snapshot.busy && project.canContinue {
-                        Button("Continue") { model.action("continue", project: project.id) }
+                    if !model.snapshot.busy && project.canContinue && !project.canEnableAndTest && !project.needsNextStep {
+                        Button("Resume testing & fixes") { model.action("continue", project: project.id) }
                             .accessibilityIdentifier("modsmith-continue")
                     }
                 }
-                Button(model.project == nil ? "Create mod" : "Refine mod", systemImage: "arrow.up") { model.submit() }
-                    .buttonStyle(.borderedProminent).keyboardShortcut(.return, modifiers: .command)
-                    .disabled(model.snapshot.busy || model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                if model.snapshot.busy {
+                    Button("Stop build", systemImage: "stop.fill", role: .destructive) {
+                        model.action("cancel", project: model.snapshot.running_project ?? model.snapshot.projects.first(where: { $0.status == "working" })?.id)
+                    }
+                    .buttonStyle(.borderedProminent).tint(.red).fixedSize()
+                    .disabled(!model.snapshot.canStop)
+                    .help(model.snapshot.canStop ? "Stop generation, verification and repairs" : "A build is running in another app window. Stop it there.")
+                    .accessibilityIdentifier("modsmith-stop-build")
+                } else {
+                    Button(model.project == nil ? "Create mod" : "Make changes", systemImage: "arrow.up") { model.submit() }
+                        .buttonStyle(.borderedProminent).keyboardShortcut(.return, modifiers: .command)
+                        .disabled(model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
             }
         }.padding(18).background(.bar)
     }
@@ -1089,43 +1315,56 @@ struct ExternalProfileScreen: View {
     }
     private var model: any ExternalProfilePresentation { context.model as! any ExternalProfilePresentation }
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            HStack(spacing: 12) {
-                Image(systemName: "arrow.up.forward.app.fill")
-                    .font(.system(size: 26)).foregroundStyle(.tint)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Open with a profile").font(.system(size: 23, weight: .semibold))
-                    Text("Choose where this link belongs.").font(.callout).foregroundStyle(.secondary)
+        VStack(spacing: 16) {
+            VStack(spacing: 8) {
+                Text("Where to?")
+                    .font(.system(size: 27, weight: .semibold, design: .rounded))
+                HStack(spacing: 6) {
+                    Image(systemName: "arrow.up.right").font(.system(size: 10, weight: .semibold))
+                    Text(model.destination).lineLimit(1).truncationMode(.middle)
+                    if model.linkCount > 1 { Text("+\(model.linkCount - 1)").fixedSize() }
                 }
+                .font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
+                .padding(.horizontal, 12).padding(.vertical, 6)
+                .background(Color.primary.opacity(0.045), in: Capsule())
+                .help(model.destination)
             }
-            HStack(spacing: 8) {
-                Image(systemName: "link").foregroundStyle(.secondary)
-                Text(model.destination).font(.callout.weight(.medium)).lineLimit(1).truncationMode(.middle)
-                if model.linkCount > 1 { Text("+\(model.linkCount - 1) more").foregroundStyle(.secondary) }
-            }.padding(12).frame(maxWidth: .infinity, alignment: .leading)
-                .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 10))
             ScrollViewReader { proxy in
                 ScrollView {
-                    VStack(spacing: 8) {
+                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
                         ForEach(Array(model.choices.enumerated()), id: \.element.id) { index, profile in
                             choice(profile, index: index).id(profile.id)
                         }
-                    }
+                    }.padding(5)
                 }
+                .scrollIndicators(.never)
+                .frame(maxHeight: CGFloat(max(1, (model.choices.count + 1) / 2)) * 160 - 2)
                 .onChange(of: selectedID) { _, id in
                     if let id { proxy.scrollTo(id) }
                 }
             }
             if let error = model.error { Text(error).font(.caption).foregroundStyle(.red) }
-            HStack {
-                Text("↑ ↓ Choose · Return to open").font(.caption).foregroundStyle(.secondary)
+            HStack(spacing: 5) {
+                Text("← →")
+                Text("Choose")
+                Text("·").padding(.horizontal, 2)
+                Text("↵ Open")
                 Spacer()
                 Button("Cancel", action: model.cancel).keyboardShortcut(.cancelAction)
+                    .buttonStyle(.plain)
+                    .help("Cancel (Esc)")
             }
-        }.padding(26).padding(.top, 12)
+            .font(.system(size: 11)).foregroundStyle(.secondary)
+            .padding(.horizontal, 5)
+        }.padding(24).padding(.top, 8)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background {
+            Color(nsColor: .windowBackgroundColor)
+            LinearGradient(colors: [Color.accentColor.opacity(0.045), .clear], startPoint: .topLeading, endPoint: .bottomTrailing)
+        }
         .focusable().focusEffectDisabled().focused($keyboardFocused)
+        .onKeyPress(.leftArrow) { move(-1); return .handled }
+        .onKeyPress(.rightArrow) { move(1); return .handled }
         .onKeyPress(.upArrow) { move(-1); return .handled }
         .onKeyPress(.downArrow) { move(1); return .handled }
         .onKeyPress(.return) {
@@ -1137,18 +1376,21 @@ struct ExternalProfileScreen: View {
     }
 
     @ViewBuilder private func choice(_ profile: ProfileDisplay, index: Int) -> some View {
+        let tint = Color(nsColor: screenColor(hex: profile.draft.tint) ?? .controlAccentColor)
         let button = Button { model.choose(profile.id) } label: {
-            HStack(spacing: 14) {
-                ProfileIdentity(draft: profile.draft, size: 38)
-                    .frame(width: 44, height: 44)
-                    .background(Color(nsColor: screenColor(hex: profile.draft.tint) ?? .controlAccentColor).opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
-                Text(profile.name).font(.system(size: 15, weight: .medium)).lineLimit(1)
-                Spacer()
-                if index < 9 {
-                    Text("⌘\(index + 1)").font(.system(size: 12, design: .monospaced)).foregroundStyle(.secondary)
-                }
-            }.padding(12).contentShape(Rectangle())
-        }.buttonStyle(ProfileChoiceStyle(selected: selectedID == profile.id))
+            VStack(spacing: 10) {
+                ProfileIdentity(draft: profile.draft, size: 52)
+                    .frame(width: 64, height: 64)
+                    .background(tint.opacity(0.12), in: Circle())
+                Text(profile.name).font(.system(size: 15, weight: .semibold)).lineLimit(1)
+                    .frame(maxWidth: .infinity)
+                Text(index < 9 ? "⌘\(index + 1)" : "Open")
+                    .font(.system(size: 10, weight: .medium, design: .rounded))
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity).frame(height: 148)
+            .contentShape(RoundedRectangle(cornerRadius: 18))
+        }.buttonStyle(ProfileChoiceStyle(selected: selectedID == profile.id, tint: tint))
             .accessibilityLabel("Open in \(profile.name)")
             .accessibilityAddTraits(selectedID == profile.id ? [.isSelected] : [])
         if index < 9 { button.keyboardShortcut(KeyEquivalent(Character(String(index + 1))), modifiers: .command) }
@@ -1158,18 +1400,36 @@ struct ExternalProfileScreen: View {
 
 private struct ProfileChoiceStyle: ButtonStyle {
     var selected = false
+    var tint: Color
     func makeBody(configuration: Configuration) -> some View {
-        ProfileChoiceBody(configuration: configuration, selected: selected)
+        ProfileChoiceBody(configuration: configuration, selected: selected, tint: tint)
     }
     private struct ProfileChoiceBody: View {
         let configuration: Configuration
         let selected: Bool
+        let tint: Color
         @State private var hovered = false
+        @Environment(\.accessibilityReduceMotion) private var reduceMotion
         var body: some View {
             configuration.label
                 .foregroundStyle(.primary)
-                .background(selected || hovered || configuration.isPressed ? Color.accentColor.opacity(0.12) : Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
-                .overlay(RoundedRectangle(cornerRadius: 12).stroke(selected || hovered ? Color.accentColor.opacity(0.5) : Color.primary.opacity(0.08)))
+                .background {
+                    RoundedRectangle(cornerRadius: 18)
+                        .fill(Color(nsColor: .controlBackgroundColor))
+                    RoundedRectangle(cornerRadius: 18)
+                        .fill(LinearGradient(colors: [tint.opacity(selected ? 0.14 : 0.04), tint.opacity(selected ? 0.04 : 0.01)], startPoint: .topLeading, endPoint: .bottomTrailing))
+                }
+                .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(selected ? tint.opacity(0.65) : Color.primary.opacity(hovered ? 0.18 : 0.08), lineWidth: selected ? 1.5 : 1))
+                .overlay(alignment: .topTrailing) {
+                    Image(systemName: selected ? "checkmark.circle.fill" : "arrow.up.right")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(selected ? tint : Color.secondary.opacity(0.5))
+                        .padding(12)
+                }
+                .shadow(color: tint.opacity(selected ? 0.1 : 0), radius: 4, y: 2)
+                .scaleEffect(configuration.isPressed ? 0.98 : 1)
+                .offset(y: hovered && !configuration.isPressed ? -2 : 0)
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: hovered)
                 .onHover { hovered = $0 }
         }
     }

@@ -187,21 +187,24 @@ Detection reads window state and requests no recording or Accessibility access.
 
 ## Navigation failure diagnostics
 
-Main-frame navigation failures (excluding normal cancellation/download handoff)
-write local JSON lines to `BOWSER_HOME/diagnostics/navigation-failures.jsonl`.
+Main-frame navigation lifecycle events and failures write local JSON lines to `BOWSER_HOME/diagnostics/navigation-failures.jsonl`.
 The default home is `~/.bowser`. One previous file is retained; each file rotates
 at approximately 256 KiB. Files are private (0600), in a private directory
 (0700), and are never uploaded by telemetry.
 
-Records include the app/OS version, timestamp, random navigation identifier,
+Records include the app/OS version, timestamp, process session and navigation
+identifiers, tab/profile IDs, loading progress and window visibility. Events cover
+start, redirects, response (with HTTP status), commit, finish, WebContent termination,
+and a still-loading checkpoint after ten seconds. Failures include cancellations,
 pre/post-commit stage, monotonic elapsed time, redirect count, and up to five
-underlying error domain/code pairs. Network snapshots include path availability,
+underlying error domain/code pairs plus numeric CF stream error codes when supplied. Network snapshots include path availability,
 interface types, DNS support, expensive/constrained flags and the number of path
 updates since navigation began. Unknown or stale navigation timing is left
 unknown rather than attributed to a newer load. No URLs, hostnames, search terms,
 page contents, headers, credentials, IP addresses, interface names or free-form
 error descriptions are stored. Synthetic error-page loads do not start a new
-trace; ordinary navigation cancellation does not generate a failure record.
+trace. Correlate records by session, tab and navigation IDs; an unfinished start
+remains evidence even if the process exits before a failure callback.
 
 A satisfied network path and DNS support are capability signals, not proof that
 DNS lookup, TLS negotiation or the destination server succeeded. WebKit does not

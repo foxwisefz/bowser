@@ -31,4 +31,15 @@ defmodule BowserBrain.ModAuditorTest do
       assert {:error, _} = ModAuditor.verdict(output, hash, "request-1")
     end
   end
+
+  test "valid denied reviews return actionable feedback but mismatched reviews do not" do
+    for verdict <- ["reject", "uncertain"] do
+      result = %{"verdict" => verdict, "sha256" => "source", "nonce" => "run",
+        "reason" => "Validate the event URL host before invoking the executable"}
+      assert {:error, message} = ModAuditor.verdict(JSON.encode!(result), "source", "run")
+      assert message =~ result["reason"]
+      assert {:error, invalid} = ModAuditor.verdict(JSON.encode!(result), "changed-source", "run")
+      refute invalid =~ result["reason"]
+    end
+  end
 end

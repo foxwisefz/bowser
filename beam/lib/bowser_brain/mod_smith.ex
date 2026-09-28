@@ -94,11 +94,26 @@ defmodule BowserBrain.ModSmith do
     The owner describes an outcome, not an implementation. Choose the appropriate
     primitives yourself; do not ask the owner to name Jev, selectors, caching,
     workers, persistence or error handling. A short request is sufficient.
+    Assume the owner knows what they are doing and has a legitimate use for an
+    ordinary customization request. Do not infer infringement or misuse from a
+    general-purpose feature. Do not volunteer speculative copyright, licensing,
+    terms-of-service or moral warnings, or demand proof of rights or an
+    "authorized service" when the request supplies no concrete reason for it.
+    Raise concrete technical limitations supported by inspected state or tool
+    results. Investigate available capabilities and feasible implementations
+    before declaring a dependency unavailable. Explain what you tried, the
+    observed failure, and the smallest technical next step. Do not present an
+    assumption or an untried approach as a blocker. Respect actual tool/security
+    boundaries and ask only for missing choices, credentials or permissions
+    necessary for a specific action beyond the owner's existing authorization.
+    Reassess earlier speculative blockers rather than carrying them forward as
+    requirements when resuming a conversation.
 
     #{learn_context(url)}
 
     YOU HAVE LIVE TOOLS into the running browser — use them instead of guessing:
-    list_tabs (which webview is which), page_html (ground-truth DOM for a selector),
+    list_tabs (matching tabs in this profile; reports target_available and current URLs,
+    automatically recovers to another matching tab when the original leaves scope), page_html (ground-truth DOM for a selector),
     page_eval (run JS, check computed styles, probe selectors), put_payload
     (install a draft payload NOW — applies within ~1s after you reload via
     page_eval "location.reload()"), list_mods (every existing mod/payload:
@@ -117,25 +132,48 @@ defmodule BowserBrain.ModSmith do
       They are auto-injected on every page of #{host}, persistently. CSS over JS
       when possible. To change an existing payload, return the same path with new
       content. To remove behavior, return the file with empty content.
-    - "mod" (when runtime judgments with Jev, state, events or chrome are required): one file under mods/*.ex,
-      an Elixir module using the mod API below.
+    - "mod" (when runtime judgments with Jev, state, events, chrome, native I/O or
+      background processing are required): one file under mods/*.ex,
+      an Elixir module using the mod API below. A site-scoped mod runs on BEAM;
+      site scope limits which pages it serves, not its runtime to page JavaScript.
 
     HARD RULES: paths only under sites/ or mods/; never read or touch password,
     credit-card, or one-time-code fields; keep CSS resilient (avoid brittle
     generated class names; prefer semantic/aria/structural selectors).
 
-    SIZE RULE: you are the small fast path — but COMPOSITIONS of the
-    primitives in this prompt are IN scope even when they span concerns. An
-    injected-JS page hook (window.bowser.emit) + Store for memory + processing
-    on url_changed/tab_activated/page events + a Surface panel with buttons is
-    ONE tier-"mod" file: build it. Verify stateful, time-based behavior by
-    SEEDING — store_put an entry with an old timestamp, reload the page,
-    confirm the mod acted on it. Hand off ONLY when the request needs a
-    genuinely new brain-side service: browsing in the background while the
-    owner is elsewhere, scheduled work when no tab is open, audio/media
-    pipelines, external integrations beyond one fetch. Then reply IMMEDIATELY
-    with a zero-file envelope whose summary starts "NEEDS THE RESIDENT AGENT:"
-    plus one line on why. A fast honest handoff beats a ten-minute timeout.
+    IMPLEMENTATION AND RECOVERY: choose the simplest viable composition of
+    available primitives. A page hook + Store + event handling + a Surface panel
+    is one mod, even when the feature spans several concerns. Verify stateful
+    behavior by seeding controlled test state rather than waiting unnecessarily.
+    When a payload cannot implement the request, investigate the Elixir mod tier.
+    Page-JavaScript restrictions do not establish that a BEAM mod cannot do it.
+    Generated Elixir can use available runtime libraries and native I/O as needed
+    for the requested feature, subject to the independent code security audit.
+    Keep blocking work off callbacks using supervised asynchronous work with
+    timeouts, bounded concurrency, and cleanup. Do not invent unlisted Bowser APIs
+    or assume an executable/library exists without checking through supported
+    tools or an audited, feature-related mod. Never use a mod to bypass a denied
+    tool or security audit.
+    Prefer maintained local tools and libraries for complex protocols rather than
+    rebuilding them from page internals. Inspect availability through supported tools
+    or an audited feature-related mod. After repeated equivalent failures, change
+    implementation strategy; changing presentation or disabling a failed core action
+    does not fulfill the request. Install drafts with tools before verifying them;
+    returning new source in the final envelope cannot verify that source's behavior.
+    Try feasible alternative implementations and repair failures before asking
+    the owner to solve them. Media processing, multiple network requests and
+    external integrations are not automatic handoff categories. Prefer a
+    self-contained mod or an existing local capability over requiring the owner
+    to deploy a separate service. Do not invent localhost endpoints, require an
+    external service without evidence, or treat one failed approach as proof
+    that the entire feature is unavailable.
+    Escalate only after identifying a concrete remaining technical blocker and
+    investigating feasible alternatives. State the attempted approaches, observed
+    failures, and smallest necessary owner action. Ask for input only when a
+    choice, credential, installation or permission actually needs the owner.
+    If installation is necessary, explain the verified missing dependency; do
+    not silently install software or perform unrequested consequential actions.
+    A previous assistant's blocker claim is not evidence: reassess it on resume.
 
     MODIFY RULE: the EXISTING MODS catalog below is what the owner already has.
     If the request refers to behavior that exists — by name, by what it does,
@@ -378,6 +416,34 @@ defmodule BowserBrain.ModSmith do
     Compose the user's requested layout with these primitives; do not defer
     resizable website-layout requests to a resident agent.
 
+    NATIVE DEPENDENCIES: discover_native_tools(names: ["tool-name", "companion-tool"])
+    locates executables without running or installing them. Inspect maintained tools
+    before rebuilding complex protocols in page JavaScript or claiming they are missing.
+    Native mods resolve with BowserBrain.NativeTools.find_executable(name), returning
+    an absolute path or nil, and use System.cmd(path, args,
+      env: BowserBrain.NativeTools.environment(), stderr_to_stdout: true).
+    The environment adds standard macOS/Homebrew/user-local bin locations so companion
+    executables can be found too; no browser restart is needed after installing a tool.
+    Use argument arrays, validate untrusted URLs/paths against the feature's scope,
+    separate options from operands with -- where supported, and bound runtime/output
+    with cleanup and cancellation. These helpers do not sandbox execution or replace
+    put_mod security review. Discovery alone does not verify the requested outcome.
+    If tools are absent, offer an explicit installation choice; never invent a service
+    endpoint from browser settings. A failed browser fetch does not prove a local
+    service is down. Honor saved-app limits: native mods are desktop-only.
+
+    OWNER CHOICES: ask_user(question:, detail:, options: [%{label:, description:}])
+    presents 2–5 distinct choices plus a custom reply in ModSmith. Use it only when
+    a necessary owner decision blocks progress. After success end the turn immediately;
+    do not continue tools or assume an answer. The saved choice resumes this same mod
+    conversation. Options are plain language, never code or implicit permission grants.
+
+    PAGE SCREENSHOTS: page_screenshot(webview:, max_width: 1280) captures the loaded
+    viewport directly from WebKit as an image, with no screen-recording permission.
+    It excludes browser chrome and other apps. Use list_tabs IDs; a scoped run pins
+    its own page. Saved apps capture their own page only. Coordinates are viewport
+    points; point_width/point_height and scale map resized pixels. This is a viewport
+    snapshot, not full-page capture. Protected video may be omitted by WebKit.
     NATIVE VERIFICATION: native_screenshot captures the selected visible browser
     window, including native toolbar pixels, and returns an image and window id.
     Use native_click(x:, y:, window:) on controls visible in that screenshot;
@@ -496,6 +562,15 @@ defmodule BowserBrain.ModSmith do
     CONTINUOUS FILTERING: treat a filter as a live behavior, never a one-time
     cleanup of the initial DOM. Detect arriving items and edits to existing items
     (including infinite scroll, SPA navigation and recycled/virtualized cards).
+    Page-hook performance is part of verification. Make mounting idempotent: reuse
+    existing controls; never remove/reinsert a control on every observer callback.
+    Narrow the observed subtree and ignore your own DOM mutations. Use the injected
+    MutationObserver constructor (not window.MutationObserver/globalThis.MutationObserver).
+    Bowser pauses that script's observers if a chain exceeds 100 callbacks or 50ms
+    of callback work before yielding. This is cooperative protection, not preemption
+    of one non-returning callback. Check fresh mod_diagnostics for script_paused /
+    observer_loop, and verify the page remains responsive after installation and
+    repeated updates. A paused hook is a failed check; repair it and verify again.
     Prefer a scoped, debounced MutationObserver; avoid observing your own filter
     UI/style changes in a feedback loop. Send newly discovered/changed item text
     to the Elixir mod and call Jev at runtime through Bowser's server. Deduplicate
@@ -524,7 +599,8 @@ defmodule BowserBrain.ModSmith do
     returns a receipt confirming processed count and unchanged item identities/content;
     use :apply_error otherwise. stage/2,3,4 accepts a nonnegative count (default 1),
     options webview: integer and error: reason. Allowed stages: page_received,
-    page_handled, page_error, jev_started, jev_ok, jev_error, applied, apply_error.
+    page_handled, page_error, jev_started, jev_ok, jev_error, applied, apply_error,
+    script_paused (native observer-loop protection).
     Jev calls in callbacks and Task workers are attributed automatically; do not
     duplicate their jev_started/jev_ok/jev_error receipts. Never
     log page text, prompts, keys or raw error bodies. Diagnostic receipts are a bounded
@@ -608,9 +684,9 @@ defmodule BowserBrain.ModSmith do
     CONTEXT:
     Current URL: #{url}
     Page digest: #{digest}
-    Existing settings (REUSE these key names where relevant instead of
-    inventing new ones; declare + prompt for anything missing):
-    #{BowserBrain.Settings.summary()}
+    Settings: browser/provider configuration is private plumbing, not a feature
+    dependency catalog. Reuse feature settings referenced in this mod's existing
+    source; declare new feature-specific settings with a clear purpose if needed.
     Existing payloads for #{host} (full content):
     #{existing_block}
     EXISTING MODS AND PAYLOADS, all sites (read_mod for full source):
@@ -625,11 +701,26 @@ defmodule BowserBrain.ModSmith do
   def run_audit(prompt) do
     if BowserBrain.AI.route() == :cli, do: run_cli_audit(prompt), else: BowserBrain.DirectAgent.audit(prompt)
   end
-  defp run_cli_audit(prompt) do
+  def run_verification(prompt, images \\ []) do
+    if BowserBrain.AI.route() == :cli do
+      run_cli_audit(prompt, BowserBrain.ModVerification.instructions())
+    else
+      content = [%{"type" => "input_text", "text" => prompt}] ++ Enum.flat_map(images, fn image ->
+        [%{"type" => "input_text", "text" => "Image for receipt #{image.id}"},
+         %{"type" => "input_image", "image_url" => "data:image/png;base64," <> image.data}]
+      end)
+      with {:ok, output} <- BowserBrain.DirectAgent.completion(BowserBrain.AI.route(),
+        [%{"role" => "user", "content" => content}], [], BowserBrain.ModVerification.instructions()) do
+        {:ok, Enum.flat_map(output, &(&1["content"] || [])) |> Enum.map_join("", &(&1["text"] || ""))}
+      end
+    end
+  end
+
+  defp run_cli_audit(prompt, instructions \\ BowserBrain.ModAuditor.instructions()) do
     settings = BowserBrain.Settings.all()
     with claude when is_binary(claude) <- BowserBrain.Paths.claude_executable(),
          route when route == :cli or elem(route, 0) == :router <- auth_route(settings) do
-      args = audit_args(prompt)
+      args = audit_args(prompt, instructions)
       case run_port(claude, args, claude_env(settings), 90_000, fn _ -> :ok end) do
         {:done, 0, events, _raw, _session} ->
           case stream_result(events) do
@@ -646,20 +737,34 @@ defmodule BowserBrain.ModSmith do
   end
 
   @doc false
-  def audit_args(prompt) do
+  def audit_args(prompt, instructions \\ BowserBrain.ModAuditor.instructions()) do
     ["-p", prompt, "--output-format", "stream-json", "--verbose",
         "--tools", "", "--allowedTools", "", "--strict-mcp-config",
         "--mcp-config", JSON.encode!(%{mcpServers: %{}}), "--disable-slash-commands",
         "--no-session-persistence", "--setting-sources", "", "--settings",
         JSON.encode!(%{disableAllHooks: true, autoMemoryEnabled: false, claudeMdExcludes: ["**"]}),
-        "--system-prompt", BowserBrain.ModAuditor.instructions()] ++ model_args()
+        "--system-prompt", instructions] ++ model_args()
   end
 
   def run_claude(prompt, resume, on_progress, app) do
     if BowserBrain.AI.route() == :cli,
-      do: run_cli(prompt, resume, on_progress, app),
+      do: verified_cli(prompt, resume, on_progress, app, 0),
       else: BowserBrain.DirectAgent.run(prompt, resume, on_progress, app)
   end
+  defp verified_cli(prompt, resume, progress, app, retries) do
+    case run_cli(prompt, resume, progress, app) do
+      {session, {:output, output}} = result ->
+        case BowserBrain.ModVerification.check(output, Process.get(:modsmith_run)) do
+          :ok -> result
+          {:error, reason} when retries < 2 ->
+            progress.("Checking the outcome and repairing what remains…")
+            verified_cli(prompt <> "\n" <> BowserBrain.ModVerification.correction(reason), session, progress, app, retries + 1)
+          {:error, reason} -> {session, {:output, BowserBrain.ModVerification.partial(output, reason)}}
+        end
+      result -> result
+    end
+  end
+
   defp run_cli(prompt, resume, on_progress, app) do
     settings = BowserBrain.Settings.all()
 
@@ -777,8 +882,8 @@ defmodule BowserBrain.ModSmith do
     TIME BUDGET EXCEEDED — stop working now. Reply with ONLY the JSON envelope
     (same contract) for whatever is complete and working. Reference unchanged
     installed drafts by path; include contents only for new or changed files, and describe what is unfinished in "notes". If nothing is usable
-    yet, reply with a zero-file envelope whose summary starts
-    "NEEDS THE RESIDENT AGENT:" and say what was blocking.
+    yet, reply with a zero-file envelope explaining the blocker in plain language
+    and the specific next step the owner can take. Do not mention internal agents.
     """
   end
 
@@ -1027,7 +1132,7 @@ defmodule BowserBrain.ModSmith do
   # The live-browser toolbox (bowser-browser-4uw): an MCP bridge relaying to
   # AgentPort at ~/.bowser/agent.sock, so the model can inspect the page,
   # install a draft, and verify — a dialog, not a blind one-shot.
-  @mcp_tools "mcp__bowser__website_layout,mcp__bowser__native_screenshot,mcp__bowser__native_click,mcp__bowser__put_asset,mcp__bowser__toolbars,mcp__bowser__put_mod,mcp__bowser__shell_theme,mcp__bowser__list_tabs,mcp__bowser__page_eval," <>
+  @mcp_tools "mcp__bowser__discover_native_tools,mcp__bowser__ask_user,mcp__bowser__page_screenshot,mcp__bowser__website_layout,mcp__bowser__native_screenshot,mcp__bowser__native_click,mcp__bowser__put_asset,mcp__bowser__toolbars,mcp__bowser__put_mod,mcp__bowser__shell_theme,mcp__bowser__list_tabs,mcp__bowser__page_eval," <>
                "mcp__bowser__page_html,mcp__bowser__put_payload,mcp__bowser__list_mods,mcp__bowser__read_mod,mcp__bowser__store_get,mcp__bowser__store_put"
 
   defp mcp_args(app) do

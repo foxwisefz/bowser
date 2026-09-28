@@ -13,10 +13,14 @@ import BowserSurfaceKit
     private var context: BrowserScreenContext?
     private var panel: CommandBarPanel?
     private weak var target: BrowserWindowController?
+    private var targetURL = ""
     func show(for controller: BrowserWindowController) {
         guard SiteAppConfiguration.current == nil else { return }
         target = controller
         let panel = ensurePanel()
+        panel.browserOwner = controller
+        targetURL = controller.activeTab?.currentURLString ?? ""
+        state.modScope.reset(url: targetURL, faviconPath: controller.activeTab?.faviconPath)
         state.query = ""; state.selected = 0
         state.profile = controller.profile.id; state.active = controller.activeTab?.webviewId
         state.placeholder = "Search the web, enter a URL, or find a tab"
@@ -28,7 +32,10 @@ import BowserSurfaceKit
         panel.makeKeyAndOrderFront(nil)
         state.focus()
     }
-    func hide() { panel?.orderOut(nil) }
+    func hide() { state.modScope.freeze(); panel?.orderOut(nil) }
+    func receiveScope(id: String, choice: String) {
+        state.modScope.receive(id: id, choice: choice)
+    }
     private func ensurePanel() -> CommandBarPanel {
         if let panel { return panel }
         let panel = CommandBarPanel(contentRect: NSRect(x: 0, y: 0, width: 640, height: 94),
@@ -42,13 +49,18 @@ import BowserSurfaceKit
             let modCommand = text == "do" || text == "do+" || text.hasPrefix("do ") || text.hasPrefix("do+ ")
             if text.hasPrefix("new-mod ") || modCommand {
                 let workspace = ModSmithWindow.shared
-                workspace.show()
+                workspace.model.targetWebview = self?.state.active
+                workspace.model.targetURL = self?.targetURL ?? ""
+                workspace.show(captureTarget: false)
                 let draft = modCommand ? text.split(separator: " ", maxSplits: 1).dropFirst().first.map(String.init) ?? "" : String(text.dropFirst("new-mod ".count))
-                workspace.model.prepareNewDraft(draft)
+                workspace.model.prepareNewDraft(draft, scope: self?.state.modScope.selected ?? "site", start: modCommand && !draft.isEmpty)
                 return
             }
             ChromeSurface.emit(["op": "event", "event": "omnibar_command", "text": text,
                 "profile": self?.target?.profile.id ?? "default", "webview": self?.target?.activeTab?.webviewId ?? 0])
+        }
+        state.modScope.request = { id, text, host in
+            BrainBridge.shared.send(["op": "event", "event": "modsmith_scope", "request_id": id, "text": text, "host": host])
         }
         state.commands = { [weak self] in ChromeSurface.commands(for: self?.target?.profile.id ?? "default") }
         state.tabs = {
@@ -90,7 +102,8 @@ import BowserSurfaceKit
   }
 
 }
-private final class CommandBarPanel: NSPanel {
+private final class CommandBarPanel: NSPanel, BrowserOwnedPanel {
+  weak var browserOwner: BrowserWindowController?
   var onDismiss: (() -> Void)?
   override var canBecomeKey: Bool { true }
   override func resignKey() {

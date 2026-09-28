@@ -5,8 +5,8 @@
 # release and spawns the installed Bowser.app, so builds and edits here do not
 # replace the browser while you are using it.
 #
-#   bin/install --staging       shared-data staging channel; offline backup before activation
-#   bin/install                 stage shell + brain; activate only when apps are stopped
+#   bin/install --staging       staging channel; compatible changes apply live
+#   bin/install                 stage shell + brain; compatible changes apply live
 #   bin/install --shell-only    stage only the browser and helpers
 #   bin/install --brain-only    stage only the brain and helpers
 #   bin/install --release       optimized shell build (default; isolated launch gate)
@@ -37,8 +37,10 @@ if [ "$CHANNEL" = staging ]; then
   APP_DIR="${BOWSER_APP_DIR:-${BOWSER_HOME:-$HOME/.bowser}/staging-runtime}"
   [ "$NATIVE_ONLY$SHELL_ONLY$BRAIN_ONLY" = 000 ] || { echo '--staging requires a complete build' >&2; exit 2; }
 fi
-# Full updates share the verified-backup and restart boundary in both channels.
-OFFLINE=1
+# Both channels attempt compatible live updates; final file swaps still require quit/backup.
+OFFLINE="${BOWSER_OFFLINE_UPDATE:-0}"
+INSTALLED_CHANNEL="$(/usr/libexec/PlistBuddy -c 'Print :BowserChannel' "$BUNDLE/Contents/Info.plist" 2>/dev/null || true)"
+if [ -n "$INSTALLED_CHANNEL" ] && [ "$INSTALLED_CHANNEL" != "$CHANNEL" ]; then OFFLINE=1; fi
 if [ "$(/usr/libexec/PlistBuddy -c 'Print :BowserChannel' "$BUNDLE/Contents/Info.plist" 2>/dev/null || true)" = staging ]; then
   [ "$NATIVE_ONLY$SHELL_ONLY$BRAIN_ONLY" = 000 ] || { echo 'Channel changes require a complete build' >&2; exit 2; }
 fi
@@ -48,6 +50,7 @@ if [ -z "${BOWSER_SIGN_IDENTITY:-}" ]; then
   BOWSER_SIGN_IDENTITY="$(security find-identity -v -p codesigning | sed -n 's/.*"\(Developer ID Application: [^"]*\)".*/\1/p' | head -1)"
   export BOWSER_SIGN_IDENTITY="${BOWSER_SIGN_IDENTITY:--}"
 fi
+[ "$BOWSER_SIGN_IDENTITY" != - ] || OFFLINE=1
 export BOWSER_NATIVE_CONFIGURATION=release
 [ "$DEBUG" = 1 ] && export BOWSER_NATIVE_CONFIGURATION=debug
 if [ "$NATIVE_ONLY" = 1 ]; then
@@ -71,6 +74,8 @@ if [ "$STAGE_ONLY" = 1 ]; then
   BUNDLE="$BOWSER_HOME/Bowser.app"
 fi
 VERSION="${BOWSER_VERSION:-$(cd "$REPO" && (jj log -r @ --no-graph -T 'change_id.short()' 2>/dev/null || git rev-parse --short HEAD 2>/dev/null || echo dev))}"
+SOURCE_FINGERPRINT=""
+if [ "$CHANNEL" = staging ]; then SOURCE_FINGERPRINT="$("$REPO/bin/development-fingerprint")"; fi
 BUILD="${BOWSER_BUILD:-$(date -u +%Y%m%d%H%M%S)}"
 [[ "$VERSION" =~ ^[A-Za-z0-9][A-Za-z0-9.+-]*$ ]] && [ "${#VERSION}" -le 64 ] || { echo "invalid BOWSER_VERSION" >&2; exit 2; }
 [[ "$BUILD" =~ ^[0-9]{1,18}$ ]] || { echo "invalid BOWSER_BUILD" >&2; exit 2; }
@@ -96,7 +101,8 @@ BUNDLE="$BUILD_STAGE/bundle"
 # Partial updates start from the installed runtime, preserving its release.
 BASE_RUNTIME="$DEST_APP_DIR"
 ACTIVE_RUNTIME="${BOWSER_HOME:-$HOME/.bowser}/backend/active.json"
-if [ "$CHANNEL" != staging ] && [ -f "$ACTIVE_RUNTIME" ]; then
+if [ "$CHANNEL" = staging ]; then ACTIVE_RUNTIME="${BOWSER_HOME:-$HOME/.bowser}/backend/active-staging.json"; fi
+if [ -f "$ACTIVE_RUNTIME" ]; then
   BASE_RUNTIME="$("$RUNTIME_TOOL" active-runtime "$ACTIVE_RUNTIME")"
 fi
 # The host requires a matching checkpoint schema. Promote a partial shell
@@ -138,6 +144,7 @@ if [ "$BRAIN_ONLY" = 0 ]; then
     /usr/libexec/PlistBuddy -c 'Set :CFBundleName Bowser Staging' "$STAGE/Bowser.app/Contents/Info.plist"
     /usr/libexec/PlistBuddy -c 'Set :CFBundleDisplayName Bowser Staging' "$STAGE/Bowser.app/Contents/Info.plist"
     /usr/libexec/PlistBuddy -c "Add :BowserDevelopmentCheckout string $REPO" "$STAGE/Bowser.app/Contents/Info.plist"
+    /usr/libexec/PlistBuddy -c "Add :BowserDevelopmentFingerprint string $SOURCE_FINGERPRINT" "$STAGE/Bowser.app/Contents/Info.plist"
     "$REPO/bin/build-staging-icon" "$STAGE/Bowser.app/Contents/Resources/AppIcon.icns"
   fi
   printf 'APPL????' > "$STAGE/Bowser.app/Contents/PkgInfo"
@@ -187,6 +194,15 @@ if [ "$SHELL_ONLY" = 0 ]; then
   printf '{"protocol":1,"state_schema":5}\n' > "$APP_DIR/HANDOFF.json"
 fi
 echo "$VERSION $BUILD" > "$APP_DIR/VERSION"
+if [ "$CHANNEL" = staging ] && [ "$("$REPO/bin/development-fingerprint")" != "$SOURCE_FINGERPRINT" ]; then
+  echo 'Checkout changed during the build. Check for updates again to build the latest source.' >&2
+  exit 1
+fi
+if [ "$BRAIN_ONLY" = 0 ]; then
+  python3 "$REPO/bin/update-host-identity" "$BUNDLE" "$REPO/bin/shell-entitlements.plist" "$APP_DIR"
+  codesign "${native_sign[@]}" --entitlements "$REPO/bin/shell-entitlements.plist" "$BUNDLE"
+  codesign --verify --deep --strict "$BUNDLE"
+fi
 say "built $VERSION → $BUILD_STAGE"
 
 if [ "$STAGE_ONLY" = 1 ]; then
@@ -198,8 +214,8 @@ fi
 # Module delivery is independent of pending host/backend activation. Older
 # shells ignore this pointer; new shells validate compatibility and signing.
 if [ "$OFFLINE" = 0 ] && [ "$BRAIN_ONLY" = 0 ] && [ "$BOWSER_SIGN_IDENTITY" != - ]; then
-  "$REPO/bin/publish-native-toolbar" "$BUNDLE/Contents/Resources/SurfaceRenderer.bundle" "${BOWSER_HOME:-$HOME/.bowser}"
-  "$REPO/bin/publish-native-toolbar" "$BUNDLE/Contents/Resources/CommandToolbar.bundle" "${BOWSER_HOME:-$HOME/.bowser}"
+  "$REPO/bin/publish-native-toolbar" "$BUNDLE/Contents/Resources/SurfaceRenderer.bundle" "${BOWSER_HOME:-$HOME/.bowser}" "$CHANNEL"
+  "$REPO/bin/publish-native-toolbar" "$BUNDLE/Contents/Resources/CommandToolbar.bundle" "${BOWSER_HOME:-$HOME/.bowser}" "$CHANNEL"
 fi
 
 # Publish a complete generation only after builds and signatures succeed.
@@ -207,7 +223,9 @@ fi
 cp -f "$RUNTIME_TOOL" "$UPDATE_ROOT/apply-update.new"
 codesign --force --sign - "$UPDATE_ROOT/apply-update.new"
 mv -f "$UPDATE_ROOT/apply-update.new" "$UPDATE_ROOT/apply-update"
-BOWSER_OFFLINE_UPDATE="$OFFLINE" "$RUNTIME_TOOL" publish "$UPDATE_ROOT/pending.json" "$BUILD_STAGE" "$DEST_APP_DIR" "$DEST_BUNDLE" "$SHELL_ONLY" "$BRAIN_ONLY"
+live_args=()
+[ "$OFFLINE" = 1 ] || live_args=(--live)
+BOWSER_OFFLINE_UPDATE="$OFFLINE" "$RUNTIME_TOOL" publish "$UPDATE_ROOT/pending.json" "$BUILD_STAGE" "$DEST_APP_DIR" "$DEST_BUNDLE" "$SHELL_ONLY" "$BRAIN_ONLY" "${live_args[@]}"
 # A dormant login job resumes pending activation even if this session reboots.
 # It runs only while a manifest exists and exits immediately after activation.
 AGENT_DIR="$HOME/Library/LaunchAgents"
@@ -233,7 +251,7 @@ if [ -f "$UPDATE_ROOT/pending.json" ]; then
   if [ "$OFFLINE" = 1 ]; then
     say "update ready — choose Restart Now in Bowser to back up, install, and reopen"
   else
-    say "native update staged — compatible backend updates apply live; native changes activate after apps quit"
+    say "update prepared — compatible changes apply live; Bowser reports whether a restart is needed"
   fi
 else
   say "installed — ready for next launch"

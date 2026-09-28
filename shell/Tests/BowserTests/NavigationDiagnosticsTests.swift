@@ -57,6 +57,70 @@ final class NavigationDiagnosticsTests: XCTestCase {
         XCTAssertEqual(errors.map(\.code), [-1001, 42])
     }
 
+    @MainActor func testRealNavigationPersistsCorrelatedLifecycleAndResponse() async throws {
+        guard ProcessInfo.processInfo.environment["BOWSER_HOME"]?.hasPrefix("/tmp/bowser-nav-") == true else {
+            throw XCTSkip("Requires isolated diagnostics home")
+        }
+        _ = NSApplication.shared
+        let server = try BrowserFixtureServer()
+        defer { server.stop() }
+        for _ in 0..<100 where server.origin == nil { try await Task.sleep(for: .milliseconds(20)) }
+        let engine = EngineView(frame: .zero)
+        engine.load(urlString: try XCTUnwrap(server.origin) + "/page")
+        let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
+        let file = BowserPaths.home.appendingPathComponent("diagnostics/navigation-failures.jsonl")
+        var records: [NavigationDiagnosticRecord] = []
+        for _ in 0..<250 {
+            let text = (try? String(contentsOf: file, encoding: .utf8)) ?? ""
+            records = text.split(separator: "\n").compactMap {
+                try? decoder.decode(NavigationDiagnosticRecord.self, from: Data($0.utf8))
+            }.filter { $0.webviewID == engine.webviewId }
+            if records.contains(where: { $0.stage == "finished" }) { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let start = try XCTUnwrap(records.first { $0.stage == "started" })
+        let response = try XCTUnwrap(records.first { $0.stage == "response" })
+        let commit = try XCTUnwrap(records.first { $0.stage == "committed" })
+        let finish = try XCTUnwrap(records.first { $0.stage == "finished" })
+        XCTAssertEqual(response.httpStatus, 200)
+        for record in [response, commit, finish] {
+            XCTAssertEqual(record.navigationID, start.navigationID)
+            XCTAssertEqual(record.profileID, engine.profileId)
+            XCTAssertNotNil(record.elapsedMilliseconds)
+        }
+    }
+
+    func testLifecycleCorrelationAndNewNavigationIsolation() throws {
+        var trace = NavigationDiagnosticTrace()
+        let first = NSObject(), next = NSObject()
+        trace.start(first, now: 100, network: .init(status: "satisfied"), revision: 1)
+        let start = trace.event(first, stage: "started", now: 100, network: .init(), revision: 1)
+        let slow = trace.event(first, stage: "still_loading", now: 110, network: .init(), revision: 2)
+        let response = trace.event(stage: "response", now: 112, network: .init(), revision: 2)
+        let finish = trace.event(first, stage: "finished", now: 113, network: .init(), revision: 2)
+        XCTAssertEqual(start.navigationID, slow.navigationID)
+        XCTAssertEqual(slow.navigationID, response.navigationID)
+        XCTAssertEqual(response.navigationID, finish.navigationID)
+        XCTAssertEqual(slow.elapsedMilliseconds, 10_000)
+        XCTAssertEqual(finish.elapsedMilliseconds, 13_000)
+        XCTAssertEqual(slow.networkUpdates, 1)
+        trace.start(next, now: 120, network: .init(), revision: 2)
+        let stale = trace.event(first, stage: "finished", now: 121, network: .init(), revision: 2)
+        XCTAssertNil(stale.elapsedMilliseconds)
+        let current = trace.event(next, stage: "started", now: 120, network: .init(), revision: 2)
+        XCTAssertNotEqual(start.navigationID, current.navigationID)
+    }
+
+    func testStreamErrorEvidenceUsesOnlyNumericFields() throws {
+        let error = NSError(domain: NSURLErrorDomain, code: -1001, userInfo: [
+            "_kCFStreamErrorDomainKey": 4, "_kCFStreamErrorCodeKey": -2102,
+            "arbitrary": "private", NSLocalizedDescriptionKey: "private"])
+        let chain = NavigationDiagnosticError.chain(error)
+        XCTAssertEqual(chain.first?.streamErrorDomain, 4)
+        XCTAssertEqual(chain.first?.streamErrorCode, -2102)
+        XCTAssertFalse(String(decoding: try JSONEncoder().encode(chain), as: UTF8.self).contains("private"))
+    }
+
     func testLogRotatesAndRestrictsPermissions() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

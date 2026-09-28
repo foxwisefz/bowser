@@ -34,6 +34,7 @@ final class Generation {
 
 @MainActor
 final class Host {
+    let channel = UpdateChannel(ProcessInfo.processInfo.environment["BOWSER_UPDATE_CHANNEL"])
     let home: URL
     let root: URL
     var runtime: URL
@@ -195,7 +196,7 @@ final class Host {
         guard ProcessInfo.processInfo.environment["BOWSER_RUNTIME_PINNED"] != "1" else { throw RuntimeFailure("pinned runtime requires restart") }
         guard !quitting, let old = active, nativePeer != nil else { throw RuntimeFailure("browser is not ready") }
         let runtime = candidateURL.resolvingSymlinksInPath().standardizedFileURL
-        guard runtime.deletingLastPathComponent() == child(home, "releases").resolvingSymlinksInPath().standardizedFileURL else {
+        guard runtime.deletingLastPathComponent() == child(home, channel.releases).resolvingSymlinksInPath().standardizedFileURL else {
             throw RuntimeFailure("release is outside the installed generations directory")
         }
         if runtime == old.runtime { return ["ok": true, "already_active": true] }
@@ -218,7 +219,7 @@ final class Host {
             if let journalError { throw journalError }
             try Task.checkCancellation()
             guard ProcessInfo.processInfo.systemUptime - started < 0.8 else { throw RuntimeFailure("handoff exceeded its time budget") }
-            try atomicJSON(child(root, "active.json"), ["runtime": runtime.path])
+            try atomicJSON(child(home, channel.activePointer), ["runtime": runtime.path])
             active = candidate; committed = true
             await old.stop(killImmediately: true); children.removeAll { $0 === old }
             requests = requests.filter { $0.value.0 !== old }
@@ -254,7 +255,7 @@ final class Host {
             deadline.cancel()
             let result: Message
             switch message["op"] as? String {
-            case "status": result = ["ok": true, "pid": getpid(), "runtime": active?.runtime.path as Any? ?? NSNull(), "implementation": "swift", "live_updates": ProcessInfo.processInfo.environment["BOWSER_RUNTIME_PINNED"] != "1"]
+            case "status": result = ["ok": true, "pid": getpid(), "runtime": active?.runtime.path as Any? ?? NSNull(), "implementation": "swift", "channel": channel.rawValue, "live_updates": ProcessInfo.processInfo.environment["BOWSER_RUNTIME_PINNED"] != "1"]
             case "stop": quitting = true; result = ["ok": true]
             case "update":
                 guard operation == nil else { throw RuntimeFailure("backend operation already in progress") }
@@ -285,7 +286,7 @@ final class Host {
             source.resume(); signals.append(source)
         }
         let startup = Task<Message, Error> {
-            let pointer = child(self.root, "active.json")
+            let pointer = child(self.home, self.channel.activePointer)
             if ProcessInfo.processInfo.environment["BOWSER_RUNTIME_PINNED"] != "1", exists(pointer), let path = try readJSON(pointer)["runtime"] as? String { self.runtime = URL(fileURLWithPath: path) }
             self.active = try await self.boot(self.runtime)
             try await until(20) { self.hello != nil }

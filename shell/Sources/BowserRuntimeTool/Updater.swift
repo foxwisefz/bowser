@@ -92,10 +92,10 @@ func publish(_ pending: URL, _ supplied: Message, shellOnly: Bool, brainOnly: Bo
               let info = try? PropertyListSerialization.propertyList(from: data, format: nil) as? Message else { return false }
         return info["BowserChannel"] as? String == "staging"
     }
-    if ProcessInfo.processInfo.environment["BOWSER_OFFLINE_UPDATE"] == "1" || staging(target) || staging(incoming) {
+    if ProcessInfo.processInfo.environment["BOWSER_OFFLINE_UPDATE"] == "1" || staging(target) != staging(incoming) {
         manifest["live_allowed"] = false
     }
-    if staging(incoming) { manifest["channel"] = "staging" }
+    manifest["channel"] = staging(incoming) ? "staging" : "stable"
     let lock = try FileLock(pending.deletingPathExtension().appendingPathExtension("lock"))
     defer { withExtendedLifetime(lock) {} }
     let previous = exists(pending) ? try readJSON(pending) : nil
@@ -115,19 +115,22 @@ func publish(_ pending: URL, _ supplied: Message, shellOnly: Bool, brainOnly: Bo
 func liveUpdate(_ manifest: inout Message) async throws -> Bool {
     let root = try home(manifest), endpoint = child(root, "backend/host.sock"), stage = child(try field(manifest, "stage"), "runtime")
     guard exists(endpoint), exists(child(stage, "HANDOFF.json")) else { return false }
+    let channel = UpdateChannel(manifest["channel"] as? String)
+    let status = (try? await request(endpoint, ["op": "status"])) ?? [:]
+    guard UpdateChannel(status["channel"] as? String) == channel, status["live_updates"] as? Bool == true else {
+        manifest["deferred_reason"] = "Running backend requires restart or belongs to another channel"
+        return false
+    }
     let runtime: URL
     if let existing = manifest["live_runtime"] as? String { runtime = URL(fileURLWithPath: existing) }
     else {
-        let releases = child(root, "releases"); try mkdir(releases)
+        let releases = child(root, channel.releases); try mkdir(releases)
         runtime = child(releases, UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased())
         let temporary = runtime.appendingPathExtension("new")
         try FileManager.default.copyItem(at: stage, to: temporary)
         try FileManager.default.moveItem(at: temporary, to: runtime); manifest["live_runtime"] = runtime.path
     }
     do {
-        // Older hosts and pinned staging sessions must stay on their runtime.
-        let status = try await request(endpoint, ["op": "status"])
-        guard status["live_updates"] as? Bool == true else { throw RuntimeFailure("backend requires restart") }
         _ = try await request(endpoint, ["op": "update", "runtime": runtime.path], timeout: 30)
         manifest.removeValue(forKey: "deferred_reason")
         manifest["backend_applied"] = true; print("Backend updated live; existing pages remain alive."); return true
@@ -189,7 +192,7 @@ private func applyPendingUpdate(_ args: [String]) async throws {
             guard exists(pending) else { return }
             var manifest = try readJSON(pending)
             try updateProgress(pending, manifest, "waiting")
-            if try busy(manifest), manifest["live_allowed"] as? Bool == true, manifest["channel"] as? String != "staging", manifest["backend_applied"] as? Bool != true,
+            if try busy(manifest), manifest["live_allowed"] as? Bool == true, manifest["backend_applied"] as? Bool != true,
                Date().timeIntervalSince1970 - (manifest["live_attempt_at"] as? Double ?? 0) >= 60 {
                 manifest["live_attempt_at"] = Date().timeIntervalSince1970
                 _ = try await liveUpdate(&manifest); try atomicJSON(pending, manifest)
@@ -215,16 +218,15 @@ private func applyPendingUpdate(_ args: [String]) async throws {
                     try activate(manifest)
                     if manifest["backup_required"] as? Bool == true {
                         for kind in ["surfaces", "command-toolbar"] {
-                            try remove(child(home(manifest), "native-modules/" + kind + "/current"))
+                            try remove(child(home(manifest), UpdateChannel(manifest["channel"] as? String).modules + "/" + kind + "/current"))
                         }
                     }
                     let root = try home(manifest)
-                    if manifest["channel"] as? String != "staging" {
-                    try remove(child(root, "backend/active.json"))
-                    for release in (try? FileManager.default.contentsOfDirectory(at: child(root, "releases"), includingPropertiesForKeys: [.isSymbolicLinkKey, .isDirectoryKey])) ?? [] {
+                    let channel = UpdateChannel(manifest["channel"] as? String)
+                    try remove(child(root, channel.activePointer))
+                    for release in (try? FileManager.default.contentsOfDirectory(at: child(root, channel.releases), includingPropertiesForKeys: [.isSymbolicLinkKey, .isDirectoryKey])) ?? [] {
                         let name = release.lastPathComponent, values = try release.resourceValues(forKeys: [.isSymbolicLinkKey, .isDirectoryKey])
                         if name.count == 32 && name.allSatisfy({ "0123456789abcdef".contains($0) }) && values.isDirectory == true && values.isSymbolicLink != true { try remove(release) }
-                    }
                     }
                     try remove(field(manifest, "stage"))
                     try updateProgress(pending, manifest, "complete")

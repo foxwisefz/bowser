@@ -45,6 +45,27 @@ final class UpdateTests: XCTestCase {
         XCTAssertEqual(AppUpdates.latestBuild("100", "invalid"), "100")
     }
 
+    func testDevelopmentCheckReadsFingerprintAndRejectsFailedOrMalformedResults() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let bin = root.appendingPathComponent("bin")
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let script = bin.appendingPathComponent("development-fingerprint")
+        let expected = String(repeating: "a", count: 64)
+        for (output, exitCode) in [(expected, 0), ("", 0), ("not-a-fingerprint", 0), (expected, 1)] {
+            try "#!/bin/sh\nprintf '%s\\n' '\(output)'\nexit \(exitCode)\n".write(to: script, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+            do {
+                let actual = try await AppUpdates.developmentFingerprint(checkout: root.path)
+                XCTAssertEqual(exitCode, 0)
+                XCTAssertEqual(output, expected)
+                XCTAssertEqual(actual, expected)
+            } catch {
+                XCTAssertTrue(exitCode != 0 || output != expected)
+            }
+        }
+    }
+
     func testModulesPublishVerifiedCopiesAndLeavePointerOnVerificationFailure() throws {
         let fm = FileManager.default
         let home = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -74,6 +95,15 @@ final class UpdateTests: XCTestCase {
         verified = []
         try UpdateInstaller.publishModules(from: app, home: home) { verified.append($0) }
         XCTAssertEqual(verified.count, 4) // Retry validates existing immutable generations too.
+        let staging = home.appendingPathComponent("staging.app")
+        try fm.copyItem(at: app, to: staging)
+        try PropertyListSerialization.data(fromPropertyList: ["BowserChannel": "staging"], format: .xml, options: 0)
+            .write(to: staging.appendingPathComponent("Contents/Info.plist"))
+        try UpdateInstaller.publishModules(from: staging, home: home) { _ in }
+        for kind in ["surfaces", "command-toolbar"] {
+            XCTAssertEqual(try String(contentsOf: home.appendingPathComponent("native-modules/staging/" + kind + "/current"), encoding: .utf8), build + "\n")
+            XCTAssertEqual(try String(contentsOf: home.appendingPathComponent("native-modules/" + kind + "/current"), encoding: .utf8), build + "\n")
+        }
     }
 
     @MainActor func testUpdateMenuTargetsTheUpdaterAndExposesItsAction() throws {

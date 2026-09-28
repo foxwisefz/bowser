@@ -1,4 +1,5 @@
 import AppKit
+import BackendRuntime
 
 /// The installed app bootstraps its runtime; dev shells keep using their dev brain.
 @MainActor
@@ -70,9 +71,8 @@ final class BackendLifecycle {
         environment["BOWSER_HOME"] = BowserPaths.home.path
         environment["BOWSER_APP_DIR"] = helper.deletingLastPathComponent().deletingLastPathComponent().path
         environment["BOWSER_BUNDLE_PATH"] = Bundle.main.bundleURL.path
-        if Bundle.main.infoDictionary?["BowserChannel"] as? String == "staging" {
-            environment["BOWSER_RUNTIME_PINNED"] = "1"
-        }
+        environment.removeValue(forKey: "BOWSER_RUNTIME_PINNED")
+        environment["BOWSER_UPDATE_CHANNEL"] = UpdateChannel(Bundle.main.infoDictionary?["BowserChannel"] as? String).rawValue
         process.environment = environment
         process.standardInput = FileHandle.nullDevice
         process.standardOutput = FileHandle.nullDevice

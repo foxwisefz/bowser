@@ -16,6 +16,23 @@ final class SurfaceManager {
     private var activationObserved = false
     private var scopedMessages: [String: [String: Any]] = [:]
     private var activeProfile = "default"
+    private weak var activeBrowserWindow: NSWindow?
+
+    private var screenEdgesVisible: Bool {
+        guard let owner = activeBrowserWindow else { return false }
+        return owner.isVisible && !owner.isMiniaturized
+    }
+
+    private func syncScreenEdges() {
+        for (id, config) in edgeConfigs where config.attach == "screen" {
+            guard let panel = panels[id] else { continue }
+            if screenEdgesVisible && belongsToActiveProfile(id) {
+                panel.orderFront(nil)
+            } else {
+                panel.orderOut(nil)
+            }
+        }
+    }
 
     private func belongsToActiveProfile(_ id: String) -> Bool {
         guard let profile = scopedMessages[id]?["profile"] as? String else { return true }
@@ -31,6 +48,17 @@ final class SurfaceManager {
         guard !activationObserved else { return }
         activationObserved = true
         let center = NotificationCenter.default
+        for name in [NSWindow.didMiniaturizeNotification, NSWindow.didDeminiaturizeNotification, NSWindow.willCloseNotification] {
+            center.addObserver(forName: name, object: nil, queue: .main) { [weak self] notification in
+                let window = notification.object as? NSWindow
+                let closing = notification.name == NSWindow.willCloseNotification
+                MainActor.assumeIsolated {
+                    guard let self, let window, window === self.activeBrowserWindow else { return }
+                    if closing { self.activeBrowserWindow = nil }
+                    self.syncScreenEdges()
+                }
+            }
+        }
         center.addObserver(forName: NSApplication.didResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.setFloatingPanels(level: .normal) }
         }
@@ -157,6 +185,7 @@ final class SurfaceManager {
             backing: .buffered,
             defer: false
         )
+        panel.browserOwner = main.windowController as? BrowserWindowController
         panel.backgroundColor = .clear
         panel.isOpaque = false
         panel.hasShadow = false
@@ -212,6 +241,12 @@ final class SurfaceManager {
     private func showEdge(
         id: String, edge: String, peek: Double, width: Double, attach: String, tree: [String: Any]
     ) {
+        observeActivation()
+        // Remember the browser owner even though screen-attached docks are not child windows.
+        if activeBrowserWindow == nil {
+            activeBrowserWindow = NSApp.mainWindow.flatMap { $0.windowController is BrowserWindowController ? $0 : nil }
+                ?? BrowserWindowController.all.first(where: { $0.profile.id == activeProfile })?.window
+        }
         // A peek under 6px is invisible and unhittable.
         let peek = max(peek, 6)
         edgeConfigs[id] = (edge, peek, width, attach)
@@ -235,6 +270,7 @@ final class SurfaceManager {
             backing: .buffered,
             defer: false
         )
+        panel.browserOwner = main.windowController as? BrowserWindowController
         // A fully transparent window lets WindowServer route clicks through
         // transparent favicon pixels before AppKit can hit-test them.
         panel.backgroundColor = NSColor.windowBackgroundColor.withAlphaComponent(0.01)
@@ -257,7 +293,7 @@ final class SurfaceManager {
             // window when the dock is revealed beside a fullscreen window.
             panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
             panel.level = .floating
-            panel.orderFront(nil)
+            if screenEdgesVisible { panel.orderFront(nil) }
         } else {
             main.addChildWindow(panel, ordered: .above)
         }
@@ -343,6 +379,10 @@ final class SurfaceManager {
 
     private func positionEdge(id: String, panel: NSPanel, animated: Bool) {
         guard let config = edgeConfigs[id] else { return }
+        if config.attach == "screen" && (!screenEdgesVisible || !belongsToActiveProfile(id)) {
+            panel.orderOut(nil)
+            return
+        }
 
         // Reference frame: the parent window, or the screen for a
         // macOS-Dock-style screen-edge surface.
@@ -422,6 +462,7 @@ final class SurfaceManager {
             backing: .buffered,
             defer: false
         )
+        panel.browserOwner = (activeBrowserWindow ?? NSApp.mainWindow)?.windowController as? BrowserWindowController
         panel.minSize = NSSize(width: 220, height: 60)
         panel.maxSize = NSSize(width: Self.maxPanelWidth, height: 1400)
         panel.level = .floating
@@ -520,6 +561,8 @@ final class SurfaceManager {
     /// them, never re-parent them. Any panel that drifted off every screen
     /// gets rescued back beside the parent (bowser-browser-gpi).
     func orderAllFront(parent: NSWindow) {
+        guard !parent.isMiniaturized else { syncScreenEdges(); return }
+        activeBrowserWindow = parent
         let next = BrowserWindowController.all.first(where: { $0.window === parent })?.profile.id ?? "default"
         if next != activeProfile {
             activeProfile = next
@@ -534,7 +577,9 @@ final class SurfaceManager {
             }
         }
         for (id, panel) in panels where panel !== parent && belongsToActiveProfile(id) {
+            (panel as? SurfacePanel)?.browserOwner = parent.windowController as? BrowserWindowController
             let screenAttached = edgeConfigs[id]?.attach == "screen"
+            if screenAttached && !screenEdgesVisible { panel.orderOut(nil); continue }
             let windowAttachedEdge = edgeConfigs[id] != nil && !screenAttached
             // Edges keep their hosting view in overlayHostings too — a
             // toolbar overlay is one WITHOUT an edge config. Treating the
@@ -622,7 +667,12 @@ final class SurfaceManager {
 /// Borderless panels refuse key status by default; allow it so text fields
 /// in palettes can be edited (becomesKeyOnlyIfNeeded keeps buttons from
 /// stealing focus).
-private final class SurfacePanel: NSPanel {
+@MainActor protocol BrowserOwnedPanel: AnyObject {
+    var browserOwner: BrowserWindowController? { get }
+}
+
+private final class SurfacePanel: NSPanel, BrowserOwnedPanel {
+    weak var browserOwner: BrowserWindowController?
     override var canBecomeKey: Bool { true }
 }
 

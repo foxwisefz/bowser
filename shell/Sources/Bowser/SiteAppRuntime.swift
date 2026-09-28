@@ -310,16 +310,20 @@ final class SiteAppHub {
     func route(_ message: [String: Any]) {
         let key = configurations.first { $0.value.identifier == message["app"] as? String }?.key
         guard let key, let connection = connections[key] else {
-            if message["op"] as? String == "site_eval", let id = message["id"] as? Int {
+            if ["site_eval", "site_screenshot"].contains(message["op"] as? String ?? ""), let id = message["id"] as? Int {
                 BrainBridge.shared.send(["op": "js_result", "id": id, "ok": false, "value": "Saved app is not running"])
             }
             return
         }
         if message["op"] as? String == "modsmith_state" {
             connection.send(message)
-        } else if message["op"] as? String == "site_eval", let id = message["id"] as? Int {
+        } else if ["site_eval", "site_screenshot"].contains(message["op"] as? String ?? ""), let id = message["id"] as? Int {
             pending[id] = key
-            connection.send(["op": "eval_js", "webview": 0, "id": id, "code": message["code"] ?? ""])
+            if message["op"] as? String == "site_screenshot" {
+                connection.send(["op": "page_screenshot", "webview": 0, "id": id, "max_width": message["max_width"] ?? 1280])
+            } else {
+                connection.send(["op": "eval_js", "webview": 0, "id": id, "code": message["code"] ?? ""])
+            }
             DispatchQueue.main.asyncAfter(deadline: .now() + 8) { self.finishEval(id, error: "Saved app evaluation timed out") }
         } else {
             connection.send(["op": "site_mod_status", "text": message["text"] ?? ""])

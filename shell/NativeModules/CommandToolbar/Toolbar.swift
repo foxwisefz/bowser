@@ -178,20 +178,20 @@ struct CommandToolbar: View {
                         .frame(width: min(CGFloat(model.buttons.count) * 27, model.modWidth), height: 22)
                 }
             }
-            if model.permissionsAvailable {
+            if model.permissionsAvailable && model.capturing {
                 Button(action: permissions) {
-                    Image(systemName: model.capturing ? "record.circle.fill" : "slider.horizontal.3")
-                        .foregroundStyle(model.capturing ? Color.green : Color.secondary)
+                    Image(systemName: "record.circle.fill")
+                        .foregroundStyle(Color.green)
                         .font(.system(size: 12, weight: .medium)).frame(width: 24, height: 22)
-                }.buttonStyle(.plain).help(model.capturing ? "Camera or microphone in use — website permissions" : "Website permissions")
+                }.buttonStyle(.plain).help("Camera or microphone in use — website permissions")
                     .accessibilityLabel("Website permissions")
             }
             Spacer(minLength: 0)
         }
         .animation(.easeOut(duration: 0.15), value: model.revealed)
         .frame(maxHeight: .infinity)
-        .contentShape(Rectangle())
         .frame(maxWidth: .infinity, alignment: .leading)
+        .background(ToolbarWindowDragHandle())
         .onHover { onHoverChanged($0) }
     }
 

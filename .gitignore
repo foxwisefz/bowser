@@ -41,3 +41,6 @@ __pycache__/
 /tests/native-surfaces/results/drag-replacement.json
 /tests/native-surfaces/results/signed-replacement.json
 /tests/native-toolbar/results/signed-replacement.json
+
+# CI-only trusted performance baseline.
+/.performance-baseline/
