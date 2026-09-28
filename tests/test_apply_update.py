@@ -291,7 +291,7 @@ class UpdateTests(unittest.TestCase):
         self.assertFalse(stale.exists())
         self.assertFalse(self.pending.exists())
 
-    def test_staging_never_attempts_a_live_backend_update(self):
+    def test_offline_update_never_attempts_a_live_backend_update(self):
         self.require_backup()
         (self.root/'backend').mkdir()
         (self.root/'backend/host.sock').touch()
@@ -310,9 +310,18 @@ class UpdateTests(unittest.TestCase):
         (self.root/'backend').mkdir()
         pointer = self.root/'backend/active.json'
         pointer.write_text(json.dumps({'runtime': str(self.root/'prod-runtime')}))
+        staging_pointer = self.root/'backend/active-staging.json'
+        staging_pointer.write_text(json.dumps({'runtime': str(self.root/'releases/staging/old')}))
+        for channel in ['', 'staging/']:
+            path = self.root/('native-modules/' + channel + 'surfaces/current')
+            path.parent.mkdir(parents=True)
+            path.write_text('generation')
         result = self.run_tool('apply-update', self.pending)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(pointer.read_text())['runtime'], str(self.root/'prod-runtime'))
+        self.assertFalse(staging_pointer.exists())
+        self.assertFalse((self.root/'native-modules/staging/surfaces/current').exists())
+        self.assertTrue((self.root/'native-modules/surfaces/current').exists())
         snapshot = next((self.root/'backups').glob('*/snapshot.json')).parent
         doc = json.loads((snapshot/'snapshot.json').read_text())
         self.assertFalse(any(Path(e['target']).resolve() == (self.root/'runtime').resolve() for e in doc['entries']))
@@ -334,10 +343,21 @@ class UpdateTests(unittest.TestCase):
         import plistlib
         (self.root/'stage/bundle/Contents').mkdir()
         (self.root/'stage/bundle/Contents/Info.plist').write_bytes(plistlib.dumps({'BowserChannel':'staging'}))
+        (self.root/'Bowser.app/Contents').mkdir()
+        (self.root/'Bowser.app/Contents/Info.plist').write_bytes(plistlib.dumps({'BowserChannel':'staging'}))
         self.pending.unlink()
         result = self.run_tool('publish', self.pending, self.root/'stage', self.root/'runtime', self.root/'Bowser.app', 0, 0, '--live')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(json.loads(self.pending.read_text())['backup_required'])
+        self.assertTrue(json.loads(self.pending.read_text())['live_allowed'])
+
+    def test_channel_switch_is_not_a_live_update(self):
+        import plistlib
+        (self.root/'stage/bundle/Contents').mkdir()
+        (self.root/'stage/bundle/Contents/Info.plist').write_bytes(plistlib.dumps({'BowserChannel':'staging'}))
+        self.pending.unlink()
+        result = self.run_tool('publish', self.pending, self.root/'stage', self.root/'runtime', self.root/'Bowser.app', 0, 0, '--live')
+        self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse(json.loads(self.pending.read_text())['live_allowed'])
 
     def test_recovery_refuses_running_browser_and_pending_update(self):

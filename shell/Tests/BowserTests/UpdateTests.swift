@@ -95,6 +95,15 @@ final class UpdateTests: XCTestCase {
         verified = []
         try UpdateInstaller.publishModules(from: app, home: home) { verified.append($0) }
         XCTAssertEqual(verified.count, 4) // Retry validates existing immutable generations too.
+        let staging = home.appendingPathComponent("staging.app")
+        try fm.copyItem(at: app, to: staging)
+        try PropertyListSerialization.data(fromPropertyList: ["BowserChannel": "staging"], format: .xml, options: 0)
+            .write(to: staging.appendingPathComponent("Contents/Info.plist"))
+        try UpdateInstaller.publishModules(from: staging, home: home) { _ in }
+        for kind in ["surfaces", "command-toolbar"] {
+            XCTAssertEqual(try String(contentsOf: home.appendingPathComponent("native-modules/staging/" + kind + "/current"), encoding: .utf8), build + "\n")
+            XCTAssertEqual(try String(contentsOf: home.appendingPathComponent("native-modules/" + kind + "/current"), encoding: .utf8), build + "\n")
+        }
     }
 
     @MainActor func testUpdateMenuTargetsTheUpdaterAndExposesItsAction() throws {

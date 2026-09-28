@@ -1,5 +1,19 @@
 # Backend handoff contracts
 
+Production and staging use the same live-update admission checks. Compatible
+backend generations and native renderers apply while pages remain alive. The UI
+reports completion only after the backend commits, all renderer slots adopt the
+new modules, and the running host identity matches the incoming host. Host code,
+helpers, shared ABI changes, or failed adoption require restart.
+
+Staging keeps its active pointer at `backend/active-staging.json`, generations
+under `releases/staging`, and renderer pointers under `native-modules/staging`.
+Production retains `backend/active.json`, `releases`, and `native-modules`.
+The shared backend control socket reports its channel; updates cannot hand off
+to a different channel. Final on-disk activation still waits for all data users
+to quit and takes a verified backup. `BOWSER_OFFLINE_UPDATE=1` explicitly disables
+live delivery in either channel.
+
 Schema 5 checkpoints encode ShellTheme and Toolbars owners by module name.
 The candidate starts restored mods without `init_mod` or a synthetic `hello`,
 then rebuilds owner monitors in the theme/bar services. Order, shadowed entries,

@@ -230,14 +230,9 @@ func restoreBackup(_ snapshot: URL) throws {
         // compatible backend was updated live. The snapshot's external runtime
         // is the one that last used these data; keep it authoritative on launch.
         if format == 1 {
-        try mkdir(child(root, "backend"))
-        if manifest["channel"] as? String == "staging" {
-            let prod = child(root, "prod-runtime")
-            if exists(prod) { try atomicJSON(child(root, "backend/active.json"), ["runtime": prod.path]) }
-            else { try remove(child(root, "backend/active.json")) }
-        } else {
-            try atomicJSON(child(root, "backend/active.json"), ["runtime": field(manifest, "runtime").path])
-        }
+            try mkdir(child(root, "backend"))
+            let channel = UpdateChannel(manifest["channel"] as? String)
+            try atomicJSON(child(root, channel.activePointer), ["runtime": field(manifest, "runtime").path])
         }
     } catch {
         for (target, old, existed) in swaps.reversed() {

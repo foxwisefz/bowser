@@ -100,12 +100,13 @@ class ReleaseTests(unittest.IsolatedAsyncioTestCase):
         self.server = await asyncio.start_unix_server(self.native, path=str(self.home / 'brain.sock'))
         self.log = open(self.home / 'host.log', 'wb')
         pinned = self._testMethodName == 'test_staging_pins_its_runtime_instead_of_production_pointer'
-        if pinned:
+        self.channel = 'staging' if self._testMethodName.startswith('test_staging_live') else 'stable'
+        if pinned or self.channel == 'staging':
             (self.home/'backend').mkdir(exist_ok=True)
             (self.home/'backend/active.json').write_text(json.dumps({'runtime': str(self.home/'missing-production-runtime')}))
         started = time.monotonic()
         self.process = await asyncio.create_subprocess_exec(str(HOST), str(self.home), str(self.runtime),
-            env={**os.environ, 'BOWSER_X_PORT': '0', 'BOWSER_RUNTIME_PINNED': '1' if pinned else '0', 'PATH': '/usr/bin:/bin:/usr/sbin:/sbin'}, stdout=self.log, stderr=self.log)
+            env={**os.environ, 'BOWSER_X_PORT': '0', 'BOWSER_UPDATE_CHANNEL': self.channel, 'BOWSER_RUNTIME_PINNED': '1' if pinned else '0', 'PATH': '/usr/bin:/bin:/usr/sbin:/sbin'}, stdout=self.log, stderr=self.log)
         await until(lambda: (self.home / 'agent.sock').exists() or self.process.returncode is not None)
         self.assertIsNone(self.process.returncode, (self.home / 'host.log').read_text())
         await until(lambda: (self.home / 'init-count').exists())
@@ -119,6 +120,39 @@ class ReleaseTests(unittest.IsolatedAsyncioTestCase):
         result = await self.control('update', runtime=str(self.runtime))
         self.assertFalse(result['ok'])
         self.assertIn('pinned', result['error'])
+
+    async def test_staging_live_handoff_preserves_production_pointer(self):
+        status = await self.control('status')
+        self.assertTrue(status['live_updates'])
+        self.assertEqual(status['channel'], 'staging')
+        pointer = self.home/'backend/active.json'
+        before = pointer.read_bytes()
+        stage = self.home/'stage'
+        shutil.copytree(self.runtime, stage/'runtime')
+        import plistlib
+        for bundle in [stage/'bundle', self.home/'Bowser.app']:
+            (bundle/'Contents').mkdir(parents=True)
+            (bundle/'Contents/Info.plist').write_bytes(plistlib.dumps({'BowserChannel': 'staging'}))
+        pending = self.home/'updates/pending.json'
+        pending.parent.mkdir()
+        proc = await asyncio.create_subprocess_exec(str(TOOL), 'publish', str(pending), str(stage),
+            str(self.runtime), str(self.home/'Bowser.app'), '0', '0', '--live')
+        self.assertEqual(await proc.wait(), 0)
+        self.event()
+        await self.count(1)
+        proc = await asyncio.create_subprocess_exec(str(TOOL), 'apply-update', str(pending))
+        self.assertEqual(await proc.wait(), 0)
+        manifest = json.loads(pending.read_text())
+        self.assertTrue(manifest['backend_applied'])
+        self.assertEqual(pointer.read_bytes(), before)
+        self.assertEqual(json.loads((self.home/'backend/active-staging.json').read_text())['runtime'], manifest['live_runtime'])
+        self.assertEqual(Path(manifest['live_runtime']).parent, self.home/'releases/staging')
+        await self.count(1)
+        self.assertEqual(self.connections, 1)
+        wrong = self.home/'releases/wrong-channel'
+        shutil.copytree(self.runtime, wrong)
+        rejected = await self.control('update', runtime=str(wrong))
+        self.assertFalse(rejected['ok'])
 
     async def native(self, reader, writer):
         self.connections += 1

@@ -1,4 +1,5 @@
 import AppKit
+import BackendRuntime
 import Security
 import Darwin
 import BowserSurfaceKit
@@ -303,7 +304,7 @@ final class NativeModuleLibrary: @unchecked Sendable {
         }
         retiredViews.removeAll { $0.value == nil }
         guard retiredViews.isEmpty, !loading, seen.count < 32, libraries.reduce(0, { $0 + $1.byteCount }) < 64 * 1024 * 1024 else { return }
-        let root = BowserPaths.home.resolvingSymlinksInPath().appendingPathComponent("native-modules/" + kind.rawValue)
+        let root = BowserPaths.home.resolvingSymlinksInPath().appendingPathComponent(UpdateChannel(Bundle.main.infoDictionary?["BowserChannel"] as? String).modules + "/" + kind.rawValue)
         var url = Bundle.main.url(forResource: kind.executable, withExtension: "bundle").map { $0.deletingLastPathComponent().resolvingSymlinksInPath().appendingPathComponent($0.lastPathComponent) }
         var bundled = true
         if let data = try? Data(contentsOf: root.appendingPathComponent("current")), data.count <= 64,

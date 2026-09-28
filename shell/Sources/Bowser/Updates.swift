@@ -1,4 +1,5 @@
 import AppKit
+import BackendRuntime
 import CryptoKit
 
 struct UpdateRelease: Codable, Equatable, Sendable {
@@ -69,6 +70,7 @@ enum UpdateInstaller {
     static func publishModules(from app: URL, home: URL,
                                verify: (URL) throws -> Void = { try run("/usr/bin/codesign", ["--verify", "--strict", $0.path]) }) throws {
         let fm = FileManager.default
+        let channel = UpdateChannel(Bundle(url: app)?.infoDictionary?["BowserChannel"] as? String)
         for (name, kind, identifier) in [
             ("SurfaceRenderer", "surfaces", "com.foxwiseai.bowser.surfaces"),
             ("CommandToolbar", "command-toolbar", "com.foxwiseai.bowser.command-toolbar")
@@ -80,7 +82,7 @@ enum UpdateInstaller {
                   let build = metadata["CFBundleVersion"] as? String,
                   build.count == 32, build.allSatisfy({ "0123456789abcdef".contains($0) }) else { throw UpdateError.invalidRelease }
             try verify(source)
-            let root = home.appendingPathComponent("native-modules/" + kind)
+            let root = home.appendingPathComponent(channel.modules + "/" + kind)
             try fm.createDirectory(at: root, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
             let target = root.appendingPathComponent(build + ".bundle")
             if !fm.fileExists(atPath: target.path) {
@@ -127,7 +129,7 @@ enum UpdateInstaller {
         let pending = root.appendingPathComponent("pending.json")
         let live = installed.infoDictionary?["BowserLiveUpdates"] as? Int == 1
             && ProcessInfo.processInfo.environment["BOWSER_OFFLINE_UPDATE"] != "1"
-            && Bundle(url: bundle)?.infoDictionary?["BowserChannel"] as? String != "staging"
+
         try run(helper.path, ["publish", pending.path, stage.path, home.appendingPathComponent("app").path, bundle.path, "0", "0"] + (live ? ["--live"] : []))
         published = true
         let next = root.appendingPathComponent("apply-update.new"), watcher = root.appendingPathComponent("apply-update")
@@ -214,7 +216,7 @@ final class AppUpdates: NSObject {
                 if !runtime.hasApplied(build: build) { modulesApplied = false }
             } else { modulesApplied = false }
         }
-        let pointer = BowserPaths.home.appendingPathComponent("backend/active.json")
+        let pointer = BowserPaths.home.appendingPathComponent(UpdateChannel(manifest["channel"] as? String).activePointer)
         let active = (try? Data(contentsOf: pointer)).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
         let liveRuntime = manifest["live_runtime"] as? String
         return PreparedUpdateStatus.evaluate(liveAllowed: manifest["live_allowed"] as? Bool == true,
@@ -373,6 +375,16 @@ final class AppUpdates: NSObject {
         let log = BowserPaths.home.appendingPathComponent("updates/staging-build.log")
         do {
             let fingerprint = try await Self.developmentFingerprint(checkout: checkout)
+            let pending = BowserPaths.home.appendingPathComponent("updates/pending.json")
+            if let data = try? Data(contentsOf: pending),
+               let manifest = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let target = manifest["bundle"] as? String,
+               URL(fileURLWithPath: target).resolvingSymlinksInPath() == Bundle.main.bundleURL.resolvingSymlinksInPath(),
+               let stage = manifest["stage"] as? String,
+               Bundle(url: URL(fileURLWithPath: stage).appendingPathComponent("bundle"))?.infoDictionary?["BowserDevelopmentFingerprint"] as? String == fingerprint {
+                _ = offerPreparedUpdate(manual: true)
+                return
+            }
             if fingerprint == Bundle.main.infoDictionary?["BowserDevelopmentFingerprint"] as? String {
                 message("You’re up to date. Staging matches your development checkout.")
                 return
@@ -401,7 +413,7 @@ final class AppUpdates: NSObject {
             }
             try process.run()
             developmentBuild = process
-            message("Preparing a staging update. You can keep browsing; Bowser will let you know when it’s ready to restart.")
+            message("Preparing a staging update. You can keep browsing; compatible changes will apply automatically, and Bowser will tell you if a restart is needed.")
         } catch { message("Couldn’t start the staging build: " + error.localizedDescription) }
     }
     func check(manual: Bool) async {
@@ -409,8 +421,8 @@ final class AppUpdates: NSObject {
         // This matters especially when a fully live update stays staged for days.
         if restartHelper?.isRunning == true { _ = offerPreparedUpdate(manual: manual); return }
         if Bundle.main.infoDictionary?["BowserChannel"] as? String == "staging" {
-            if offerPreparedUpdate(manual: manual) { return }
             if manual { await updateFromDevelopment() }
+            else { _ = offerPreparedUpdate(manual: false) }
             return
         }
         guard !busy else { if manual { message("An update check is already in progress.") }; return }
