@@ -34,7 +34,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     private let notch = ToolbarNotchView()
     private let profileNotch = ToolbarNotchView()
     private let toolbarFavicon = NSImageView()
-    let loadingGhost = ToolbarLoadingGhost()
+    let loadingLine = ToolbarLoadingLine()
     private let profileIdentity = NSStackView()
     private var notchTitleWidth: NSLayoutConstraint?
     private var clusterWidth: NSLayoutConstraint?
@@ -173,13 +173,13 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
                     button.heightAnchor.constraint(equalToConstant: 29 * scale),
                 ])
             }
-            loadingGhost.translatesAutoresizingMaskIntoConstraints = false
-            notch.addSubview(loadingGhost)
+            loadingLine.translatesAutoresizingMaskIntoConstraints = false
+            notch.addSubview(loadingLine)
             NSLayoutConstraint.activate([
-                loadingGhost.leadingAnchor.constraint(equalTo: toolbarFavicon.leadingAnchor),
-                loadingGhost.centerYAnchor.constraint(equalTo: toolbarFavicon.centerYAnchor),
-                loadingGhost.widthAnchor.constraint(equalToConstant: 16),
-                loadingGhost.heightAnchor.constraint(equalToConstant: 18),
+                loadingLine.leadingAnchor.constraint(equalTo: notch.leadingAnchor, constant: 12),
+                loadingLine.trailingAnchor.constraint(equalTo: notch.trailingAnchor, constant: -12),
+                loadingLine.bottomAnchor.constraint(equalTo: notch.bottomAnchor, constant: -2),
+                loadingLine.heightAnchor.constraint(equalToConstant: 2),
                 hosting.leadingAnchor.constraint(equalTo: lights.trailingAnchor, constant: 12),
                 hosting.centerYAnchor.constraint(equalTo: lights.centerYAnchor),
                 hosting.heightAnchor.constraint(equalToConstant: 24), controlsWidth,
@@ -737,9 +737,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     }
 
     func refreshToolbarLoading() {
-        loadingGhost.loading = activeTab?.webView.isLoading == true
-        toolbarFavicon.isHidden = loadingGhost.loading
-        if loadingGhost.loading { setToolbarVisible(true) }
+        loadingLine.loading = activeTab?.webView.isLoading == true
+        if loadingLine.loading { setToolbarVisible(true) }
     }
 
     private func applyTitle(_ title: String) {

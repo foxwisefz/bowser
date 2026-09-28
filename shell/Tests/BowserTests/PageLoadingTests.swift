@@ -9,7 +9,7 @@ import XCTest
         override var occlusionState: NSWindow.OcclusionState { visibleForTest ? [.visible] : [] }
     }
 
-    func testGhostFollowsActiveTabAndStopsWhenNavigationStops() async throws {
+    func testLineFollowsActiveTabAndStopsWhenNavigationStops() async throws {
         let server = try BrowserFixtureServer()
         defer { server.stop() }
         try await wait { server.origin != nil }
@@ -17,23 +17,23 @@ import XCTest
         defer { controller.window?.close() }
         let first = try XCTUnwrap(controller.activeTab)
         first.load(urlString: try XCTUnwrap(server.origin) + "/slow-image")
-        try await wait { controller.loadingGhost.loading }
+        try await wait { controller.loadingLine.loading }
         try await wait { first.hasRenderedContent }
-        XCTAssertTrue(controller.loadingGhost.loading, "Ghost continues while subresources load")
+        XCTAssertTrue(controller.loadingLine.loading, "Line continues while subresources load")
         let second = controller.openTab()
-        XCTAssertFalse(controller.loadingGhost.loading, "Background loads do not animate the active tab")
+        XCTAssertFalse(controller.loadingLine.loading, "Background loads do not animate the active tab")
         controller.activate(first)
-        XCTAssertTrue(controller.loadingGhost.loading)
+        XCTAssertTrue(controller.loadingLine.loading)
         first.webView.stopLoading()
-        try await wait { !controller.loadingGhost.loading }
-        XCTAssertTrue(controller.loadingGhost.isHidden)
+        try await wait { !controller.loadingLine.loading }
+        XCTAssertTrue(controller.loadingLine.isHidden)
         controller.activate(second)
-        XCTAssertFalse(controller.loadingGhost.loading)
+        XCTAssertFalse(controller.loadingLine.loading)
     }
 
     func testLoaderStopsWhenHiddenAndDetached() async throws {
         _ = NSApplication.shared
-        let view = ToolbarLoadingGhost(frame: NSRect(x: 0, y: 0, width: 16, height: 18))
+        let view = ToolbarLoadingLine(frame: NSRect(x: 0, y: 0, width: 280, height: 2))
         view.loading = true
         XCTAssertFalse(view.isAnimating)
         // WindowServer can report every test window occluded on a locked desktop.
