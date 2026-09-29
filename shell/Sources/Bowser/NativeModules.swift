@@ -213,7 +213,9 @@ final class NativeModuleLibrary: @unchecked Sendable {
         // No events interleave this main-actor transaction. The host owns all
         // state, so preparation and rollback cannot lose a browser action.
         mount(view)
-        view.layoutSubtreeIfNeeded()
+        // Toolbar snapshots do not depend on laid-out geometry. Commit the
+        // replacement hierarchy before its one synchronous layout pass.
+        if kind != .commandToolbar { view.layoutSubtreeIfNeeded() }
         let healthy = snapshot.withUnsafeBytes { library.update(pointer, $0.bindMemory(to: UInt8.self).baseAddress!, Int32(snapshot.count)) } == 1
         guard healthy else { library.destroy(pointer); return false }
         retire(); fallback.removeFromSuperview()

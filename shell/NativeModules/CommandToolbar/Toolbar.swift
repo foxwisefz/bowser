@@ -67,6 +67,9 @@ struct ToolbarTheme {
         self.model = model
         let emit: (String) -> Void = { text in text.withCString { event(generation, $0) } }
         super.init(rootView: CommandToolbar(model: model, openBar: { emit("command") }, goBack: { emit("back") }, goForward: { emit("forward") }, reload: { emit("reload") }, modClick: { emit("mod:" + $0) }, permissions: { emit("permissions") }, onHoverChanged: { emit($0 ? "hover:1" : "hover:0") }))
+        // NativeModuleSlot owns the fixed toolbar bounds; avoid SwiftUI's
+        // minimum/ideal/maximum size probes during every replacement.
+        sizingOptions = []
     }
     required init(rootView: CommandToolbar) { fatalError("use module_create") }
     required init?(coder: NSCoder) { fatalError("use module_create") }

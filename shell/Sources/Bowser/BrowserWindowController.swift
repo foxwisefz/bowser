@@ -28,6 +28,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     private var band: BandScrimView!
     private var clusterHosting: NSHostingView<AnyView>?
     private var nativeToolbar: NativeModuleSlot?
+    private var lastToolbarSnapshot: Data?
     private let titleLabel = NSTextField(labelWithString: "")
     private let titleViewport = NSView()
     private var titleTextWidth: NSLayoutConstraint?
@@ -822,7 +823,6 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
                 notch.superview?.layoutSubtreeIfNeeded()
             }
         }
-        clusterHosting?.rootView = AnyView(clusterView())
         let theme = ChromeSurface.theme(for: profile.id)
         let tint = profile.color?.usingColorSpace(.sRGB)
         let payload: [String: Any] = [
@@ -835,7 +835,13 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
             "capturing": tabs.contains { $0.webView.cameraCaptureState != .none || $0.webView.microphoneCaptureState != .none },
             "buttons": ChromeSurface.buttons(for: profile.id).prefix(128).map { ["id": $0.id, "title": $0.title, "symbol": $0.symbol as Any? ?? NSNull()] }
         ]
-        if let data = try? JSONSerialization.data(withJSONObject: payload) { nativeToolbar?.setSnapshot(data) }
+        // Tab changes often leave all toolbar controls unchanged. Canonical
+        // encoding makes that a no-op for both the fallback and live renderer.
+        guard let data = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]),
+              data != lastToolbarSnapshot else { return }
+        lastToolbarSnapshot = data
+        clusterHosting?.rootView = AnyView(clusterView())
+        nativeToolbar?.setSnapshot(data)
     }
 
     private func nativeToolbarAction(_ event: String) {
