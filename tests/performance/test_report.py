@@ -1,4 +1,6 @@
 import unittest
+import json
+from pathlib import Path
 from report import evaluate
 
 class GateTests(unittest.TestCase):
@@ -12,6 +14,28 @@ class GateTests(unittest.TestCase):
         self.assertEqual(metrics['load']['p50'], 2)
         self.assertEqual(metrics['load']['p95'], 101)
         self.assertTrue(failures)
+    def test_failure_preserves_sample_order_without_dropping_outlier(self):
+        metrics, failures = evaluate(self.rows([1300, 196, 180, 210, 190]), self.budgets)
+        self.assertEqual(metrics['load']['p95'], 1300)
+        self.assertIn('1300.00, 196.00, 180.00, 210.00, 190.00', failures[0])
+    def test_first_use_is_required_and_gated_independently(self):
+        configured = json.loads(Path(__file__).with_name('budgets.json').read_text())
+        names = ('fresh_profile_first_content_ms', 'cold_navigation_first_content_ms',
+                 'native_toolbar_first_adopt_ms', 'native_toolbar_adopt_ms', 'native_toolbar_upgrade_ms')
+        budgets = {name: configured[name] for name in names}
+        rows = [dict(metric=name, value=budget['max_p95'] / 2)
+                for name, budget in budgets.items() for _ in range(budget['min_samples'])]
+        self.assertFalse(evaluate(rows, budgets)[1])
+        for name in names:
+            with self.subTest(metric=name):
+                absent = [row for row in rows if row['metric'] != name]
+                self.assertTrue(evaluate(absent, budgets)[1])
+                slow = [dict(row, value=budgets[name]['max_p95'] + 1)
+                        if row['metric'] == name else row for row in rows]
+                failures = evaluate(slow, budgets)[1]
+                self.assertEqual(len(failures), 1)
+                self.assertTrue(failures[0].startswith(name + ':'))
+
     def test_relative_regression_with_noise_floor(self):
         baseline = {'load': {'p95': 20}}
         self.assertFalse(evaluate(self.rows([23]*3), self.budgets, baseline)[1])

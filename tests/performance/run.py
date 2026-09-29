@@ -17,6 +17,7 @@ import time
 import traceback
 import uuid
 from report import evaluate
+from startup_probe import wait_for_tabs
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'tests'))
@@ -96,22 +97,9 @@ async def browser_startup(stage, work, output, record):
                 start = time.monotonic()
                 process = subprocess.Popen([str(bundle / 'Contents/MacOS/Bowser')], env={**ENV, 'BOWSER_HOME': str(home)}, stdout=log, stderr=log)
                 try:
-                    deadline = start + 20
-                    while True:
-                        if process.poll() is not None: raise RuntimeError('Browser exited before ready')
-                        if time.monotonic() > deadline: raise TimeoutError(f'Browser restore {count}')
-                        try:
-                            reader, writer = await asyncio.open_unix_connection(str(home / 'agent.sock'))
-                            try:
-                                writer.write(b'{"tool":"list_tabs"}\n'); await writer.drain()
-                                reply = json.loads(await asyncio.wait_for(reader.readline(), 2))
-                            finally:
-                                writer.close(); await writer.wait_closed()
-                            if reply.get('ok') and len(reply.get('tabs', [])) == count:
-                                record(f'startup_browser_{count}_tabs_ms', (time.monotonic()-start)*1000)
-                                break
-                        except (FileNotFoundError, ConnectionRefusedError): pass
-                        await asyncio.sleep(.01)
+                    await wait_for_tabs(home / 'agent.sock', count, start + 20,
+                                        lambda: process.poll() is not None)
+                    record(f'startup_browser_{count}_tabs_ms', (time.monotonic()-start)*1000)
                 finally:
                     stop(process)
                     endpoint = home / 'backend/host.sock'
@@ -188,7 +176,7 @@ def main():
     raw = output / 'samples.jsonl'; raw.touch()
     def record(metric, value):
         with raw.open('a') as file: file.write(json.dumps(dict(metric=metric, value=value)) + '\n')
-    metadata = dict(schema=1, os=platform.mac_ver()[0], arch=platform.machine(), cpu=subprocess.check_output(['sysctl', '-n', 'machdep.cpu.brand_string'], text=True).strip(), swift=subprocess.check_output(['swift', '--version'], text=True).strip(), source=os.environ.get('GITHUB_SHA', 'local'), timestamp=time.time())
+    metadata = dict(schema=2, os=platform.mac_ver()[0], arch=platform.machine(), cpu=subprocess.check_output(['sysctl', '-n', 'machdep.cpu.brand_string'], text=True).strip(), swift=subprocess.check_output(['swift', '--version'], text=True).strip(), source=os.environ.get('GITHUB_SHA', 'local'), timestamp=time.time())
     failures = []
     os.environ.update({key: ENV[key] for key in ('BOWSER_TELEMETRY_DISABLED', 'BOWSER_API_ENDPOINT', 'BOWSER_NO_SPAWN')})
     try:
@@ -207,7 +195,11 @@ def main():
             for name in ('A', 'B'):
                 command([ROOT / 'bin/build-native-toolbar', work / f'{name}.bundle'], output / 'toolbar-build.log', {**ENV, 'BOWSER_SIGN_IDENTITY': '-'})
             home = work / 'swift-home'; home.mkdir()
-            command(['swift', 'test', '-c', 'release', '--package-path', 'shell', '--filter', 'BrowserPerformanceTests', '--xunit-output', output / 'swift-results.xml'], output / 'swift.log', {**ENV, 'BOWSER_HOME': str(home), 'BOWSER_PERF': '1', 'BOWSER_PERF_RESULTS': str(raw), 'BOWSER_PERF_TOOLBAR_A': str(work / 'A.bundle'), 'BOWSER_PERF_TOOLBAR_B': str(work / 'B.bundle')})
+            try:
+                command(['swift', 'test', '-c', 'release', '--package-path', 'shell', '--filter', 'BrowserPerformanceTests', '--xunit-output', output / 'swift-results.xml'], output / 'swift.log', {**ENV, 'BOWSER_HOME': str(home), 'BOWSER_PERF': '1', 'BOWSER_PERF_RESULTS': str(raw), 'BOWSER_PERF_TOOLBAR_A': str(work / 'A.bundle'), 'BOWSER_PERF_TOOLBAR_B': str(work / 'B.bundle')})
+            finally:
+                if (home / 'diagnostics').exists():
+                    shutil.copytree(home / 'diagnostics', output / 'navigation-diagnostics')
     except Exception:
         failures.append(traceback.format_exc())
     baseline = None
@@ -231,6 +223,10 @@ def main():
     for name, value in metrics.items():
         lines.append(f'| {name} | {value["samples"]} | {value["p50"]:.2f} | {value["p95"]:.2f} | {value["limit"]:.2f} |')
     lines += ['', 'PASS' if not failures else 'FAIL', *failures]
+    swift_log = output / 'swift.log'
+    if swift_log.exists():
+        lines += ['', *[line for line in swift_log.read_text(errors='replace').splitlines()
+                        if line.startswith('Cold navigation sample ')]]
     summary = '\n'.join(lines) + '\n'; (output / 'summary.md').write_text(summary)
     print(summary)
     if os.environ.get('GITHUB_STEP_SUMMARY'):

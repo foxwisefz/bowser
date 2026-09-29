@@ -35,11 +35,15 @@ struct ToolbarTheme {
     var modWidth: CGFloat = 135
     var permissionsAvailable = false
     var capturing = false
-    @Published var revealed = false
+    var revealed = false
+    private var appliedSnapshot: Data?
     var theme = ToolbarTheme()
     var tint: NSColor?
     var buttons: [ToolbarButton] = []
     func apply(_ data: Data) -> Bool {
+        // Admission replays the creation snapshot; identical state must not
+        // invalidate the freshly laid-out SwiftUI hierarchy again.
+        if appliedSnapshot == data { return true }
         guard let value = try? JSONDecoder().decode(ToolbarSnapshot.self, from: data),
               value.buttons.count <= 128, (value.siteMods?.count ?? 0) <= 128,
               value.cornerRadius.isFinite,
@@ -53,6 +57,7 @@ struct ToolbarTheme {
         modWidth = min(135, max(0, value.modWidth ?? 135))
         permissionsAvailable = value.permissionsAvailable ?? false; capturing = value.capturing ?? false
         buttons = value.buttons; revealed = value.revealed
+        appliedSnapshot = data
         return true
     }
 }

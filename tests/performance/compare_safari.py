@@ -16,7 +16,7 @@ import traceback
 import urllib.error
 import urllib.request
 import uuid
-from compare_report import summarize, gate
+from compare_report import assess
 from run import ROOT, ENV, command, stop
 
 
@@ -181,22 +181,20 @@ def main():
                     if index: runs.append(result)
     except Exception: failures.append(traceback.format_exc())
     finally: server.close()
-    summary={}; comparison={}
-    try:
-        summary,comparison=summarize(runs,args.runs_per_batch*2)
-        budgets=json.loads(Path(__file__).with_name('safari-budgets.json').read_text())
-        failures.extend(gate(comparison,budgets))
-    except Exception: failures.append(traceback.format_exc())
-    report=dict(environment=environment,summary=summary,comparison=comparison,failures=failures,
+    budgets=json.loads(Path(__file__).with_name('safari-budgets.json').read_text())
+    assessment=assess(runs,args.runs_per_batch*2,budgets,failures)
+    summary=assessment['summary']; comparison=assessment['comparison']; failures=assessment['failures']
+    report=dict(environment=environment,**assessment,
         scope='Identical local-page rendering only. Native cold startup, tab switching and omnibar input latency are not measured.')
     (output/'report.json').write_text(json.dumps(report,indent=2)+'\n')
     lines=['# Safari / Bowser comparison','',report['scope'],'',
         'Each value is the median of per-run p95s; 10 runs per browser by default. Lower is better.',
-        '', '| Metric | Bowser | Safari | Bowser / Safari |','|---|---:|---:|---:|']
+        '', '| Metric | Bowser | Safari | Bowser / Safari | Limit | Bowser run range | Safari run range |','|---|---:|---:|---:|---:|---:|---:|']
     for name,value in comparison.items():
         ratio=f"{value['ratio']:.2f}×" if value['ratio'] is not None else '—'
-        lines.append(f"| {name} | {value['bowser']:.2f} | {value['safari']:.2f} | {ratio} |")
-    lines+=['','PASS' if not failures else 'INCOMPLETE',*failures]
+        ranges = [f"{summary[browser][name]['min_run_p95']:.2f}–{summary[browser][name]['max_run_p95']:.2f}" for browser in ('bowser','safari')]
+        lines.append(f"| {name} | {value['bowser']:.2f} | {value['safari']:.2f} | {ratio} | {value['limit']:.2f} | {ranges[0]} | {ranges[1]} |")
+    lines+=['',report['status'],*failures]
     text='\n'.join(lines)+'\n'; (output/'summary.md').write_text(text); print(text)
     return bool(failures)
 

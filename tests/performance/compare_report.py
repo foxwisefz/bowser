@@ -53,3 +53,18 @@ def gate(comparison, budgets):
         if result['bowser'] > limit:
             failures.append(f'{metric}: Bowser {result["bowser"]:.2f} exceeds Safari-relative limit {limit:.2f}')
     return failures
+
+
+def assess(runs, expected_runs, budgets, execution_errors=()):
+    """Separate missing/invalid evidence from a completed comparison over budget."""
+    failures = list(execution_errors)
+    summary, comparison = {}, {}
+    try:
+        summary, comparison = summarize(runs, expected_runs)
+        budget_failures = gate(comparison, budgets)
+    except ValueError as error:
+        failures.append(str(error))
+        return dict(status='INCOMPLETE', summary=summary, comparison={}, failures=failures)
+    status = 'INCOMPLETE' if execution_errors else 'FAIL' if budget_failures else 'PASS'
+    return dict(status=status, summary=summary, comparison=comparison,
+                failures=failures + budget_failures)
