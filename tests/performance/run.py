@@ -176,7 +176,7 @@ def main():
     raw = output / 'samples.jsonl'; raw.touch()
     def record(metric, value):
         with raw.open('a') as file: file.write(json.dumps(dict(metric=metric, value=value)) + '\n')
-    metadata = dict(schema=2, os=platform.mac_ver()[0], arch=platform.machine(), cpu=subprocess.check_output(['sysctl', '-n', 'machdep.cpu.brand_string'], text=True).strip(), swift=subprocess.check_output(['swift', '--version'], text=True).strip(), source=os.environ.get('GITHUB_SHA', 'local'), timestamp=time.time())
+    metadata = dict(schema=3, os=platform.mac_ver()[0], arch=platform.machine(), cpu=subprocess.check_output(['sysctl', '-n', 'machdep.cpu.brand_string'], text=True).strip(), swift=subprocess.check_output(['swift', '--version'], text=True).strip(), source=os.environ.get('GITHUB_SHA', 'local'), timestamp=time.time())
     failures = []
     os.environ.update({key: ENV[key] for key in ('BOWSER_TELEMETRY_DISABLED', 'BOWSER_API_ENDPOINT', 'BOWSER_NO_SPAWN')})
     try:
@@ -219,9 +219,9 @@ def main():
         failures.append(traceback.format_exc())
     report = dict(environment=metadata, metrics=metrics, failures=failures, baseline=baseline_note)
     (output / 'report.json').write_text(json.dumps(report, indent=2) + '\n')
-    lines = ['# Browser performance', '', baseline_note, '', '| Metric | Samples | p50 | p95 | Limit |', '|---|---:|---:|---:|---:|']
+    lines = ['# Browser performance', '', baseline_note, '', '| Metric | Samples | p50 | p95 | Max | Limit |', '|---|---:|---:|---:|---:|---:|']
     for name, value in metrics.items():
-        lines.append(f'| {name} | {value["samples"]} | {value["p50"]:.2f} | {value["p95"]:.2f} | {value["limit"]:.2f} |')
+        lines.append(f'| {name} | {value["samples"]} | {value["p50"]:.2f} | {value["p95"]:.2f} | {value["max"]:.2f} | {value["limit"]:.2f} |')
     lines += ['', 'PASS' if not failures else 'FAIL', *failures]
     swift_log = output / 'swift.log'
     if swift_log.exists():

@@ -17,7 +17,7 @@ def evaluate(rows, budgets, baseline=None):
         if not values:
             continue
         p95 = values[math.ceil(len(values) * .95) - 1]
-        metrics[name] = dict(samples=len(values), p50=values[math.ceil(len(values) * .5)-1], p95=p95)
+        metrics[name] = dict(samples=len(values), p50=values[math.ceil(len(values) * .5)-1], p95=p95, max=values[-1])
         limit = budget['max_p95']
         if baseline and name in baseline:
             old = baseline[name]['p95']

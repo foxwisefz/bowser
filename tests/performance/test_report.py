@@ -36,6 +36,16 @@ class GateTests(unittest.TestCase):
                 self.assertEqual(len(failures), 1)
                 self.assertTrue(failures[0].startswith(name + ':'))
 
+    def test_thirty_samples_keep_maximum_and_gate_repeated_slowdowns(self):
+        budget = {'load': dict(min_samples=30, max_p95=16.67, noise_floor=2)}
+        metrics, failures = evaluate(self.rows([10] * 29 + [20]), budget)
+        self.assertFalse(failures)
+        self.assertEqual(metrics['load']['p95'], 10)
+        self.assertEqual(metrics['load']['max'], 20)
+        self.assertEqual(metrics['load']['samples'], 30)
+        self.assertTrue(evaluate(self.rows([10] * 28 + [20, 21]), budget)[1])
+        self.assertTrue(evaluate(self.rows([10] * 29), budget)[1])
+
     def test_relative_regression_with_noise_floor(self):
         baseline = {'load': {'p95': 20}}
         self.assertFalse(evaluate(self.rows([23]*3), self.budgets, baseline)[1])
