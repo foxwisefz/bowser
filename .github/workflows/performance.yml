@@ -16,14 +16,17 @@ concurrency:
 jobs:
   performance:
     runs-on: macos-26
-    timeout-minutes: 40
+    timeout-minutes: 80
     env:
       HOMEBREW_NO_AUTO_UPDATE: '1'
       BOWSER_TELEMETRY_DISABLED: '1'
+      BOWSER_PERF_SESSION: ${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
+      BOWSER_PERF_HARNESS: ${{ github.sha }}
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+          fetch-depth: 2
       - name: Set performance stage path
         run: echo "BOWSER_STAGE_FILE=$RUNNER_TEMP/performance-stage" >> "$GITHUB_ENV"
       - name: Install Elixir
@@ -34,32 +37,47 @@ jobs:
         env:
           BOWSER_HOME: ${{ runner.temp }}/observer-test-home
         run: swift test --package-path shell --filter ModScriptTests
-      - name: Restore trusted main baseline
-        uses: actions/cache/restore@v4
+      - name: Select pinned base revision
+        id: base
+        run: python3 tests/performance/ci_reference.py
+      - name: Check out base source for measurement
+        uses: actions/checkout@v4
         with:
-          path: .performance-baseline/report.json
-          key: performance-v3-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
-          restore-keys: performance-v3-${{ runner.os }}-${{ runner.arch }}-
-      - name: Build the shared release stage
+          ref: ${{ steps.base.outputs.sha }}
+          path: .performance-base
+          persist-credentials: false
+      - name: Use identical benchmark workloads for both revisions
+        run: python3 tests/performance/ci_reference.py .performance-base
+      - name: Build base release stage
+        working-directory: .performance-base
+        env:
+          BOWSER_SIGN_IDENTITY: '-'
+          BOWSER_STAGE_FILE: ${{ runner.temp }}/performance-base-stage
+        run: bin/install --stage-only
+      - name: Build candidate release stage
         env:
           BOWSER_SIGN_IDENTITY: '-'
         run: bin/install --stage-only
-      - name: Run release performance budgets
-        run: bin/check-performance --stage "$(cat "$BOWSER_STAGE_FILE")" --output "$RUNNER_TEMP/performance" --baseline .performance-baseline/report.json
+      - name: Measure base on this runner
+        id: reference
+        continue-on-error: true
+        working-directory: .performance-base
+        env:
+          BOWSER_PERF_SOURCE: ${{ steps.base.outputs.sha }}
+        run: python3 tests/performance/run.py --reference --stage "$(cat "$RUNNER_TEMP/performance-base-stage")" --output "$RUNNER_TEMP/performance-base"
+      - name: Compare candidate and enforce absolute budgets
+        env:
+          BOWSER_PERF_SOURCE: ${{ github.sha }}
+        run: bin/check-performance --stage "$(cat "$BOWSER_STAGE_FILE")" --output "$RUNNER_TEMP/performance" --baseline "$RUNNER_TEMP/performance-base/report.json"
+      - name: Require successful reference collection
+        if: always() && steps.reference.outcome == 'failure'
+        run: |
+          echo 'Reference measurement failed; comparison is incomplete.' >&2
+          exit 1
       - name: Enable Safari testing on the disposable runner
         run: sudo /usr/bin/safaridriver --enable
       - name: Compare identical rendering workloads with Safari
         run: bin/compare-safari --stage "$(cat "$BOWSER_STAGE_FILE")" --output "$RUNNER_TEMP/safari-comparison"
-      - name: Save passing main baseline
-        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
-        run: |
-          mkdir -p .performance-baseline
-          cp -f "$RUNNER_TEMP/performance/report.json" .performance-baseline/report.json
-      - uses: actions/cache/save@v4
-        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
-        with:
-          path: .performance-baseline/report.json
-          key: performance-v3-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
       - name: Upload timings and diagnostics
         if: always()
         uses: actions/upload-artifact@v4
@@ -67,5 +85,6 @@ jobs:
           name: browser-performance-${{ github.run_attempt }}
           path: |
             ${{ runner.temp }}/performance/
+            ${{ runner.temp }}/performance-base/
             ${{ runner.temp }}/safari-comparison/
           retention-days: 14

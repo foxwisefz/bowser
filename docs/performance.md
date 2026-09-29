@@ -53,7 +53,7 @@ unchanged 750 ms uncached-navigation and 16.67 ms repeat-adoption caps. First-us
 measurements are required single samples, not discarded warmups; their reported
 p50 and p95 both equal that observation. This separation does not make a 50 ms
 main-thread adoption frame-smooth. All 31 toolbar upgrades also retain the
-750 ms total-upgrade gate. Baseline schema/cache version 3 isolates these workloads from earlier sample counts.
+750 ms total-upgrade gate. Report schema version 3 identifies these workloads and sample counts.
 For 30 repeat adoptions, nearest-rank p95 is the second-slowest observation.
 The maximum is also reported for every metric; no samples are discarded.
 
@@ -62,12 +62,24 @@ invalid values, failed behavioral assertions, and exceeded limits all fail.
 Tests are opt-in (`BOWSER_PERF=1`) and run serially in the release configuration.
 
 The Browser performance workflow runs on pull requests, main pushes, and manual
-requests on `macos-26`. It restores a passing baseline saved only by main and
-compares matching macOS, CPU, architecture, Swift toolchain and report schema.
-A regression fails if p95 exceeds both 125% of the baseline and baseline plus the
-metric's noise allowance. Absolute budgets always apply. A missing/incompatible
-baseline is explicitly reported and the first passing main run establishes one.
-Change the cache version when intentionally changing the workload definition.
+requests on `macos-26`. It builds the candidate and a pinned base revision,
+then measures both serially in the same job, using identical benchmark fixtures.
+Pull requests use their base SHA, main pushes use the previous main SHA, and
+manual runs use the selected commit's first parent. A missing base commit fails
+explicitly. No timing baseline is restored from another runner's cache.
+
+The candidate's performance harness is copied into the disposable CI base source
+checkout; production code and build tools remain at the base revision. Reports
+record both source SHAs, the harness revision, and the shared run/attempt/job ID.
+Incompatible fixtures or failed/incomplete reference measurements fail the job;
+they never silently disable relative comparisons. A complete reference may
+exceed an absolute budget: its measurements remain usable, but the candidate
+must still pass every absolute cap. Both reports and diagnostics are uploaded.
+
+A regression fails if p95 exceeds both 125% of the base measurement and that
+measurement plus the metric's noise allowance. Absolute budgets always apply.
+Same-runner measurement reduces differences between machines; sequential runs
+can still experience different load, so raw samples remain essential evidence.
 
 The desktop release workflow also enforces absolute budgets against its freshly
 built stage before publication. CI uploads raw samples, p50/p95 summaries,
@@ -75,7 +87,10 @@ XCTest results, environment details, and build/runtime logs, including failures.
 Navigation diagnostics are retained before the disposable home is removed.
 Budget failures print samples in collection order so a slow first load remains
 visible rather than disappearing into an aggregate.
-`--baseline PATH/report.json` enables the same comparison locally. The output
+`--reference` collects a reference locally (threshold violations are reported,
+but incomplete measurements fail its exit status). `--baseline PATH/report.json`
+requires a complete compatible reference; missing reports fail. Set the same
+`BOWSER_PERF_SESSION` for paired local runs to enforce session matching. The output
 path must be new so previous samples cannot accidentally make a run pass.
 
 Validate the gate logic with:
