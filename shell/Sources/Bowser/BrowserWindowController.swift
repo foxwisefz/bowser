@@ -367,9 +367,23 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         return view
     }
 
+    private let recordsActivationTimings = ProcessInfo.processInfo.environment["BOWSER_PERF"] == "1"
+    @objc private(set) var lastActivationTimings: NSDictionary?
+
     /// Focus a visible pane, or mount a tab and leave the current arrangement.
     func activate(_ view: EngineView, focusPage: Bool = true) {
+        lastActivationTimings = nil
+        var phases: [String: Double] = [:]
+        var phaseStart = recordsActivationTimings ? ProcessInfo.processInfo.systemUptime : 0
+        func mark(_ name: String) {
+            guard recordsActivationTimings else { return }
+            let now = ProcessInfo.processInfo.systemUptime
+            phases[name] = (now - phaseStart) * 1000
+            phaseStart = now
+        }
+        defer { if recordsActivationTimings { lastActivationTimings = phases as NSDictionary } }
         guard tabs.contains(where: { $0 === view }) else { return }
+        mark("lookup_ms")
         if BrainBridge.shared.resources.shouldCoordinate, activeTab != nil {
             _ = BrainBridge.shared.resources.request(["action":"activate", "tab":view.webviewId, "focus_page":focusPage]); return
         }
@@ -380,19 +394,25 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         if activeTab !== view {
             if websiteLayout == nil {
                 activeTab?.removeFromSuperview()
+                mark("detach_ms")
                 view.frame = container.pageArea.bounds
                 container.pageArea.addSubview(view)
+                mark("mount_ms")
             }
             activeTab = view
             container.webview = view.webviewId
             // The old first responder just left the hierarchy — hand the
             // keyboard to the page that's actually on screen.
             if focusPage { window?.makeFirstResponder(view.webView) }
+            mark("responder_ms")
             adoptChrome(from: view)
+            mark("chrome_ms")
             syncModButtons()
+            mark("toolbar_ms")
             // Show the dock's reaction: collapsed edge surfaces slide out
             // for a beat so the active-icon bounce is visible.
             SurfaceManager.shared.pulseEdges()
+            mark("surface_ms")
             // Refresh the resurrect frame soon after the switch paints, so
             // a death right after a tab change resurrects the right tab.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self, weak view] in
@@ -404,6 +424,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         BrainBridge.shared.send([
             "op": "event", "event": "tab_activated", "webview": view.webviewId,
         ])
+        mark("notify_ms")
     }
 
     /// Commands act only on this window; no tab moves between profiles/windows.

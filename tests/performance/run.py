@@ -252,6 +252,9 @@ def main():
     if swift_log.exists():
         lines += ['', *[line for line in swift_log.read_text(errors='replace').splitlines()
                         if line.startswith(('Cold navigation sample ', 'Toolbar adoption phases: '))]]
+    phases = output / 'samples.phases.jsonl'
+    if phases.exists():
+        lines += ['', 'Activation and navigation phases:', '```jsonl', phases.read_text().rstrip(), '```']
     summary = '\n'.join(lines) + '\n'; (output / 'summary.md').write_text(summary)
     print(summary)
     if os.environ.get('GITHUB_STEP_SUMMARY'):

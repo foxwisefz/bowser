@@ -35,6 +35,15 @@ The `_first_content_ms` metrics use Bowser’s reveal signal, which falls back t
 load completion for empty pages or unavailable WebKit rendering callbacks; they
 are not compositor presentation timestamps.
 
+With `BOWSER_PERF=1`, reports also include per-switch detach, mount, responder,
+chrome, toolbar, and layout durations, plus navigation callback timestamps from
+the native load/resume request. These distinguish synchronous activation work
+from WebKit startup and the delay before Bowser observes content. Callback
+timestamps and the page's Navigation Timing entries have different origins;
+do not subtract one clock's values from the other. Diagnostic serialization
+runs outside the measured workload. Base revisions without these optional host
+fields report `null` diagnostics while retaining the same measured workloads.
+
 Fresh-process startup does not purge the OS disk cache. Cached-tab coverage uses
 a unique persistent WebKit store shared by fresh views within the test process;
 it does not restart the browser between cache priming and activation.

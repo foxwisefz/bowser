@@ -103,6 +103,25 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
     private var titleObservation: NSKeyValueObservation?
     private var loadingCover: PageLoadingView?
     private(set) var hasRenderedContent = false
+    private let recordsNavigationTimings = ProcessInfo.processInfo.environment["BOWSER_PERF"] == "1"
+    private var performanceNavigationStart: TimeInterval?
+    @objc private(set) var navigationTimings: NSDictionary?
+
+    private func startNavigationTiming() {
+        guard recordsNavigationTimings else { return }
+        performanceNavigationStart = ProcessInfo.processInfo.systemUptime
+        navigationTimings = [:]
+    }
+
+    private func markNavigationTiming(_ stage: String) {
+        guard let start = performanceNavigationStart else { return }
+        var values = navigationTimings as? [String: Double] ?? [:]
+        if values[stage] == nil {
+            values[stage] = (ProcessInfo.processInfo.systemUptime - start) * 1000
+            navigationTimings = values as NSDictionary
+        }
+    }
+
     private(set) var observesRenderingProgress = false
     var isShowingLoadingCover: Bool { loadingCover != nil }
     private var currentScripts: [ModScript] = []
@@ -325,11 +344,14 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
 
     @discardableResult func resumePageIfNeeded() -> Bool {
         if let interaction = sleepingInteractionState {
+            startNavigationTiming()
             showTabPreview()
             sleepingInteractionState = nil
             sleepingTitle = nil
             pendingRestoreURL = nil
+            markNavigationTiming("request_call_ms")
             webView.interactionState = interaction
+            markNavigationTiming("request_return_ms")
             return true
         } else if let url = pendingRestoreURL {
             load(urlString: url)
@@ -400,10 +422,12 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
     @objc(_webView:renderingProgressDidChange:)
     func renderingProgress(_ sender: WKWebView, didChange events: UInt) {
         guard sender === webView, events & (1 << 1) != 0, sender.url != nil else { return }
+        markNavigationTiming("rendering_callback_ms")
         revealPageContent()
     }
 
     private func revealPageContent() {
+        markNavigationTiming("reveal_ms")
         hasRenderedContent = true
         loadingCover?.removeFromSuperview()
         loadingCover = nil
@@ -459,6 +483,7 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
     }
 
     func load(urlString: String) {
+        startNavigationTiming()
         dismissTabPreview()
         TabPreviewCache.shared.remove(webviewId)
         guard let url = Self.localFileURL(urlString) ?? URL(string: urlString) else { return }
@@ -474,6 +499,7 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
         // and images silently fail to load (bowser-browser-vus). Grant the
         // whole directory so a self-contained local page works like it does
         // in Safari.
+        markNavigationTiming("request_call_ms")
         if url.isFileURL {
             // Read access is granted to the file's DIRECTORY, computed from
             // the bare path so a #fragment (reveal.js slide anchors etc.)
@@ -483,6 +509,7 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
         } else {
             webView.load(URLRequest(url: url))
         }
+        markNavigationTiming("request_return_ms")
     }
 
     @objc func goBack(_ sender: Any?) { webView.goBack() }
@@ -882,6 +909,7 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
     }
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        markNavigationTiming("provisional_ms")
         if !hasRenderedContent { showLoadingCover() }
         if failedNavigationURL == nil, let navigation {
             navigationDiagnosticTrace.start(navigation, now: ProcessInfo.processInfo.systemUptime,
@@ -911,6 +939,7 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
     }
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        markNavigationTiming("commit_ms")
         if failedNavigationURL == nil { recordNavigationDiagnostic("committed", navigation: navigation) }
         hasRenderedContent = false
         showLoadingCover()
@@ -922,6 +951,7 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        markNavigationTiming("finish_ms")
         if navigationDiagnosticTrace.isCurrent(navigation) { navigationDiagnosticWatchdog?.cancel() }
         if failedNavigationURL == nil { recordNavigationDiagnostic("finished", navigation: navigation) }
         revealPageContent()
