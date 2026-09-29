@@ -1,11 +1,31 @@
 import unittest
-from compare_report import EXPECTED, summarize, gate
+from compare_report import EXPECTED, summarize, gate, assess
 
 class ComparisonTests(unittest.TestCase):
     def runs(self):
         return [dict(browser=browser, fixture=[1000,650], visibility='visible', scrollTop=3840,
                      devicePixelRatio=2, client=[983,650], samples=[dict(metric=name,value=value) for name,count in EXPECTED.items() for _ in range(count)])
                 for browser,value in [('bowser',10),('safari',5)]]
+    def test_complete_over_budget_is_failure_not_incomplete(self):
+        budgets = {name: dict(max_ratio=1.25, noise_floor=0) for name in EXPECTED}
+        report = assess(self.runs(), 1, budgets)
+        self.assertEqual(report['status'], 'FAIL')
+        self.assertEqual(len(report['failures']), len(EXPECTED))
+        self.assertEqual(report['comparison']['layout_1000_rows_ms']['limit'], 6.25)
+
+    def test_complete_within_budget_passes(self):
+        budgets = {name: dict(max_ratio=2, noise_floor=0) for name in EXPECTED}
+        report = assess(self.runs(), 1, budgets)
+        self.assertEqual(report['status'], 'PASS')
+        self.assertFalse(report['failures'])
+
+    def test_missing_or_failed_execution_is_incomplete(self):
+        budgets = {name: dict(max_ratio=2, noise_floor=0) for name in EXPECTED}
+        for runs, errors in [(self.runs()[:1], []), (self.runs(), ['driver failed'])]:
+            report = assess(runs, 1, budgets, errors)
+            self.assertEqual(report['status'], 'INCOMPLETE')
+            self.assertTrue(report['failures'])
+
     def test_identical_measurements_compare_ratios(self):
         summary, comparison = summarize(self.runs(), 1)
         self.assertEqual(comparison['layout_1000_rows_ms']['ratio'], 2)

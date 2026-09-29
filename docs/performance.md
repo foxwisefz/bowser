@@ -137,3 +137,9 @@ timings and Safari WebDriver command timings have different boundaries and
 must not be divided to claim a browser speed ratio. Those native UI acceptance
 items remain tracked in `bowser-browser-ehu`; the existing Bowser-only CI gates
 continue to cover their internal workloads.
+
+Safari comparison reports `FAIL` when complete measurements exceed a relative
+budget, and `INCOMPLETE` when execution or measurement validation fails. Both
+exit nonzero. The table includes the enforced limit and each browser's range of
+per-run p95s; ranges describe spread, not confidence intervals. Existing relative
+thresholds and noise allowances apply regardless of how narrowly a metric fails.
