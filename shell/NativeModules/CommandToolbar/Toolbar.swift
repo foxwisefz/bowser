@@ -1,5 +1,4 @@
 import AppKit
-import SwiftUI
 import QuartzCore
 
 // ABI 1: bounded UTF-8 JSON snapshots, generation-tagged copied UTF-8 events,
@@ -30,65 +29,193 @@ struct ToolbarTheme {
         return NSColor(srgbRed: CGFloat((rgb >> 16) & 255)/255, green: CGFloat((rgb >> 8) & 255)/255, blue: CGFloat(rgb & 255)/255, alpha: 1)
     }
 }
-@MainActor final class ToolbarModel: ObservableObject {
-    var siteMods: [SiteMod] = []
-    var modWidth: CGFloat = 135
-    var permissionsAvailable = false
-    var capturing = false
-    var revealed = false
+@MainActor final class ToolbarControl: NSButton {
+    var invoke: (() -> Void)?
+    var fill: NSColor = .clear
+    var border: NSColor?
+    var radius: CGFloat = 6
+    var beveled = false
+    init(title: String, symbol: String? = nil, action: @escaping () -> Void) {
+        invoke = action
+        super.init(frame: .zero)
+        self.title = title
+        isBordered = false
+        setButtonType(.momentaryChange)
+        if let symbol {
+            image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)?
+                .withSymbolConfiguration(.init(pointSize: 12, weight: .semibold))
+            imagePosition = .imageOnly
+        }
+        target = self; self.action = #selector(clicked)
+        setAccessibilityLabel(title)
+        toolTip = title
+    }
+    required init?(coder: NSCoder) { fatalError("init(title:)") }
+    @objc private func clicked() { invoke?() }
+    override func draw(_ dirtyRect: NSRect) {
+        let outline = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.6, dy: 0.6), xRadius: radius, yRadius: radius)
+        fill.setFill(); outline.fill()
+        if let border {
+            border.setStroke(); outline.lineWidth = beveled ? 2 : 1.2; outline.stroke()
+            if beveled {
+                NSGraphicsContext.saveGraphicsState()
+                outline.addClip()
+                NSGradient(starting: .white.withAlphaComponent(0.6), ending: .clear)?.draw(in: bounds, angle: -90)
+                NSGraphicsContext.restoreGraphicsState()
+            }
+        }
+        super.draw(dirtyRect)
+    }
+}
+
+/// Fixed-height AppKit controls avoid SwiftUI graph construction and size probes
+/// during the synchronous live-adoption transaction.
+@MainActor final class ToolbarView: NSView {
+    private let emit: (String) -> Void
     private var appliedSnapshot: Data?
-    var theme = ToolbarTheme()
-    var tint: NSColor?
-    var buttons: [ToolbarButton] = []
+    private var pendingSnapshot: ToolbarSnapshot?
+    private var controls: [NSView] = []
+    private let drag = ToolbarWindowDragView()
+    private var tracking: NSTrackingArea?
+    private var modsMenu = NSMenu()
+    private var widths: [CGFloat] = []
+
+    init(generation: UInt64, event: @escaping ToolbarEvent) {
+        emit = { text in text.withCString { event(generation, $0) } }
+        super.init(frame: .zero)
+        addSubview(drag)
+    }
+    required init?(coder: NSCoder) { fatalError("init(generation:)") }
+    override var mouseDownCanMoveWindow: Bool { false }
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let tracking { removeTrackingArea(tracking) }
+        let area = NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self)
+        addTrackingArea(area); tracking = area
+    }
+    override func mouseEntered(with event: NSEvent) { emit("hover:1") }
+    override func mouseExited(with event: NSEvent) { emit("hover:0") }
+    override func layout() {
+        if let snapshot = pendingSnapshot {
+            pendingSnapshot = nil
+            render(snapshot)
+        }
+        super.layout()
+        drag.frame = bounds
+        var x: CGFloat = 0
+        for (control, width) in zip(controls, widths) {
+            control.frame = NSRect(x: x, y: (bounds.height - 22) / 2, width: width, height: 22)
+            x += width + 7
+        }
+    }
+    @objc private func selectMod(_ item: NSMenuItem) {
+        if let action = item.representedObject as? String { emit(action) }
+    }
+    private func append(_ control: NSView, width: CGFloat) {
+        controls.append(control); widths.append(width); addSubview(control)
+    }
     func apply(_ data: Data) -> Bool {
-        // Admission replays the creation snapshot; identical state must not
-        // invalidate the freshly laid-out SwiftUI hierarchy again.
         if appliedSnapshot == data { return true }
         guard let value = try? JSONDecoder().decode(ToolbarSnapshot.self, from: data),
               value.buttons.count <= 128, (value.siteMods?.count ?? 0) <= 128,
-              value.cornerRadius.isFinite,
-              (0...12).contains(value.cornerRadius) else { return false }
-        objectWillChange.send()
-        theme = ToolbarTheme(colors: value.colors, buttonStyle: value.buttonStyle, cornerRadius: value.cornerRadius, showNavigation: value.showNavigation)
-        if let c = value.tint, c.count == 4, c.allSatisfy({ $0.isFinite && (0...1).contains($0) }) {
-            tint = NSColor(srgbRed: c[0], green: c[1], blue: c[2], alpha: c[3])
-        } else { tint = nil }
-        siteMods = value.siteMods ?? []
-        modWidth = min(135, max(0, value.modWidth ?? 135))
-        permissionsAvailable = value.permissionsAvailable ?? false; capturing = value.capturing ?? false
-        buttons = value.buttons; revealed = value.revealed
+              value.cornerRadius.isFinite, (0...12).contains(value.cornerRadius) else { return false }
         appliedSnapshot = data
+        pendingSnapshot = value
+        needsLayout = true
         return true
     }
-}
-@MainActor final class ToolbarView: NSHostingView<CommandToolbar> {
-    let model: ToolbarModel
-    init(model: ToolbarModel, generation: UInt64, event: @escaping ToolbarEvent) {
-        self.model = model
-        let emit: (String) -> Void = { text in text.withCString { event(generation, $0) } }
-        super.init(rootView: CommandToolbar(model: model, openBar: { emit("command") }, goBack: { emit("back") }, goForward: { emit("forward") }, reload: { emit("reload") }, modClick: { emit("mod:" + $0) }, permissions: { emit("permissions") }, onHoverChanged: { emit($0 ? "hover:1" : "hover:0") }))
-        // NativeModuleSlot owns the fixed toolbar bounds; avoid SwiftUI's
-        // minimum/ideal/maximum size probes during every replacement.
-        sizingOptions = []
+    private func render(_ value: ToolbarSnapshot) {
+        let theme = ToolbarTheme(colors: value.colors, buttonStyle: value.buttonStyle,
+                                 cornerRadius: value.cornerRadius, showNavigation: value.showNavigation)
+        var tint: NSColor?
+        if let c = value.tint, c.count == 4, c.allSatisfy({ $0.isFinite && (0...1).contains($0) }) {
+            tint = NSColor(srgbRed: c[0], green: c[1], blue: c[2], alpha: c[3])
+        }
+        for control in controls { control.removeFromSuperview() }
+        controls.removeAll(); widths.removeAll()
+        func button(_ title: String, _ symbol: String?, _ action: String, shortcut: String? = nil) -> ToolbarControl {
+            let control = ToolbarControl(title: title, symbol: symbol) { [weak self] in
+                if let shortcut { ShortcutGhost.show(shortcut) }
+                self?.emit(action)
+            }
+            control.setAccessibilityIdentifier(action)
+            control.contentTintColor = theme.color("button_foreground") ?? .secondaryLabelColor
+            control.fill = theme.color("button_background") ?? .clear
+            control.radius = theme.cornerRadius
+            control.beveled = theme.buttonStyle == "beveled"
+            if control.beveled { control.border = theme.color("border") ?? .darkGray }
+            return control
+        }
+        let command = button("Command bar (⌘K)", nil, "command", shortcut: "⌘K")
+        let descriptor = NSFont.systemFont(ofSize: 10.5, weight: .bold).fontDescriptor.withDesign(.rounded)
+        command.attributedTitle = NSAttributedString(string: "⌘+K", attributes: [
+            .font: descriptor.flatMap { NSFont(descriptor: $0, size: 10.5) } ?? NSFont.boldSystemFont(ofSize: 10.5),
+            .kern: 0.8,
+            .foregroundColor: theme.color("button_foreground") ?? (tint == nil ? NSColor.secondaryLabelColor : NSColor.white.withAlphaComponent(0.95))
+        ])
+        command.fill = theme.color("button_background") ?? tint ?? .controlBackgroundColor
+        command.border = theme.color("accent") ?? NSColor(srgbRed: 0.83, green: 0.65, blue: 0.13, alpha: 0.95)
+        command.beveled = false
+        append(command, width: 50)
+        let menuButton = button("Mods for this site", "puzzlepiece.extension", "site-mods")
+        modsMenu = NSMenu(); modsMenu.autoenablesItems = false
+        if (value.siteMods ?? []).isEmpty {
+            let empty = NSMenuItem(title: "No mods for this site", action: nil, keyEquivalent: "")
+            empty.isEnabled = false; modsMenu.addItem(empty)
+        }
+        for mod in value.siteMods ?? [] {
+            let item = NSMenuItem(title: mod.title, action: #selector(selectMod), keyEquivalent: "")
+            item.target = self; item.representedObject = "mod:site-mod:" + mod.id
+            item.state = mod.on ? .on : .off; modsMenu.addItem(item)
+        }
+        modsMenu.addItem(.separator())
+        let global = NSMenuItem(title: "Show global mods", action: #selector(selectMod), keyEquivalent: "")
+        global.target = self; global.representedObject = "mod:global_mods"; modsMenu.addItem(global)
+        menuButton.menu = modsMenu
+        menuButton.invoke = { [weak self, weak menuButton] in
+            guard let self, let menuButton else { return }
+            self.modsMenu.popUp(positioning: nil, at: NSPoint(x: 0, y: menuButton.bounds.minY), in: menuButton)
+        }
+        append(menuButton, width: 20)
+        append(button("Back (⌘[)", "chevron.left", "back", shortcut: "⌘["), width: 20)
+        append(button("Forward (⌘])", "chevron.right", "forward", shortcut: "⌘]"), width: 20)
+        append(button("Reload this tab (⌘R)", "arrow.clockwise", "reload", shortcut: "⌘R"), width: 20)
+        if value.revealed && !value.buttons.isEmpty {
+            let scroll = NSScrollView()
+            scroll.drawsBackground = false; scroll.hasHorizontalScroller = false; scroll.hasVerticalScroller = false
+            let document = NSView(frame: NSRect(x: 0, y: 0, width: CGFloat(value.buttons.count) * 27 - 7, height: 22))
+            for (index, mod) in value.buttons.enumerated() {
+                let control = button(mod.title, mod.symbol ?? "puzzlepiece.extension", "mod:" + mod.id)
+                control.frame = NSRect(x: CGFloat(index) * 27, y: 0, width: 20, height: 22)
+                document.addSubview(control)
+            }
+            scroll.documentView = document
+            let available = value.modWidth.flatMap { $0.isFinite ? $0 : nil } ?? 135
+            append(scroll, width: min(CGFloat(value.buttons.count) * 27, min(135, max(0, available))))
+        }
+        if value.permissionsAvailable == true && value.capturing == true {
+            let control = button("Website permissions", "record.circle.fill", "permissions")
+            control.contentTintColor = .systemGreen
+            control.toolTip = "Camera or microphone in use — website permissions"
+            append(control, width: 24)
+        }
     }
-    required init(rootView: CommandToolbar) { fatalError("use module_create") }
-    required init?(coder: NSCoder) { fatalError("use module_create") }
 }
 @_cdecl("bowser_toolbar_abi") public func toolbarABI() -> Int32 { 1 }
 @_cdecl("bowser_toolbar_create") public func toolbarCreate(_ bytes: UnsafePointer<UInt8>, _ count: Int32, _ generation: UInt64, _ event: @escaping ToolbarEvent) -> UnsafeMutableRawPointer? {
     guard count > 0 && count <= 65536 else { return nil }
     let data = Data(bytes: bytes, count: Int(count))
     let address: UInt? = MainActor.assumeIsolated {
-        let model = ToolbarModel()
-        guard model.apply(data) else { return nil }
-        return UInt(bitPattern: Unmanaged.passRetained(ToolbarView(model: model, generation: generation, event: event)).toOpaque())
+        let view = ToolbarView(generation: generation, event: event)
+        guard view.apply(data) else { return nil }
+        return UInt(bitPattern: Unmanaged.passRetained(view).toOpaque())
     }
     return address.flatMap(UnsafeMutableRawPointer.init(bitPattern:))
 }
 @_cdecl("bowser_toolbar_update") public func toolbarUpdate(_ pointer: UnsafeMutableRawPointer, _ bytes: UnsafePointer<UInt8>, _ count: Int32) -> Int32 {
     guard count > 0 && count <= 65536 else { return 0 }
     let address = UInt(bitPattern: pointer), data = Data(bytes: bytes, count: Int(count))
-    return MainActor.assumeIsolated { Unmanaged<ToolbarView>.fromOpaque(UnsafeMutableRawPointer(bitPattern: address)!).takeUnretainedValue().model.apply(data) ? 1 : 0 }
+    return MainActor.assumeIsolated { Unmanaged<ToolbarView>.fromOpaque(UnsafeMutableRawPointer(bitPattern: address)!).takeUnretainedValue().apply(data) ? 1 : 0 }
 }
 @_cdecl("bowser_toolbar_destroy") public func toolbarDestroy(_ pointer: UnsafeMutableRawPointer) {
     let address = UInt(bitPattern: pointer)
@@ -97,139 +224,6 @@ struct ToolbarTheme {
         object.takeUnretainedValue().removeFromSuperview(); object.release()
     }
 }
-struct CommandToolbar: View {
-    @ObservedObject var model: ToolbarModel
-    private var theme: ToolbarTheme { model.theme }
-    /// The window's profile tint — painted on the ⌘K keycap only (the
-    /// owner's call: not the whole bar, not the command palette).
-    private var tint: Color? { model.tint.map(Color.init(nsColor:)) }
-    let openBar: () -> Void
-    let goBack: () -> Void
-    let goForward: () -> Void
-    let reload: () -> Void
-    let modClick: (String) -> Void
-    let permissions: () -> Void
-    let onHoverChanged: (Bool) -> Void
-
-    var body: some View {
-        HStack(spacing: 7) {
-            Button(action: { ShortcutGhost.show("⌘K"); openBar() }) {
-                // Keycap-style badge: outlined, rounded face, like a
-                // keyboard shortcut printed on the chrome.
-                Text("⌘+K")
-                    .font(.system(size: 10.5, weight: .bold, design: .rounded))
-                    .kerning(0.8)
-                    .fixedSize(horizontal: true, vertical: false)
-                    .foregroundStyle(theme.color("button_foreground").map { AnyShapeStyle(Color(nsColor: $0)) }
-                        ?? (tint == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(.white.opacity(0.95))))
-                    .frame(width: 50, height: 22)
-                    .background(
-                        RoundedRectangle(cornerRadius: theme.cornerRadius)
-                            .fill(theme.color("button_background").map { Color(nsColor: $0) }
-                                  ?? tint ?? Color(nsColor: .controlBackgroundColor))
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: theme.cornerRadius)
-                            .strokeBorder(
-                                theme.color("accent").map { Color(nsColor: $0) }
-                                    ?? Color(red: 0.83, green: 0.65, blue: 0.13).opacity(0.95),
-                                lineWidth: 1.2
-                            )
-                    )
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .help("Command bar (⌘K)")
-            .accessibilityIdentifier("command")
-            Menu {
-                if model.siteMods.isEmpty {
-                    Text("No mods for this site")
-                } else {
-                    ForEach(model.siteMods) { mod in
-                        Toggle(mod.title, isOn: Binding(
-                            get: { mod.on },
-                            set: { on in
-                                if on != mod.on { modClick("site-mod:" + mod.id) }
-                            }
-                        ))
-                    }
-                }
-                Divider()
-                Button("Show global mods") { modClick("global_mods") }
-            } label: {
-                Image(systemName: "puzzlepiece.extension")
-                    .font(.system(size: 12, weight: .semibold))
-            }
-            .menuStyle(.borderlessButton)
-            .fixedSize()
-            .help("Mods for this site")
-            .accessibilityLabel("Mods for this site")
-            // Revealed together with the window lights, same grace/fade.
-            Group {
-                clusterButton("chevron.left", shortcut: "⌘[", action: goBack)
-                    .help("Back (⌘[)")
-                clusterButton("chevron.right", shortcut: "⌘]", action: goForward)
-                    .help("Forward (⌘])")
-                clusterButton("arrow.clockwise", shortcut: "⌘R", action: reload)
-                    .help("Reload this tab (⌘R)")
-                if model.revealed && !model.buttons.isEmpty {
-                    ScrollView(.horizontal) {
-                        HStack(spacing: 7) {
-                ForEach(model.buttons, id: \.id) { button in
-                    clusterButton(button.symbol ?? "puzzlepiece.extension") {
-                        modClick(button.id)
-                    }
-                    .help(button.title)
-                }
-                        }
-                    }.scrollIndicators(.hidden)
-                        .frame(width: min(CGFloat(model.buttons.count) * 27, model.modWidth), height: 22)
-                }
-            }
-            if model.permissionsAvailable && model.capturing {
-                Button(action: permissions) {
-                    Image(systemName: "record.circle.fill")
-                        .foregroundStyle(Color.green)
-                        .font(.system(size: 12, weight: .medium)).frame(width: 24, height: 22)
-                }.buttonStyle(.plain).help("Camera or microphone in use — website permissions")
-                    .accessibilityLabel("Website permissions")
-            }
-            Spacer(minLength: 0)
-        }
-        .animation(.easeOut(duration: 0.15), value: model.revealed)
-        .frame(maxHeight: .infinity)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(ToolbarWindowDragHandle())
-        .onHover { onHoverChanged($0) }
-    }
-
-    private func clusterButton(_ symbol: String, shortcut: String? = nil, action: @escaping () -> Void) -> some View {
-        Button(action: {
-            if let shortcut { ShortcutGhost.show(shortcut) }
-            action()
-        }) {
-            Image(systemName: symbol)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(theme.color("button_foreground").map { Color(nsColor: $0) } ?? .secondary)
-                .frame(width: 20,
-                       height: theme.buttonStyle == "beveled" ? 22 : 20)
-                .background {
-                    RoundedRectangle(cornerRadius: theme.cornerRadius)
-                        .fill(theme.color("button_background").map { Color(nsColor: $0) } ?? .clear)
-                }
-                .overlay {
-                    if theme.buttonStyle == "beveled" {
-                        RoundedRectangle(cornerRadius: theme.cornerRadius)
-                            .strokeBorder(LinearGradient(colors: [.white, Color(nsColor: theme.color("border") ?? .darkGray)],
-                                                         startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 2)
-                    }
-                }
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
-}
-
 
 /// A click-only reminder in its own non-interactive panel: toolbar clipping,
 /// page navigation and revealing/hiding the controls cannot cut the ghost off.
