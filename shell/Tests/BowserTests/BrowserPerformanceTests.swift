@@ -236,7 +236,8 @@ import XCTest
         defer { slot.retire(); window.close() }
         // Live upgrade starts with the existing toolbar already mounted.
         XCTAssertTrue(slot.install(try NativeModuleLibrary(bundle: URL(fileURLWithPath: paths[0]), team: nil, bundled: true)))
-        for index in 0...samples {
+        // One first-generation adoption plus 30 repeat adoptions.
+        for index in 0...30 {
             try await timed("native_toolbar_upgrade_ms") {
                 let library = try NativeModuleLibrary(bundle: URL(fileURLWithPath: paths[(index + 1) % 2]), team: nil, bundled: true)
                 try await timed(index == 0 ? "native_toolbar_first_adopt_ms" : "native_toolbar_adopt_ms") {
