@@ -87,6 +87,12 @@ XCTest results, environment details, and build/runtime logs, including failures.
 Navigation diagnostics are retained before the disposable home is removed.
 Budget failures print samples in collection order so a slow first load remains
 visible rather than disappearing into an aggregate.
+Toolbar adoption also reports opt-in phase durations for creation, mounting,
+snapshot update, retirement, activation, layout, and responder restoration.
+Sample 0 is first use; samples 1–30 correspond to the repeat-adoption samples.
+These diagnostic timings leave the overall timed boundary and budget intact.
+Reports are printed after the measurements, not inside timed blocks. Older base
+revisions without the diagnostic accessor still run the same workload.
 `--reference` collects a reference locally (threshold violations are reported,
 but incomplete measurements fail its exit status). `--baseline PATH/report.json`
 requires a complete compatible reference; missing reports fail. Set the same

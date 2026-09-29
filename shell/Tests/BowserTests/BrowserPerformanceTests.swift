@@ -236,6 +236,16 @@ import XCTest
         defer { slot.retire(); window.close() }
         // Live upgrade starts with the existing toolbar already mounted.
         XCTAssertTrue(slot.install(try NativeModuleLibrary(bundle: URL(fileURLWithPath: paths[0]), team: nil, bundled: true)))
+        var phaseReports: [[String: Any]] = []
+        // Emit after all timing boundaries, including on assertion failure.
+        defer {
+            for report in phaseReports {
+                if let data = try? JSONSerialization.data(withJSONObject: report, options: [.sortedKeys]),
+                   let text = String(data: data, encoding: .utf8) {
+                    print("Toolbar adoption phases: " + text)
+                }
+            }
+        }
         // One first-generation adoption plus 30 repeat adoptions.
         for index in 0...30 {
             try await timed("native_toolbar_upgrade_ms") {
@@ -244,6 +254,12 @@ import XCTest
                     XCTAssertTrue(slot.install(library))
                     XCTAssertEqual(slot.build, library.build)
                 }
+            }
+            // Older base revisions may lack diagnostics. Objective-C discovery
+            // preserves identical timed workloads without requiring their API.
+            if slot.responds(to: NSSelectorFromString("lastAdoptionTimings")),
+               let phases = slot.value(forKey: "lastAdoptionTimings") as? [String: Double] {
+                phaseReports.append(["sample": index, "first_use": index == 0, "phases_ms": phases])
             }
         }
     }

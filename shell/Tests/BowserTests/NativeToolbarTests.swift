@@ -68,6 +68,25 @@ import AppKit
         XCTAssertNil(native)
         XCTAssertNil(slot.build)
     }
+    func testAdoptionPhaseDiagnosticsAreOptInAndPreserveBehavior() throws {
+        let library = try NativeModuleLibrary(bundle: fixture(), team: "V7W5LP47U9", bundled: false)
+        for enabled in [false, true] {
+            let slot = NativeModuleSlot(fallback: NSView())
+            slot.recordsAdoptionTimings = enabled
+            slot.setSnapshot(snapshot)
+            XCTAssertTrue(slot.install(library))
+            XCTAssertEqual(slot.build, library.build)
+            if enabled {
+                let phases = try XCTUnwrap(slot.lastAdoptionTimings as? [String: Double])
+                XCTAssertEqual(Set(phases.keys), Set(["create_ms", "mount_ms", "update_ms", "retire_ms", "activate_ms", "layout_ms", "responder_ms"]))
+                XCTAssertTrue(phases.values.allSatisfy { $0.isFinite && $0 >= 0 })
+                XCTAssertTrue(slot.responds(to: NSSelectorFromString("lastAdoptionTimings")))
+            } else {
+                XCTAssertNil(slot.lastAdoptionTimings)
+            }
+            slot.retire()
+        }
+    }
     func testInvalidStateLeavesFallbackIntact() throws {
         let library = try NativeModuleLibrary(bundle: fixture(), team: "V7W5LP47U9", bundled: false)
         let fallback = NSView()
