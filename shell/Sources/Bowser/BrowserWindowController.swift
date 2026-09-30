@@ -369,6 +369,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
 
     private let recordsActivationTimings = ProcessInfo.processInfo.environment["BOWSER_PERF"] == "1"
     @objc private(set) var lastActivationTimings: NSDictionary?
+    private(set) var pendingTabPreviewCapture: DispatchWorkItem?
 
     /// Focus a visible pane, or mount a tab and leave the current arrangement.
     func activate(_ view: EngineView, focusPage: Bool = true) {
@@ -415,11 +416,16 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
             mark("surface_ms")
             // Refresh the resurrect frame soon after the switch paints, so
             // a death right after a tab change resurrects the right tab.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self, weak view] in
-                guard let self, let view, view === self.activeTab,
+            pendingTabPreviewCapture?.cancel()
+            let capture = DispatchWorkItem { [weak self, weak view] in
+                guard let self else { return }
+                self.pendingTabPreviewCapture = nil
+                guard let view, view === self.activeTab,
                       self.resurrectOverlay == nil else { return }
                 view.capturePreview()
             }
+            pendingTabPreviewCapture = capture
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: capture)
         }
         BrainBridge.shared.send([
             "op": "event", "event": "tab_activated", "webview": view.webviewId,
@@ -929,6 +935,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     }
 
     func windowWillClose(_ notification: Notification) {
+        pendingTabPreviewCapture?.cancel()
+        pendingTabPreviewCapture = nil
         toolbarIntentObserver?.stop()
         profileIntentObserver?.stop()
         nativeToolbar?.retire()

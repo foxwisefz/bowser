@@ -45,6 +45,30 @@ final class ProfileModScopeTests: XCTestCase {
         XCTAssertNotEqual(slot.snapshot, original)
     }
 
+    @MainActor func testRapidTabSwitchesCancelObsoletePreviewCaptures() async throws {
+        let controller = BrowserWindowController(profile: .defaultProfile)
+        defer { controller.window?.close() }
+        let first = controller.openTab()
+        let initial = try XCTUnwrap(controller.pendingTabPreviewCapture)
+        let second = controller.openTab()
+        XCTAssertTrue(initial.isCancelled)
+        let secondCapture = try XCTUnwrap(controller.pendingTabPreviewCapture)
+        controller.activate(first)
+        XCTAssertTrue(secondCapture.isCancelled)
+        let latest = try XCTUnwrap(controller.pendingTabPreviewCapture)
+        XCTAssertFalse(latest.isCancelled)
+        // Re-activating the current tab must not postpone its existing capture.
+        controller.activate(first)
+        XCTAssertTrue(controller.pendingTabPreviewCapture === latest)
+        try await Task.sleep(for: .milliseconds(500))
+        XCTAssertNil(controller.pendingTabPreviewCapture)
+        controller.activate(second)
+        let closing = try XCTUnwrap(controller.pendingTabPreviewCapture)
+        controller.window?.close()
+        XCTAssertTrue(closing.isCancelled)
+        XCTAssertNil(controller.pendingTabPreviewCapture)
+    }
+
     @MainActor func testChromeAndFutureTabScriptsAreProfileScoped() {
         ChromeSurface.handle(["chrome": "add_button", "id": "scope-button", "title": "Work", "profile": "scope-work"])
         defer { ChromeSurface.handle(["chrome": "remove_button", "id": "scope-button", "profile": "scope-work"]) }
