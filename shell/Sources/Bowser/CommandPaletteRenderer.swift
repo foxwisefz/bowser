@@ -2,33 +2,50 @@ import AppKit
 import SwiftUI
 import BowserSurfaceKit
 
-enum PaletteSuggestions {
+@MainActor enum PaletteSuggestions {
     typealias TabCandidate = CommandPaletteState.TabCandidate
     typealias Result = CommandPaletteState.Result
-  static func suggestions(query: String, tabs: [TabCandidate], profile: String, active: UInt64?)
-    -> [Result]
-  {
-    let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !query.hasPrefix(":") else { return [] }
-    let needle = query.folding(
-      options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
-    let tokens = needle.split(whereSeparator: \.isWhitespace).map(String.init)
-    let matches = tabs.enumerated().compactMap { index, tab -> (Int, Int, TabCandidate)? in
-        guard tab.profile == profile, !query.isEmpty || tab.id != active else { return nil }
-      let title = tab.title.folding(
-        options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
-      let url = tab.url.folding(
-        options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
-      guard tokens.allSatisfy({ (title + " " + url).contains($0) }) else { return nil }
-      let score =
-        title == needle || url == needle
-        ? 0 : (title.hasPrefix(needle) || (URL(string: url)?.host ?? "").hasPrefix(needle) ? 1 : 2)
-      return (score, index, tab)
-    }.sorted { ($0.0, $0.1) < ($1.0, $1.1) }
-    var results = matches.prefix(query.isEmpty ? 6 : 5).map { Result(tab: $0.2, query: query) }
-    if !query.isEmpty { results.append(Result(tab: nil, query: query)) }
-    return results
-  }
+    private struct SearchEntry {
+        let tab: TabCandidate
+        let title: String
+        let url: String
+        let text: String
+    }
+    // Keep only the latest snapshot. Keystrokes reuse normalized strings;
+    // changed titles, URLs, profiles, ordering or locale rebuild the index.
+    private static var indexedTabs: [TabCandidate] = []
+    private static var indexedLocale: Locale?
+    private static var index: [SearchEntry] = []
+
+    static func suggestions(query: String, tabs: [TabCandidate], profile: String, active: UInt64?) -> [Result] {
+        let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.hasPrefix(":") else { return [] }
+        let locale = Locale.current
+        if indexedLocale != locale || indexedTabs != tabs {
+            index = tabs.map { tab in
+                let title = tab.title.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: locale)
+                let url = tab.url.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: locale)
+                return SearchEntry(tab: tab, title: title, url: url, text: title + " " + url)
+            }
+            indexedTabs = tabs
+            indexedLocale = locale
+        }
+        let needle = query.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: locale)
+        let tokens = needle.split(whereSeparator: \.isWhitespace).map(String.init)
+        // Scores have only three values. Preserve tab order within each score
+        // and retain only the visible result limit instead of sorting all tabs.
+        let limit = query.isEmpty ? 6 : 5
+        var buckets = [[TabCandidate]](repeating: [], count: 3)
+        for entry in index where entry.tab.profile == profile && (!query.isEmpty || entry.tab.id != active) {
+            guard tokens.allSatisfy({ entry.text.contains($0) }) else { continue }
+            let score = entry.title == needle || entry.url == needle ? 0
+                : (entry.title.hasPrefix(needle) || (URL(string: entry.url)?.host ?? "").hasPrefix(needle) ? 1 : 2)
+            if buckets[score].count < limit { buckets[score].append(entry.tab) }
+        }
+        var results = buckets.joined().prefix(limit).map { Result(tab: $0, query: query) }
+        if !query.isEmpty { results.append(Result(tab: nil, query: query)) }
+        return results
+    }
     static func results(query: String, tabs: [TabCandidate], profile: String, active: UInt64?, commands: [String: String]) -> [Result] {
         let navigation = suggestions(query: query, tabs: tabs, profile: profile, active: active)
         let actions = actions(query: query, commands: commands)

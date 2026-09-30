@@ -40,6 +40,33 @@ final class CommandBarTests: XCTestCase {
       CommandBar.suggestions(query: ":mods", tabs: tabs, profile: "default", active: nil).isEmpty)
   }
 
+  @MainActor func testSearchIndexTracksChangedTabsAndKeepsAccentAndRankingSemantics() {
+    func tab(_ id: UInt64, _ title: String, _ url: String, _ profile: String = "default") -> CommandBar.TabCandidate {
+      .init(id: id, title: title, url: url, profile: profile)
+    }
+    func ids(_ query: String, _ tabs: [CommandBar.TabCandidate]) -> [UInt64] {
+      CommandBar.suggestions(query: query, tabs: tabs, profile: "default", active: nil).compactMap { $0.tab?.id }
+    }
+    let original = [tab(1, "Café notes", "https://notes.test"),
+                    tab(2, "Other", "https://cafe.test"),
+                    tab(3, "Café", "https://exact.test"),
+                    tab(4, "Café secret", "https://work.test", "work")]
+    XCTAssertEqual(ids("CAFE", original), [3, 1, 2])
+    XCTAssertEqual(ids("cafe notes", original), [1])
+    XCTAssertEqual(ids("CAFE", original), [3, 1, 2])
+    let changed = [tab(2, "Changed", "https://changed.test"), original[0]]
+    XCTAssertEqual(ids("cafe", changed), [1])
+    XCTAssertEqual(ids("changed", changed), [2])
+    XCTAssertEqual(ids("cafe", []), [])
+    let emptyFields = [tab(1, "Named", "https://one.test"), tab(2, "", "https://two.test"), tab(3, "New tab", "")]
+    XCTAssertEqual(ids("", emptyFields), [2, 3, 1])
+    XCTAssertEqual(CommandBar.suggestions(query: "", tabs: emptyFields, profile: "default", active: 2).compactMap { $0.tab?.id }, [3, 1])
+    let many = (1...10).map { tab(UInt64($0), "Mail item", "https://example.test/\($0)") }
+        + [tab(11, "Mail", "https://exact.test")]
+    XCTAssertEqual(ids("mail", many), [11, 1, 2, 3, 4])
+    XCTAssertEqual(ids("mail", Array(many.reversed())), [11, 10, 9, 8, 7])
+  }
+
   @MainActor func testNavigationStaysVisibleAndCommandsAreDiscoverable() {
     let tabs = (1...30).map { CommandBar.TabCandidate(id: UInt64($0), title: "Mail \($0)", url: "https://mail.test/\($0)", profile: "default") }
     let results = CommandBar.suggestions(query: "mail", tabs: tabs, profile: "default", active: nil)
