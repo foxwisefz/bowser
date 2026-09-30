@@ -44,6 +44,12 @@ do not subtract one clock's values from the other. Diagnostic serialization
 runs outside the measured workload. Base revisions without these optional host
 fields report `null` diagnostics while retaining the same measured workloads.
 
+Full browser startup also saves `browser-<tab-count>-<sample>-probes.json`,
+including failed probes, elapsed time, reply latency, and restored tab count.
+Use these with the shell and backend logs to distinguish backend startup from
+tab restoration and slow readiness replies. Probe files are saved after timing
+ends, including when startup fails.
+
 Fresh-process startup does not purge the OS disk cache. Cached-tab coverage uses
 a unique persistent WebKit store shared by fresh views within the test process;
 it does not restart the browser between cache priming and activation.

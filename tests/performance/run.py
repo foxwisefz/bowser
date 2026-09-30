@@ -97,11 +97,16 @@ async def browser_startup(stage, work, output, record):
             with (output / f'browser-{count}-{index}.log').open('ab') as log:
                 start = time.monotonic()
                 process = subprocess.Popen([str(bundle / 'Contents/MacOS/Bowser')], env={**ENV, 'BOWSER_HOME': str(home)}, stdout=log, stderr=log)
+                probes = []
+                def observe(begin, end, actual, error):
+                    probes.append(dict(start_ms=(begin-start)*1000, end_ms=(end-start)*1000,
+                                       duration_ms=(end-begin)*1000, tabs=actual, error=error))
                 try:
                     await wait_for_tabs(home / 'agent.sock', count, start + 20,
-                                        lambda: process.poll() is not None)
+                                        lambda: process.poll() is not None, observe=observe)
                     record(f'startup_browser_{count}_tabs_ms', (time.monotonic()-start)*1000)
                 finally:
+                    (output / f'browser-{count}-{index}-probes.json').write_text(json.dumps(probes, indent=2))
                     stop(process)
                     endpoint = home / 'backend/host.sock'
                     if endpoint.exists():

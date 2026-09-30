@@ -41,13 +41,18 @@ final class BackendLifecycle {
         startup = Task { [weak self] in
             guard let self else { return }
             defer { isStarting = false }
-            // A supervising brain may already be reconnecting to this shell.
-            try? await Task.sleep(for: .milliseconds(750))
             guard !Task.isCancelled, !isQuitting, !BrainBridge.shared.isConnected else { return }
             guard let helper = Self.helper() else {
                 if Bundle.main.bundleIdentifier == "com.foxwiseai.bowser" { showStartupFailure() }
                 return
             }
+            // Host-managed runtimes probe the existing host and serialize ownership
+            // themselves. Only the older launcher needs a reconnect grace period;
+            // waiting here otherwise adds 750 ms to every cold browser launch.
+            if !Self.hasBackendHost(helper: helper) {
+                try? await Task.sleep(for: .milliseconds(750))
+            }
+            guard !Task.isCancelled, !isQuitting, !BrainBridge.shared.isConnected else { return }
             do {
                 launcher = try launch(helper, action: "start-brain")
                 for _ in 0..<150 {
@@ -61,6 +66,11 @@ final class BackendLifecycle {
                 showStartupFailure()
             }
         }
+    }
+
+    static func hasBackendHost(helper: URL) -> Bool {
+        FileManager.default.fileExists(atPath: helper.deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("HANDOFF.json").path)
     }
 
     private func launch(_ helper: URL, action: String) throws -> Process {

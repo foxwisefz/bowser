@@ -20,6 +20,9 @@ final class BackendLifecycleTests: XCTestCase {
             if file == helper { XCTAssertNil(BackendLifecycle.helper(home: home)) }
         }
         XCTAssertEqual(BackendLifecycle.helper(home: home), helper)
+        XCTAssertFalse(BackendLifecycle.hasBackendHost(helper: helper))
+        try Data("{}".utf8).write(to: home.appendingPathComponent("app/HANDOFF.json"))
+        XCTAssertTrue(BackendLifecycle.hasBackendHost(helper: helper))
     }
 
     func testDistributionBundleProvidesItsOwnMatchingRuntime() throws {
@@ -40,6 +43,9 @@ final class BackendLifecycleTests: XCTestCase {
         XCTAssertNil(BackendLifecycle.helper(home: home, bundledRuntime: bundled, runtimeDirectory: "staging-runtime"))
         let staging = home.appendingPathComponent("staging-runtime")
         try FileManager.default.copyItem(at: bundled, to: staging)
+        try Data("{}".utf8).write(to: staging.appendingPathComponent("HANDOFF.json"))
+        XCTAssertTrue(BackendLifecycle.hasBackendHost(helper: staging.appendingPathComponent("bin/bowser")))
+        XCTAssertFalse(BackendLifecycle.hasBackendHost(helper: bundled.appendingPathComponent("bin/bowser")))
         XCTAssertEqual(BackendLifecycle.helper(home: home, bundledRuntime: bundled, runtimeDirectory: "staging-runtime"), staging.appendingPathComponent("bin/bowser"))
         try FileManager.default.removeItem(at: home)
         XCTAssertEqual(BackendLifecycle.helper(home: home, bundledRuntime: bundled), bundled.appendingPathComponent("bin/bowser"))
