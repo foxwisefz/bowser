@@ -200,7 +200,13 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
     /// is the opener's, so the id still matches the store.
     let profileId: String
 
-    init(frame frameRect: NSRect, configuration external: WKWebViewConfiguration?, profile: Profile = .defaultProfile) {
+    // WebKit still performs synchronous pool initialization for a fresh
+    // configuration. Ordinary tabs can reuse this bookkeeping object; their
+    // separate website data stores continue to own cookies and local storage.
+    private static let tabProcessPool = WKProcessPool()
+
+    init(frame frameRect: NSRect, configuration external: WKWebViewConfiguration?, profile: Profile = .defaultProfile,
+         reuseProcessPool: Bool = false) {
         profileId = profile.id
         let configuration = external ?? {
             let c = WKWebViewConfiguration()
@@ -209,6 +215,7 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
             c.websiteDataStore = profile.dataStore
             return c
         }()
+        if external == nil || reuseProcessPool { configuration.processPool = Self.tabProcessPool }
         // Media resume after a respawn needs programmatic play().
         configuration.mediaTypesRequiringUserActionForPlayback = []
         // WKWebView disables HTML element fullscreen by default; Safari

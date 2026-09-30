@@ -343,7 +343,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     ) -> EngineView {
         // Born at the mount size so a background tab lays out for the real
         // viewport instead of loading into a 0×0 window.
-        let view = EngineView(frame: container.pageArea.bounds, configuration: configuration, profile: profile)
+        let view = EngineView(frame: container.pageArea.bounds, configuration: configuration, profile: profile,
+                              reuseProcessPool: opener == nil)
         view.autoresizingMask = [.width, .height]
         wire(view)
         let anchor = activeTab.flatMap { active in tabs.firstIndex { $0 === active } }
