@@ -28,6 +28,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     private var band: BandScrimView!
     private var clusterHosting: NSHostingView<AnyView>?
     private var nativeToolbar: NativeModuleSlot?
+    private var lastToolbarSnapshot: Data?
     private let titleLabel = NSTextField(labelWithString: "")
     private let titleViewport = NSView()
     private var titleTextWidth: NSLayoutConstraint?
@@ -342,7 +343,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     ) -> EngineView {
         // Born at the mount size so a background tab lays out for the real
         // viewport instead of loading into a 0×0 window.
-        let view = EngineView(frame: container.pageArea.bounds, configuration: configuration, profile: profile)
+        let view = EngineView(frame: container.pageArea.bounds, configuration: configuration, profile: profile,
+                              reuseProcessPool: opener == nil)
         view.autoresizingMask = [.width, .height]
         wire(view)
         let anchor = activeTab.flatMap { active in tabs.firstIndex { $0 === active } }
@@ -366,9 +368,24 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         return view
     }
 
+    private let recordsActivationTimings = ProcessInfo.processInfo.environment["BOWSER_PERF"] == "1"
+    @objc private(set) var lastActivationTimings: NSDictionary?
+    private(set) var pendingTabPreviewCapture: DispatchWorkItem?
+
     /// Focus a visible pane, or mount a tab and leave the current arrangement.
     func activate(_ view: EngineView, focusPage: Bool = true) {
+        lastActivationTimings = nil
+        var phases: [String: Double] = [:]
+        var phaseStart = recordsActivationTimings ? ProcessInfo.processInfo.systemUptime : 0
+        func mark(_ name: String) {
+            guard recordsActivationTimings else { return }
+            let now = ProcessInfo.processInfo.systemUptime
+            phases[name] = (now - phaseStart) * 1000
+            phaseStart = now
+        }
+        defer { if recordsActivationTimings { lastActivationTimings = phases as NSDictionary } }
         guard tabs.contains(where: { $0 === view }) else { return }
+        mark("lookup_ms")
         if BrainBridge.shared.resources.shouldCoordinate, activeTab != nil {
             _ = BrainBridge.shared.resources.request(["action":"activate", "tab":view.webviewId, "focus_page":focusPage]); return
         }
@@ -379,30 +396,42 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         if activeTab !== view {
             if websiteLayout == nil {
                 activeTab?.removeFromSuperview()
+                mark("detach_ms")
                 view.frame = container.pageArea.bounds
                 container.pageArea.addSubview(view)
+                mark("mount_ms")
             }
             activeTab = view
             container.webview = view.webviewId
             // The old first responder just left the hierarchy — hand the
             // keyboard to the page that's actually on screen.
             if focusPage { window?.makeFirstResponder(view.webView) }
+            mark("responder_ms")
             adoptChrome(from: view)
+            mark("chrome_ms")
             syncModButtons()
+            mark("toolbar_ms")
             // Show the dock's reaction: collapsed edge surfaces slide out
             // for a beat so the active-icon bounce is visible.
             SurfaceManager.shared.pulseEdges()
+            mark("surface_ms")
             // Refresh the resurrect frame soon after the switch paints, so
             // a death right after a tab change resurrects the right tab.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self, weak view] in
-                guard let self, let view, view === self.activeTab,
+            pendingTabPreviewCapture?.cancel()
+            let capture = DispatchWorkItem { [weak self, weak view] in
+                guard let self else { return }
+                self.pendingTabPreviewCapture = nil
+                guard let view, view === self.activeTab,
                       self.resurrectOverlay == nil else { return }
                 view.capturePreview()
             }
+            pendingTabPreviewCapture = capture
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: capture)
         }
         BrainBridge.shared.send([
             "op": "event", "event": "tab_activated", "webview": view.webviewId,
         ])
+        mark("notify_ms")
     }
 
     /// Commands act only on this window; no tab moves between profiles/windows.
@@ -822,7 +851,6 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
                 notch.superview?.layoutSubtreeIfNeeded()
             }
         }
-        clusterHosting?.rootView = AnyView(clusterView())
         let theme = ChromeSurface.theme(for: profile.id)
         let tint = profile.color?.usingColorSpace(.sRGB)
         let payload: [String: Any] = [
@@ -835,7 +863,13 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
             "capturing": tabs.contains { $0.webView.cameraCaptureState != .none || $0.webView.microphoneCaptureState != .none },
             "buttons": ChromeSurface.buttons(for: profile.id).prefix(128).map { ["id": $0.id, "title": $0.title, "symbol": $0.symbol as Any? ?? NSNull()] }
         ]
-        if let data = try? JSONSerialization.data(withJSONObject: payload) { nativeToolbar?.setSnapshot(data) }
+        // Tab changes often leave all toolbar controls unchanged. Canonical
+        // encoding makes that a no-op for both the fallback and live renderer.
+        guard let data = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]),
+              data != lastToolbarSnapshot else { return }
+        lastToolbarSnapshot = data
+        clusterHosting?.rootView = AnyView(clusterView())
+        nativeToolbar?.setSnapshot(data)
     }
 
     private func nativeToolbarAction(_ event: String) {
@@ -902,6 +936,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     }
 
     func windowWillClose(_ notification: Notification) {
+        pendingTabPreviewCapture?.cancel()
+        pendingTabPreviewCapture = nil
         toolbarIntentObserver?.stop()
         profileIntentObserver?.stop()
         nativeToolbar?.retire()

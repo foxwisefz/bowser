@@ -255,6 +255,37 @@ final class TrackingPreventionTests: XCTestCase {
 }
 
 final class PopupConfigurationTests: XCTestCase {
+    @MainActor func testOrdinaryTabsReusePoolButKeepStoresAndScriptsSeparate() async throws {
+        let controller = BrowserWindowController(profile: .defaultProfile)
+        defer { controller.window?.close() }
+        let a = WKWebViewConfiguration(), b = WKWebViewConfiguration()
+        a.websiteDataStore = .nonPersistent(); b.websiteDataStore = .nonPersistent()
+        a.defaultWebpagePreferences.allowsContentJavaScript = false
+        let first = controller.openTab(configuration: a, activate: false)
+        let second = controller.openTab(configuration: b, activate: false)
+        XCTAssertTrue(first.webView.configuration.processPool === second.webView.configuration.processPool)
+        XCTAssertTrue(first.webView.configuration.websiteDataStore === a.websiteDataStore)
+        XCTAssertTrue(second.webView.configuration.websiteDataStore === b.websiteDataStore)
+        XCTAssertFalse(first.webView.configuration.userContentController === second.webView.configuration.userContentController)
+        XCTAssertFalse(first.webView.configuration.defaultWebpagePreferences.allowsContentJavaScript)
+        let cookie = try XCTUnwrap(HTTPCookie(properties: [.domain: "isolation.test", .path: "/", .name: "session", .value: "one"]))
+        await a.websiteDataStore.httpCookieStore.setCookie(cookie)
+        let otherCookies = await b.websiteDataStore.httpCookieStore.allCookies()
+        XCTAssertTrue(otherCookies.isEmpty)
+    }
+
+    @MainActor func testPopupPreservesSuppliedPoolAndStore() {
+        let controller = BrowserWindowController(profile: .defaultProfile)
+        defer { controller.window?.close() }
+        let config = WKWebViewConfiguration()
+        config.websiteDataStore = .nonPersistent()
+        let pool = WKProcessPool()
+        config.processPool = pool
+        let popup = controller.openTab(configuration: config, opener: controller.activeTab?.webviewId)
+        XCTAssertTrue(popup.webView.configuration.processPool === pool)
+        XCTAssertTrue(popup.webView.configuration.websiteDataStore === config.websiteDataStore)
+    }
+
     // The link-click crash (bowser-browser-pi1): createWebViewWith hands us
     // the OPENER's configuration — its user content controller already has
     // our message handlers, and a duplicate add() throws an uncaught

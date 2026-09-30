@@ -3,7 +3,10 @@
 Bowser can replace two signed rendering modules while keeping its native host
 and WebKit views alive:
 
-- **CommandToolbar** renders the command/navigation cluster beside the traffic lights.
+- **CommandToolbar** renders the command/navigation cluster beside the traffic lights
+  with fixed-height AppKit controls. Replacement does not construct a SwiftUI
+  hosting graph; the synchronous adoption timer includes native control creation
+  and layout.
 - **SurfaceRenderer** renders Deck Tabs, mod sidebars/toolbars, floating surfaces,
   and settings view trees, plus tab drag gestures and their presentation. The built-in fallback uses the same rendering source.
 

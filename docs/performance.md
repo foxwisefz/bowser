@@ -35,6 +35,21 @@ The `_first_content_ms` metrics use Bowser’s reveal signal, which falls back t
 load completion for empty pages or unavailable WebKit rendering callbacks; they
 are not compositor presentation timestamps.
 
+With `BOWSER_PERF=1`, reports also include per-switch detach, mount, responder,
+chrome, toolbar, and layout durations, plus navigation callback timestamps from
+the native load/resume request. These distinguish synchronous activation work
+from WebKit startup and the delay before Bowser observes content. Callback
+timestamps and the page's Navigation Timing entries have different origins;
+do not subtract one clock's values from the other. Diagnostic serialization
+runs outside the measured workload. Base revisions without these optional host
+fields report `null` diagnostics while retaining the same measured workloads.
+
+Full browser startup also saves `browser-<tab-count>-<sample>-probes.json`,
+including failed probes, elapsed time, reply latency, and restored tab count.
+Use these with the shell and backend logs to distinguish backend startup from
+tab restoration and slow readiness replies. Probe files are saved after timing
+ends, including when startup fails.
+
 Fresh-process startup does not purge the OS disk cache. Cached-tab coverage uses
 a unique persistent WebKit store shared by fresh views within the test process;
 it does not restart the browser between cache priming and activation.
@@ -53,7 +68,7 @@ unchanged 750 ms uncached-navigation and 16.67 ms repeat-adoption caps. First-us
 measurements are required single samples, not discarded warmups; their reported
 p50 and p95 both equal that observation. This separation does not make a 50 ms
 main-thread adoption frame-smooth. All 31 toolbar upgrades also retain the
-750 ms total-upgrade gate. Baseline schema/cache version 3 isolates these workloads from earlier sample counts.
+750 ms total-upgrade gate. Report schema version 3 identifies these workloads and sample counts.
 For 30 repeat adoptions, nearest-rank p95 is the second-slowest observation.
 The maximum is also reported for every metric; no samples are discarded.
 
@@ -62,12 +77,24 @@ invalid values, failed behavioral assertions, and exceeded limits all fail.
 Tests are opt-in (`BOWSER_PERF=1`) and run serially in the release configuration.
 
 The Browser performance workflow runs on pull requests, main pushes, and manual
-requests on `macos-26`. It restores a passing baseline saved only by main and
-compares matching macOS, CPU, architecture, Swift toolchain and report schema.
-A regression fails if p95 exceeds both 125% of the baseline and baseline plus the
-metric's noise allowance. Absolute budgets always apply. A missing/incompatible
-baseline is explicitly reported and the first passing main run establishes one.
-Change the cache version when intentionally changing the workload definition.
+requests on `macos-26`. It builds the candidate and a pinned base revision,
+then measures both serially in the same job, using identical benchmark fixtures.
+Pull requests use their base SHA, main pushes use the previous main SHA, and
+manual runs use the selected commit's first parent. A missing base commit fails
+explicitly. No timing baseline is restored from another runner's cache.
+
+The candidate's performance harness is copied into the disposable CI base source
+checkout; production code and build tools remain at the base revision. Reports
+record both source SHAs, the harness revision, and the shared run/attempt/job ID.
+Incompatible fixtures or failed/incomplete reference measurements fail the job;
+they never silently disable relative comparisons. A complete reference may
+exceed an absolute budget: its measurements remain usable, but the candidate
+must still pass every absolute cap. Both reports and diagnostics are uploaded.
+
+A regression fails if p95 exceeds both 125% of the base measurement and that
+measurement plus the metric's noise allowance. Absolute budgets always apply.
+Same-runner measurement reduces differences between machines; sequential runs
+can still experience different load, so raw samples remain essential evidence.
 
 The desktop release workflow also enforces absolute budgets against its freshly
 built stage before publication. CI uploads raw samples, p50/p95 summaries,
@@ -75,7 +102,16 @@ XCTest results, environment details, and build/runtime logs, including failures.
 Navigation diagnostics are retained before the disposable home is removed.
 Budget failures print samples in collection order so a slow first load remains
 visible rather than disappearing into an aggregate.
-`--baseline PATH/report.json` enables the same comparison locally. The output
+Toolbar adoption also reports opt-in phase durations for creation, mounting,
+snapshot update, retirement, activation, layout, and responder restoration.
+Sample 0 is first use; samples 1–30 correspond to the repeat-adoption samples.
+These diagnostic timings leave the overall timed boundary and budget intact.
+Reports are printed after the measurements, not inside timed blocks. Older base
+revisions without the diagnostic accessor still run the same workload.
+`--reference` collects a reference locally (threshold violations are reported,
+but incomplete measurements fail its exit status). `--baseline PATH/report.json`
+requires a complete compatible reference; missing reports fail. Set the same
+`BOWSER_PERF_SESSION` for paired local runs to enforce session matching. The output
 path must be new so previous samples cannot accidentally make a run pass.
 
 Validate the gate logic with:

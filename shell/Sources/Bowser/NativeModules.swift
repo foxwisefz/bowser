@@ -171,6 +171,11 @@ final class NativeModuleLibrary: @unchecked Sendable {
     var interactionInProgress: (() -> Bool)?
     private(set) var build: String?
     private var rejected = Set<String>()
+    // Opt-in benchmark diagnostics, read dynamically so the same benchmark can
+    // still measure base revisions that do not expose phase breakdowns.
+    var recordsAdoptionTimings = ProcessInfo.processInfo.environment["BOWSER_PERF"] == "1"
+    @objc private(set) var lastAdoptionTimings: NSDictionary?
+
     init(fallback: NSView, kind: NativeModuleKind = .commandToolbar) {
         self.kind = kind
         self.fallback = fallback
@@ -202,6 +207,15 @@ final class NativeModuleLibrary: @unchecked Sendable {
     @discardableResult func install(_ library: NativeModuleLibrary) -> Bool {
         guard library.kind == kind, canReplace, build != library.build, !rejected.contains(library.build) else { return false }
         rejected.insert(library.build)
+        lastAdoptionTimings = nil
+        var phases: [String: Double] = [:]
+        var phaseStart = recordsAdoptionTimings ? ProcessInfo.processInfo.systemUptime : 0
+        func mark(_ name: String) {
+            guard recordsAdoptionTimings else { return }
+            let now = ProcessInfo.processInfo.systemUptime
+            phases[name] = (now - phaseStart) * 1000
+            phaseStart = now
+        }
         let generation = runtime.newGeneration()
         let responder = window?.firstResponder as? NSView
         let retainedResponder = responder?.isDescendant(of: self) == true ? responder : nil
@@ -210,22 +224,32 @@ final class NativeModuleLibrary: @unchecked Sendable {
         let view = Unmanaged<NSView>.fromOpaque(pointer).takeUnretainedValue()
         guard view.superview == nil, view.window == nil,
               (ProcessInfo.processInfo.systemUptime - start) < 0.016 else { library.destroy(pointer); return false }
+        mark("create_ms")
         // No events interleave this main-actor transaction. The host owns all
         // state, so preparation and rollback cannot lose a browser action.
         mount(view)
-        view.layoutSubtreeIfNeeded()
+        // Toolbar snapshots do not depend on laid-out geometry. Commit the
+        // replacement hierarchy before its one synchronous layout pass.
+        if kind != .commandToolbar { view.layoutSubtreeIfNeeded() }
+        mark("mount_ms")
         let healthy = snapshot.withUnsafeBytes { library.update(pointer, $0.bindMemory(to: UInt8.self).baseAddress!, Int32(snapshot.count)) } == 1
         guard healthy else { library.destroy(pointer); return false }
+        mark("update_ms")
         retire(); fallback.removeFromSuperview()
+        mark("retire_ms")
         instance = (library, pointer, generation); build = library.build
         rejected.remove(library.build)
         runtime.authorize(generation, slot: self)
         (view as? BrowserScreenActivating)?.activateScreen()
         onGenerationChange?(generation)
+        mark("activate_ms")
         view.layoutSubtreeIfNeeded()
+        mark("layout_ms")
         if let retainedResponder, retainedResponder.isDescendant(of: self) {
             window?.makeFirstResponder(retainedResponder)
         }
+        mark("responder_ms")
+        if recordsAdoptionTimings { lastAdoptionTimings = phases as NSDictionary }
         return true
     }
     func retire() {

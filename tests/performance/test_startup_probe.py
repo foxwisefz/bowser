@@ -45,10 +45,16 @@ class StartupProbeTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_slow_probe_retries_without_resetting_elapsed_time(self):
         start = time.monotonic()
+        probes = []
         await wait_for_tabs(self.endpoint, 100, start + 1, lambda: False,
-                            probe_timeout=.03, poll_interval=.001)
+                            probe_timeout=.03, poll_interval=.001,
+                            observe=lambda *probe: probes.append(probe))
         self.assertGreaterEqual(self.attempts, 2)
         self.assertGreaterEqual(time.monotonic() - start, .03)
+        self.assertEqual(probes[0][3], 'TimeoutError')
+        self.assertIsNone(probes[0][2])
+        self.assertEqual(probes[-1][2:], (100, None))
+        self.assertTrue(all(start <= begin <= end for begin, end, _, _ in probes))
 
     async def test_hung_agent_still_hits_overall_deadline(self):
         self.mode = 'hang'

@@ -17,6 +17,7 @@ import time
 import traceback
 import uuid
 from report import evaluate
+from baseline import reference_metrics
 from startup_probe import wait_for_tabs
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -96,11 +97,16 @@ async def browser_startup(stage, work, output, record):
             with (output / f'browser-{count}-{index}.log').open('ab') as log:
                 start = time.monotonic()
                 process = subprocess.Popen([str(bundle / 'Contents/MacOS/Bowser')], env={**ENV, 'BOWSER_HOME': str(home)}, stdout=log, stderr=log)
+                probes = []
+                def observe(begin, end, actual, error):
+                    probes.append(dict(start_ms=(begin-start)*1000, end_ms=(end-start)*1000,
+                                       duration_ms=(end-begin)*1000, tabs=actual, error=error))
                 try:
                     await wait_for_tabs(home / 'agent.sock', count, start + 20,
-                                        lambda: process.poll() is not None)
+                                        lambda: process.poll() is not None, observe=observe)
                     record(f'startup_browser_{count}_tabs_ms', (time.monotonic()-start)*1000)
                 finally:
+                    (output / f'browser-{count}-{index}-probes.json').write_text(json.dumps(probes, indent=2))
                     stop(process)
                     endpoint = home / 'backend/host.sock'
                     if endpoint.exists():
@@ -170,13 +176,22 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--stage', type=Path, help='Existing bin/install --stage-only output')
     parser.add_argument('--output', type=Path, required=True, help='New artifact directory')
-    parser.add_argument('--baseline', type=Path, help='Previous trusted report.json')
+    parser.add_argument('--baseline', type=Path, help='Complete reference report.json (missing/incompatible reports fail)')
+    parser.add_argument('--reference', action='store_true', help='Measure a base revision; budget violations are reported but only measurement failures affect exit status')
     args = parser.parse_args()
+    if args.reference and args.baseline:
+        parser.error('--reference and --baseline are mutually exclusive')
     output = args.output.resolve(); output.mkdir(parents=True, exist_ok=False)
     raw = output / 'samples.jsonl'; raw.touch()
     def record(metric, value):
         with raw.open('a') as file: file.write(json.dumps(dict(metric=metric, value=value)) + '\n')
-    metadata = dict(schema=3, os=platform.mac_ver()[0], arch=platform.machine(), cpu=subprocess.check_output(['sysctl', '-n', 'machdep.cpu.brand_string'], text=True).strip(), swift=subprocess.check_output(['swift', '--version'], text=True).strip(), source=os.environ.get('GITHUB_SHA', 'local'), timestamp=time.time())
+    metadata = dict(
+        schema=3, os=platform.mac_ver()[0], arch=platform.machine(),
+        cpu=subprocess.check_output(['sysctl', '-n', 'machdep.cpu.brand_string'], text=True).strip(),
+        swift=subprocess.check_output(['swift', '--version'], text=True).strip(),
+        source=os.environ.get('BOWSER_PERF_SOURCE', os.environ.get('GITHUB_SHA', 'local')),
+        harness=os.environ.get('BOWSER_PERF_HARNESS'),
+        comparison_session=os.environ.get('BOWSER_PERF_SESSION'), timestamp=time.time())
     failures = []
     os.environ.update({key: ENV[key] for key in ('BOWSER_TELEMETRY_DISABLED', 'BOWSER_API_ENDPOINT', 'BOWSER_NO_SPAWN')})
     try:
@@ -202,35 +217,53 @@ def main():
                     shutil.copytree(home / 'diagnostics', output / 'navigation-diagnostics')
     except Exception:
         failures.append(traceback.format_exc())
+    measurement_failures = failures.copy()
     baseline = None
-    baseline_note = 'Absolute budgets only; no baseline supplied.'
+    baseline_note = 'Reference measurement; absolute violations reported only.' if args.reference else 'Absolute budgets only; no baseline supplied.'
     metrics = {}
     try:
-        if args.baseline and args.baseline.exists():
-            previous = json.loads(args.baseline.read_text())
-            if all(previous['environment'].get(key) == metadata[key] for key in ('schema', 'os', 'arch', 'cpu', 'swift')) and not previous.get('failures'):
-                baseline = previous['metrics']; baseline_note = 'Compared with compatible trusted baseline.'
-            else: baseline_note = 'Baseline environment differs or failed; absolute budgets enforced.'
         budgets = json.loads((Path(__file__).with_name('budgets.json')).read_text())
         rows = [json.loads(line) for line in raw.read_text().splitlines()]
+        # Validate sample completeness separately from performance thresholds.
+        _, incomplete = evaluate(rows, {name: {**budget, 'max_p95': float('inf')}
+                                        for name, budget in budgets.items()})
+        measurement_failures += incomplete
+        if args.baseline:
+            try:
+                previous = json.loads(args.baseline.read_text())
+                baseline = reference_metrics(previous, metadata, budgets)
+                baseline_note = f"Compared with reference {previous['environment']['source']} measured in session {metadata.get('comparison_session') or 'local'}."
+            except Exception as error:
+                baseline_note = f'Baseline comparison unavailable: {error}. Absolute budgets still enforced.'
+                failures.append(baseline_note)
         metrics, gate_failures = evaluate(rows, budgets, baseline)
         failures += gate_failures
     except Exception:
-        failures.append(traceback.format_exc())
-    report = dict(environment=metadata, metrics=metrics, failures=failures, baseline=baseline_note)
+        error = traceback.format_exc()
+        measurement_failures.append(error)
+        failures.append(error)
+    report = dict(environment=metadata, metrics=metrics, failures=failures,
+                  measurement_failures=measurement_failures, baseline=baseline_note)
     (output / 'report.json').write_text(json.dumps(report, indent=2) + '\n')
-    lines = ['# Browser performance', '', baseline_note, '', '| Metric | Samples | p50 | p95 | Max | Limit |', '|---|---:|---:|---:|---:|---:|']
+    heading = '# Browser performance reference' if args.reference else '# Browser performance'
+    lines = [heading, '', f"Source: {metadata['source']}", '', baseline_note, '', '| Metric | Samples | p50 | p95 | Max | Limit |', '|---|---:|---:|---:|---:|---:|']
     for name, value in metrics.items():
         lines.append(f'| {name} | {value["samples"]} | {value["p50"]:.2f} | {value["p95"]:.2f} | {value["max"]:.2f} | {value["limit"]:.2f} |')
-    lines += ['', 'PASS' if not failures else 'FAIL', *failures]
+    status = 'PASS' if not failures else 'FAIL'
+    if args.reference:
+        status = 'REFERENCE INCOMPLETE' if measurement_failures else 'REFERENCE COMPLETE (candidate gates remain mandatory)'
+    lines += ['', status, *failures]
     swift_log = output / 'swift.log'
     if swift_log.exists():
         lines += ['', *[line for line in swift_log.read_text(errors='replace').splitlines()
-                        if line.startswith('Cold navigation sample ')]]
+                        if line.startswith(('Cold navigation sample ', 'Toolbar adoption phases: '))]]
+    phases = output / 'samples.phases.jsonl'
+    if phases.exists():
+        lines += ['', 'Activation and navigation phases:', '```jsonl', phases.read_text().rstrip(), '```']
     summary = '\n'.join(lines) + '\n'; (output / 'summary.md').write_text(summary)
     print(summary)
     if os.environ.get('GITHUB_STEP_SUMMARY'):
         with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as file: file.write(summary)
-    return bool(failures)
+    return bool(measurement_failures if args.reference else failures)
 
 if __name__ == '__main__': sys.exit(main())

@@ -29,6 +29,26 @@ import XCTest
     }
 
     private var samples: Int { 5 }
+    // Read optional host diagnostics dynamically so this identical harness also
+    // compiles against the pinned base revision before these fields existed.
+    private func diagnostic(_ object: NSObject, key: String) -> Any {
+        object.responds(to: NSSelectorFromString(key)) ? object.value(forKey: key) ?? NSNull() : NSNull()
+    }
+    private func trace(_ label: String, _ values: [String: Any]) throws {
+        let data = try JSONSerialization.data(withJSONObject: values, options: [.sortedKeys])
+        print("\(label): \(String(decoding: data, as: UTF8.self))")
+        // XCTest writes to stderr concurrently; preserve complete records in
+        // their own artifact rather than parsing potentially interleaved logs.
+        let results = try XCTUnwrap(ProcessInfo.processInfo.environment["BOWSER_PERF_RESULTS"])
+        let url = URL(fileURLWithPath: results).deletingPathExtension().appendingPathExtension("phases.jsonl")
+        var line = try JSONSerialization.data(withJSONObject: ["label": label, "values": values], options: [.sortedKeys])
+        line.append(0x0a)
+        if !FileManager.default.fileExists(atPath: url.path) { FileManager.default.createFile(atPath: url.path, contents: nil) }
+        let file = try FileHandle(forWritingTo: url)
+        defer { try? file.close() }
+        try file.seekToEnd(); try file.write(contentsOf: line)
+    }
+
     private func configuration(_ store: WKWebsiteDataStore = .nonPersistent()) -> WKWebViewConfiguration {
         let config = WKWebViewConfiguration(); config.websiteDataStore = store; return config
     }
@@ -116,6 +136,8 @@ import XCTest
             try await wait { view.hasRenderedContent }
             let firstContent = (ProcessInfo.processInfo.systemUptime - navigationStart) * 1000
             try record(index == 0 ? "fresh_profile_first_content_ms" : "cold_navigation_first_content_ms", firstContent)
+            try trace("Navigation phases", ["sample": index, "first_content_ms": firstContent,
+                "webview": view.webviewId, "phases_ms": diagnostic(view, key: "navigationTimings")])
             try await wait { !view.webView.isLoading }
             // Collect only after the timed workload; never warm up or drop the
             // first fresh-store navigation to make its budget pass.
@@ -163,12 +185,19 @@ import XCTest
         }
         for index in 0..<30 {
             let target = tabs[index % tabs.count]
+            var activationEnd = 0.0
+            var layoutEnd = 0.0
             try await timed("loaded_tab_switch_ms") {
                 controller.activate(target)
+                activationEnd = ProcessInfo.processInfo.systemUptime
                 controller.window?.contentView?.layoutSubtreeIfNeeded()
+                layoutEnd = ProcessInfo.processInfo.systemUptime
                 XCTAssertTrue(controller.activeTab === target)
                 XCTAssertTrue(target.hasRenderedContent)
             }
+            try trace("Tab activation phases", ["sample": index, "webview": target.webviewId,
+                "layout_ms": (layoutEnd - activationEnd) * 1000,
+                "phases_ms": diagnostic(controller, key: "lastActivationTimings")])
         }
         for target in tabs.prefix(samples) {
             controller.activate(tabs.last!)
@@ -182,6 +211,9 @@ import XCTest
             }
             try await wait { target.hasRenderedContent }
             try record("sleeping_tab_first_content_ms", (ProcessInfo.processInfo.systemUptime - start) * 1000)
+            try trace("Sleeping tab phases", ["webview": target.webviewId,
+                "activation_ms": diagnostic(controller, key: "lastActivationTimings"),
+                "navigation_ms": diagnostic(target, key: "navigationTimings")])
         }
     }
 
@@ -236,6 +268,16 @@ import XCTest
         defer { slot.retire(); window.close() }
         // Live upgrade starts with the existing toolbar already mounted.
         XCTAssertTrue(slot.install(try NativeModuleLibrary(bundle: URL(fileURLWithPath: paths[0]), team: nil, bundled: true)))
+        var phaseReports: [[String: Any]] = []
+        // Emit after all timing boundaries, including on assertion failure.
+        defer {
+            for report in phaseReports {
+                if let data = try? JSONSerialization.data(withJSONObject: report, options: [.sortedKeys]),
+                   let text = String(data: data, encoding: .utf8) {
+                    print("Toolbar adoption phases: " + text)
+                }
+            }
+        }
         // One first-generation adoption plus 30 repeat adoptions.
         for index in 0...30 {
             try await timed("native_toolbar_upgrade_ms") {
@@ -244,6 +286,12 @@ import XCTest
                     XCTAssertTrue(slot.install(library))
                     XCTAssertEqual(slot.build, library.build)
                 }
+            }
+            // Older base revisions may lack diagnostics. Objective-C discovery
+            // preserves identical timed workloads without requiring their API.
+            if slot.responds(to: NSSelectorFromString("lastAdoptionTimings")),
+               let phases = slot.value(forKey: "lastAdoptionTimings") as? [String: Double] {
+                phaseReports.append(["sample": index, "first_use": index == 0, "phases_ms": phases])
             }
         }
     }
