@@ -66,9 +66,21 @@ jobs:
           BOWSER_PERF_SOURCE: ${{ steps.base.outputs.sha }}
         run: python3 tests/performance/run.py --reference --stage "$(cat "$RUNNER_TEMP/performance-base-stage")" --output "$RUNNER_TEMP/performance-base"
       - name: Compare candidate and enforce absolute budgets
+        id: candidate
+        continue-on-error: true
         env:
           BOWSER_PERF_SOURCE: ${{ github.sha }}
         run: bin/check-performance --stage "$(cat "$BOWSER_STAGE_FILE")" --output "$RUNNER_TEMP/performance" --baseline "$RUNNER_TEMP/performance-base/report.json"
+      - name: Confirm relative regression with reversed measurement order
+        if: steps.candidate.outcome == 'failure' && steps.reference.outcome == 'success'
+        env:
+          BOWSER_PERF_BASE_SHA: ${{ steps.base.outputs.sha }}
+        run: python3 tests/performance/confirm.py --primary "$RUNNER_TEMP/performance/report.json" --candidate-stage "$(cat "$BOWSER_STAGE_FILE")" --base-stage "$(cat "$RUNNER_TEMP/performance-base-stage")" --base-source "$BOWSER_PERF_BASE_SHA" --output-root "$RUNNER_TEMP"
+      - name: Require successful candidate measurement
+        if: steps.candidate.outcome == 'failure' && steps.reference.outcome != 'success'
+        run: |
+          echo 'Candidate comparison failed without a complete reference.' >&2
+          exit 1
       - name: Require successful reference collection
         if: always() && steps.reference.outcome == 'failure'
         run: |
@@ -86,5 +98,8 @@ jobs:
           path: |
             ${{ runner.temp }}/performance/
             ${{ runner.temp }}/performance-base/
+            ${{ runner.temp }}/performance-confirm/
+            ${{ runner.temp }}/performance-base-confirm/
+            ${{ runner.temp }}/performance-confirm-summary.md
             ${{ runner.temp }}/safari-comparison/
           retention-days: 14
