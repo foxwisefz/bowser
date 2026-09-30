@@ -186,7 +186,7 @@ def main():
     def record(metric, value):
         with raw.open('a') as file: file.write(json.dumps(dict(metric=metric, value=value)) + '\n')
     metadata = dict(
-        schema=3, os=platform.mac_ver()[0], arch=platform.machine(),
+        schema=3, source_root=str(ROOT), os=platform.mac_ver()[0], arch=platform.machine(),
         cpu=subprocess.check_output(['sysctl', '-n', 'machdep.cpu.brand_string'], text=True).strip(),
         swift=subprocess.check_output(['swift', '--version'], text=True).strip(),
         source=os.environ.get('BOWSER_PERF_SOURCE', os.environ.get('GITHUB_SHA', 'local')),
