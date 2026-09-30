@@ -55,6 +55,11 @@ with a second pair on the same runner, measuring candidate before base. The
 same relative limit must fail in both pairs to block the change. Absolute
 budget violations, incomplete measurements, and incompatible references fail
 without confirmation. Both pairs and their phase traces are uploaded.
+The confirmation reference runs from the pinned base checkout, including its
+Swift tests and native toolbar build, with the candidate harness copied in.
+Passing a base app stage alone is insufficient: source-built workloads use the
+runner script’s checkout. Confirmation verifies each checkout SHA before running,
+and report metadata records `source_root` for auditing.
 
 Fresh-process startup does not purge the OS disk cache. Cached-tab coverage uses
 a unique persistent WebKit store shared by fresh views within the test process;

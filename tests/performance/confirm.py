@@ -41,15 +41,19 @@ def confirmed_regressions(initial, metrics):
     return initial & {name for name, result in metrics.items() if result['p95'] > result['limit']}
 
 
-def run(source, stage, output, *, reference=False, base=None):
+def run(source, stage, output, *, root=ROOT, reference=False, base=None):
+    root = root.resolve()
+    actual = subprocess.check_output(['git', '-C', str(root), 'rev-parse', 'HEAD'], text=True).strip()
+    if actual != source:
+        raise ValueError(f'Benchmark checkout {root} is {actual}, expected {source}')
     environment = {**os.environ, 'BOWSER_PERF_SOURCE': source}
-    command = [sys.executable, str(ROOT / 'tests/performance/run.py'),
+    command = [sys.executable, str(root / 'tests/performance/run.py'),
                '--stage', str(stage), '--output', str(output)]
     if reference:
         command.append('--reference')
     if base:
         command += ['--baseline', str(base)]
-    return subprocess.run(command, cwd=ROOT, env=environment).returncode
+    return subprocess.run(command, cwd=root, env=environment).returncode
 
 
 def main():
@@ -58,6 +62,8 @@ def main():
     parser.add_argument('--candidate-stage', type=Path, required=True)
     parser.add_argument('--base-stage', type=Path, required=True)
     parser.add_argument('--base-source', required=True)
+    parser.add_argument('--base-root', required=True, type=Path,
+                        help='Checkout of the pinned base, with the candidate harness copied into it')
     parser.add_argument('--output-root', type=Path, required=True)
     args = parser.parse_args()
     primary = read(args.primary)
@@ -77,7 +83,8 @@ def main():
     if candidate_status:
         print('Confirmation candidate missed an absolute budget or measurement.', file=sys.stderr)
         return 1
-    base_status = run(args.base_source, args.base_stage, base_output, reference=True)
+    base_status = run(args.base_source, args.base_stage, base_output,
+                      root=args.base_root, reference=True)
     if base_status:
         print('Confirmation reference measurements were incomplete.', file=sys.stderr)
         return 1
