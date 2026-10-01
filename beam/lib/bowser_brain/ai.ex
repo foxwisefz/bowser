@@ -1,7 +1,6 @@
 defmodule BowserBrain.AI do
   @moduledoc "Direct HTTP providers and the account-authenticated Bowser AI service."
   alias BowserBrain.{Settings, Paths}
-  require Logger
 
   def route(settings \\ Settings.all()) do
     provider =
@@ -56,7 +55,6 @@ defmodule BowserBrain.AI do
   end
 
   def request(url, key, payload, headers \\ []) do
-    request_bytes = byte_size(JSON.encode!(payload))
     transport = Application.get_env(:bowser_brain, :ai_transport, &http/4)
     uri = URI.parse(url)
 
@@ -69,10 +67,6 @@ defmodule BowserBrain.AI do
 
       (uri.scheme != "https" and not local_test) or uri.userinfo != nil ->
         {:error, :invalid_endpoint}
-
-      request_bytes > 262_144 ->
-        Logger.warning("modsmith event=request_oversized request_bytes=#{request_bytes}")
-        {:error, :request_too_large}
 
       true ->
         transport.(url, key, payload, headers)

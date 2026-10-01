@@ -34,15 +34,14 @@ defmodule BowserBrain.DirectAgentTest do
     :ok
   end
 
-  test "requests are sent unchanged and oversized requests fail without automatic trimming" do
-    payload = %{"input" => [%{"role" => "user", "content" => "Keep improving this mod"}], "instructions" => "contract", "tools" => []}
+  test "requests above 256 KiB reach the provider unchanged without automatic trimming" do
+    payload = %{"input" => [%{"role" => "user", "content" => String.duplicate("Keep improving this mod", 20_000)}], "instructions" => "contract", "tools" => []}
     Application.put_env(:bowser_brain, :ai_transport, fn _, _, body, _ ->
       assert body == payload
       {:ok, %{"output" => []}}
     end)
     assert {:ok, _} = AI.request("https://api.bowser.app/v1/ai/responses", "fixture", payload)
-    oversized = put_in(payload["input"], [%{"role" => "user", "content" => String.duplicate("x", 262_144)}])
-    assert {:error, :request_too_large} = AI.request("https://api.bowser.app/v1/ai/responses", "fixture", oversized)
+    assert byte_size(JSON.encode!(payload)) > 262_144
   end
 
   test "provider context overflow and body size failures have specific errors" do
@@ -57,7 +56,7 @@ defmodule BowserBrain.DirectAgentTest do
   end
 
   test "screenshots stay multimodal instead of hitting the JSON tool-size limit" do
-    image = Base.encode64(:binary.copy("pixels", 20_000))
+    image = Base.encode64(:binary.copy("pixels", 200_000))
     [receipt, message] = DirectAgent.tool_output("capture-1", %{ok: true, image: image, mimeType: "image/png", width: 320})
     assert JSON.decode!(receipt["output"])["width"] == 320
     refute receipt["output"] =~ image
