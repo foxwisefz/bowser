@@ -147,14 +147,9 @@ defmodule BowserBrain.Settings do
     {:noreply, state}
   end
 
-  def handle_info({:browser_event, %{"event" => "surface", "surface" => "settings", "id" => id} = event}, state)
-      when id in ["dock_auto_hide", "dock_always_show", "dock_reduce_motion"] do
-    case id do
-      "dock_auto_hide" -> put("dock_visibility", "auto_hide")
-      "dock_always_show" -> put("dock_visibility", "always_show")
-      "dock_reduce_motion" ->
-        if is_boolean(event["value"]), do: put("dock_reduce_motion", event["value"])
-    end
+  def handle_info({:browser_event, %{"event" => "surface", "surface" => "settings", "id" => id}}, state)
+      when id in ["dock_auto_hide", "dock_always_show", "dock_quiet_auto_hide"] do
+    put("dock_behavior", String.replace_prefix(id, "dock_", ""))
     Registry.dispatch(BowserBrain.Events, :browser_event, fn entries ->
       for {pid, _} <- entries, do: send(pid, {:browser_event, %{"event" => "dock_settings_changed"}})
     end)
@@ -163,8 +158,20 @@ defmodule BowserBrain.Settings do
   end
 
   def dock_preferences(stored \\ all()) do
-    %{always_show: stored["dock_visibility"] == "always_show",
-      reduce_motion: stored["dock_reduce_motion"] == true}
+    mode = dock_behavior(stored)
+    %{always_show: mode == "always_show", reduce_motion: mode == "quiet_auto_hide"}
+  end
+
+  def dock_behavior(stored) do
+    case stored["dock_behavior"] do
+      mode when mode in ["auto_hide", "always_show", "quiet_auto_hide"] -> mode
+      _ ->
+        cond do
+          stored["dock_visibility"] == "always_show" -> "always_show"
+          stored["dock_reduce_motion"] == true -> "quiet_auto_hide"
+          true -> "auto_hide"
+        end
+    end
   end
 
   # Inline edits from declared mod settings.
@@ -212,16 +219,19 @@ defmodule BowserBrain.Settings do
         )
       end)
 
-    dock = dock_preferences(stored)
+    mode = dock_behavior(stored)
     vstack([
-      section("DockTabs"),
+      section("DockTabs behavior"),
       hstack([
-        button("Auto-hide", event: "dock_auto_hide", active: not dock.always_show),
-        button("Always show", event: "dock_always_show", active: dock.always_show)
+        button("Auto-hide", event: "dock_auto_hide", active: mode == "auto_hide"),
+        button("Always show", event: "dock_always_show", active: mode == "always_show"),
+        button("Quiet auto-hide", event: "dock_quiet_auto_hide", active: mode == "quiet_auto_hide")
       ]),
-      text("Auto-hide keeps tabs tucked away until you move the pointer to the left edge.", style: :caption),
-      toggle("dock_reduce_motion", label: "Reduce motion", on: dock.reduce_motion),
-      text("Keep DockTabs tucked away when switching or opening tabs. You can still reveal it at the left edge. Always show keeps it visible.", style: :caption)
+      text(case mode do
+        "always_show" -> "Keep DockTabs visible while browsing."
+        "quiet_auto_hide" -> "Show only when you move the pointer to the left edge. Stay hidden when opening or switching tabs, with no slide or bounce animations."
+        _ -> "Hide until you move the pointer to the left edge. Briefly show when opening or switching tabs."
+      end, style: :caption)
     ] ++ if(rows == [], do: [], else: [section("Mod settings") | rows]), spacing: 8)
   end
 

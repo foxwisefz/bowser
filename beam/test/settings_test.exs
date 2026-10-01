@@ -49,12 +49,18 @@ defmodule BowserBrain.SettingsTest do
     updated = BowserBrain.TabDeck.handle_event(%{"event" => "dock_settings_changed"}, deck)
     assert updated.last_items == deck.last_items
     assert updated.last_preferences.always_show
-    edit.("dock_reduce_motion", true)
-    assert Settings.dock_preferences() == %{always_show: true, reduce_motion: true}
-    edit.("dock_auto_hide", nil)
+    assert Settings.dock_preferences() == %{always_show: true, reduce_motion: false}
+    edit.("dock_quiet_auto_hide", nil)
     assert Settings.dock_preferences() == %{always_show: false, reduce_motion: true}
-    edit.("dock_reduce_motion", false)
+    edit.("dock_auto_hide", nil)
     assert Settings.dock_preferences() == %{always_show: false, reduce_motion: false}
+  end
+
+  test "saved DockTabs preferences map to one mode, and an explicit selection takes precedence" do
+    stored = %{"dock_visibility" => "auto_hide", "dock_reduce_motion" => true}
+    assert Settings.dock_behavior(stored) == "quiet_auto_hide"
+    assert Settings.dock_behavior(%{stored | "dock_visibility" => "always_show"}) == "always_show"
+    assert Settings.dock_behavior(Map.put(stored, "dock_behavior", "auto_hide")) == "auto_hide"
   end
 
   test "deleting an unset key works before the settings directory exists" do
