@@ -72,7 +72,8 @@ they are not required for this source-build workflow.
 
 A browser window appears. `⌘K` opens the command bar: type a URL, or a
 `:command`. Useful ones out of the box: `:settings`, `:panels`, `:do`.
-`⌘T` new tab, `⌘⇧[`/`⌘⇧]` cycle tabs, `⌘R` reload, `⌘0/+/-` zoom.
+`⌘T` new tab, `⌘⇧[`/`⌘⇧]` cycle tabs, `⌃Tab` last focused tab, `⌘R` reload, `⌘0/+/-` zoom.
+Clicking a neighboring or previously focused tab in DockTabs teaches its shortcut with a brief centered hint. Hints taper off and stop after using the shortcut.
 **View → Picture in Picture** (`⌥⌘P`) toggles a floating player for a supported
 video on the current page. Some embedded players require their own PiP control.
 Open local HTML, images, PDFs or text with **File → Open File…** (`⌘O`),

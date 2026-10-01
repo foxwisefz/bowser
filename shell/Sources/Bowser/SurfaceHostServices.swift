@@ -7,6 +7,12 @@ import BowserSurfaceKit
     static func configure() {
         guard !configured else { return }; configured = true
         SurfaceServices.shared.emit = { message in
+            if message["event"] as? String == "surface", message["surface"] as? String == "edge_dock",
+               message["id"] as? String == "select",
+               let value = message["value"], let id = UInt64(String(describing: value)),
+               let host = BrowserWindowController.host(of: id) {
+                host.pendingTabLesson = id
+            }
             if message["event"] as? String == "surface_dismiss", let id = message["surface"] as? String {
                 SurfaceManager.shared.dismiss(id: id)
             } else { BrainBridge.shared.send(message) }

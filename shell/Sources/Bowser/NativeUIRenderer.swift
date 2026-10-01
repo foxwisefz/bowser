@@ -131,6 +131,9 @@ import BowserSurfaceKit
             withTitle: "Next Tab", action: NSSelectorFromString("nextTabInOrder:"), keyEquivalent: "]"
         )
         nextItem.keyEquivalentModifierMask = [.command, .shift]
+        let lastItem = goMenu.addItem(withTitle: "Last Focused Tab",
+            action: NSSelectorFromString("lastFocusedTab:"), keyEquivalent: "\t")
+        lastItem.keyEquivalentModifierMask = .control
         }
         if context.siteHost != nil {
             for action in context.siteActions {

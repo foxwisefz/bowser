@@ -122,6 +122,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let controller = Self.browserController(eventWindow: event.window, keyWindow: NSApp.keyWindow,
                                                 mainWindow: NSApp.mainWindow)
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if flags == .control, event.keyCode == 48, let controller {
+            controller.activateLastFocusedTab()
+            return nil
+        }
         // ⌘` / ⌘⇧` by PHYSICAL key (kVK_ANSI_Grave): the typed character
         // for that key varies by layout, and a miss here beeps.
         if event.keyCode == 50 || event.keyCode == 10, flags == .command || flags == [.command, .shift] {
@@ -447,6 +451,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pb.setString(url, forType: .string)
     }
 
+    @objc func lastFocusedTab(_ sender: Any?) { currentController?.activateLastFocusedTab() }
     @objc func previousTab(_ sender: Any?) { currentController?.activateAdjacentTab(offset: -1) }
     @objc func nextTabInOrder(_ sender: Any?) { currentController?.activateAdjacentTab(offset: 1) }
 

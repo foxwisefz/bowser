@@ -20,6 +20,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     private(set) var tabs: [EngineView] = []
     /// The focused tab; other panes may also be mounted. Closing the last tab closes the window.
     private(set) var activeTab: EngineView!
+    private weak var lastFocusedTab: EngineView?
+    var pendingTabLesson: UInt64?
 
     /// The page area hosts one tab or a mod-defined website layout.
     private let container = ToolbarContainerView()
@@ -393,6 +395,15 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         if BrainBridge.shared.resources.shouldCoordinate, activeTab != nil {
             _ = BrainBridge.shared.resources.request(["action":"activate", "tab":view.webviewId, "focus_page":focusPage]); return
         }
+        if let previous = activeTab, previous !== view {
+            if pendingTabLesson == view.webviewId, let window {
+                let lesson = TabShortcutLesson.lesson(order: tabs.map(\.webviewId), from: previous.webviewId,
+                    to: view.webviewId, last: lastFocusedTab?.webviewId)
+                if let lesson { TabShortcutLesson.show(lesson, in: window) }
+            }
+            pendingTabLesson = nil
+            lastFocusedTab = previous
+        }
         if let layout = websiteLayout, !layout.ids.contains(view.webviewId) {
             detachWebsiteLayout()
             activeTab = nil
@@ -553,8 +564,15 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         min(max(requested ?? 8000, 1000), 30000)
     }
 
-    /// ⌘⇧←/→: cycle the window's tab order, wrapping at the ends.
+    func activateLastFocusedTab() {
+        guard let last = lastFocusedTab, tabs.contains(where: { $0 === last }), last !== activeTab else { return }
+        TabShortcutLesson.learned(.last)
+        activate(last)
+    }
+
+    /// ⌘⇧[/]: cycle the window's tab order, wrapping at the ends.
     func activateAdjacentTab(offset: Int) {
+        TabShortcutLesson.learned(offset < 0 ? .previous : .next)
         if BrainBridge.shared.resources.shouldCoordinate, let active = activeTab {
             _ = BrainBridge.shared.resources.request(["action":"cycle", "tab":active.webviewId, "offset":offset]); return
         }
