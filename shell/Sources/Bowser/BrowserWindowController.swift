@@ -22,6 +22,32 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     private(set) var activeTab: EngineView!
     private weak var lastFocusedTab: EngineView?
     var pendingTabLesson: UInt64?
+    private(set) var pageFindBar: PageFindBar?
+
+    func showFindInPage() {
+        guard let page = activeTab?.webView, let root = window?.contentView else { return }
+        if pageFindBar == nil {
+            let bar = PageFindBar(frame: .zero)
+            bar.isHidden = true
+            bar.translatesAutoresizingMaskIntoConstraints = false
+            root.addSubview(bar, positioned: .above, relativeTo: nil)
+            let width = bar.widthAnchor.constraint(equalToConstant: 420)
+            width.priority = .defaultHigh
+            NSLayoutConstraint.activate([width,
+                bar.widthAnchor.constraint(lessThanOrEqualTo: root.widthAnchor, constant: -24),
+                bar.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
+                bar.topAnchor.constraint(equalTo: root.topAnchor, constant: 64),
+                bar.heightAnchor.constraint(equalToConstant: 48)])
+            bar.onClose = { [weak self] in self?.pageFindBar?.dismiss() }
+            pageFindBar = bar
+        }
+        pageFindBar?.present(for: page)
+    }
+
+    func findNext(backwards: Bool = false) {
+        if pageFindBar?.isHidden != false { showFindInPage() }
+        else { pageFindBar?.search(backwards: backwards) }
+    }
 
     /// The page area hosts one tab or a mod-defined website layout.
     private let container = ToolbarContainerView()
@@ -395,6 +421,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         if BrainBridge.shared.resources.shouldCoordinate, activeTab != nil {
             _ = BrainBridge.shared.resources.request(["action":"activate", "tab":view.webviewId, "focus_page":focusPage]); return
         }
+        if activeTab !== view { pageFindBar?.dismiss() }
         if let previous = activeTab, previous !== view {
             if pendingTabLesson == view.webviewId, let window {
                 let lesson = TabShortcutLesson.lesson(order: tabs.map(\.webviewId), from: previous.webviewId,

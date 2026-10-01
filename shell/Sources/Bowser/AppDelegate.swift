@@ -122,6 +122,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let controller = Self.browserController(eventWindow: event.window, keyWindow: NSApp.keyWindow,
                                                 mainWindow: NSApp.mainWindow)
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if event.keyCode == 53, flags.isEmpty, controller?.pageFindBar?.isHidden == false {
+            controller?.pageFindBar?.dismiss()
+            return nil
+        }
         if flags == .control, event.keyCode == 48, let controller {
             controller.activateLastFocusedTab()
             return nil
@@ -144,6 +148,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             case "]":
                 controller?.activateAdjacentTab(offset: 1)
                 return nil
+            case "g":
+                controller?.findNext(backwards: true)
+                return nil
             case "c":
                 self.copyURL(from: controller)
                 return nil
@@ -163,6 +170,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if let controller {
                 CommandBar.shared.show(for: controller)
             }
+            return nil
+        case "f":
+            controller?.showFindInPage()
+            return nil
+        case "g":
+            controller?.findNext()
             return nil
         case "r":
             controller?.activeTab?.reloadPage()
@@ -451,6 +464,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pb.setString(url, forType: .string)
     }
 
+    @objc func findInPage(_ sender: Any?) { currentController?.showFindInPage() }
+    @objc func findNextMatch(_ sender: Any?) { currentController?.findNext() }
+    @objc func findPreviousMatch(_ sender: Any?) { currentController?.findNext(backwards: true) }
     @objc func lastFocusedTab(_ sender: Any?) { currentController?.activateLastFocusedTab() }
     @objc func previousTab(_ sender: Any?) { currentController?.activateAdjacentTab(offset: -1) }
     @objc func nextTabInOrder(_ sender: Any?) { currentController?.activateAdjacentTab(offset: 1) }

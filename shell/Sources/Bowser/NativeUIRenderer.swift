@@ -71,6 +71,11 @@ import BowserSurfaceKit
         editMenu.addItem(withTitle: "Copy", action: NSSelectorFromString("copy:"), keyEquivalent: "c")
         editMenu.addItem(withTitle: "Paste", action: NSSelectorFromString("paste:"), keyEquivalent: "v")
         editMenu.addItem(withTitle: "Select All", action: NSSelectorFromString("selectAll:"), keyEquivalent: "a")
+        editMenu.addItem(.separator())
+        editMenu.addItem(withTitle: "Find in Page…", action: NSSelectorFromString("findInPage:"), keyEquivalent: "f")
+        editMenu.addItem(withTitle: "Find Next", action: NSSelectorFromString("findNextMatch:"), keyEquivalent: "g")
+        let findPrevious = editMenu.addItem(withTitle: "Find Previous", action: NSSelectorFromString("findPreviousMatch:"), keyEquivalent: "g")
+        findPrevious.keyEquivalentModifierMask = [.command, .shift]
         editMenuItem.submenu = editMenu
         mainMenu.addItem(editMenuItem)
 
