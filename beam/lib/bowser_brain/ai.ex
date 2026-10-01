@@ -56,11 +56,7 @@ defmodule BowserBrain.AI do
   end
 
   def request(url, key, payload, headers \\ []) do
-    original_bytes = byte_size(JSON.encode!(payload))
-    payload = BowserBrain.AIContext.fit(payload)
     request_bytes = byte_size(JSON.encode!(payload))
-    if request_bytes != original_bytes,
-      do: Logger.info("modsmith event=context_reduced original_bytes=#{original_bytes} request_bytes=#{request_bytes}")
     transport = Application.get_env(:bowser_brain, :ai_transport, &http/4)
     uri = URI.parse(url)
 
@@ -76,7 +72,7 @@ defmodule BowserBrain.AI do
 
       request_bytes > 262_144 ->
         Logger.warning("modsmith event=request_oversized request_bytes=#{request_bytes}")
-        {:error, :context_too_large}
+        {:error, :request_too_large}
 
       true ->
         transport.(url, key, payload, headers)
@@ -109,12 +105,31 @@ defmodule BowserBrain.AI do
            body_format: :binary
          ) do
       {:ok, {{_, 200, _}, _, data}} when byte_size(data) <= 2_097_152 -> JSON.decode(data)
-      {:ok, {{_, status, _}, _, _}} -> {:error, status}
+      {:ok, {{_, status, _}, _, body}} -> {:error, response_error(status, body)}
       {:error, :timeout} -> {:error, :timeout}
       {:error, {:timeout, _}} -> {:error, :timeout}
       _ -> {:error, :unavailable}
     end
   end
+
+  @doc false
+  def response_error(413, _body), do: :request_too_large
+  def response_error(status, body) when status in [400, 422] and is_binary(body) and byte_size(body) <= 65_536 do
+    case JSON.decode(body) do
+      {:ok, %{"error" => error}} when is_map(error) ->
+        code = error["code"] || error["type"]
+        message = error["message"]
+        cond do
+          code in ["context_length_exceeded", "context_window_exceeded", "prompt_too_long"] -> :context_too_large
+          code == "request_too_large" -> :request_too_large
+          error["type"] == "invalid_request_error" and is_binary(message) and
+              Regex.match?(~r/^(prompt is too long|input is too long|maximum context length)/i, message) -> :context_too_large
+          true -> status
+        end
+      _ -> status
+    end
+  end
+  def response_error(status, _body), do: status
 
   def message(:setup_required), do: "Bowser AI access is not configured. Please check your account access."
 
@@ -123,7 +138,8 @@ defmodule BowserBrain.AI do
 
   def message(401), do: "Your AI access could not be verified. Please try again."
   def message(403), do: message(401)
-  def message(:context_too_large), do: "This request still contains too much content after reducing working context. Shorten large pasted text and retry here; your mod and conversation are saved."
+  def message(:request_too_large), do: "This request exceeds the AI service’s size limit. Your mod and saved conversation are intact. You can shorten the request and retry here."
+  def message(:context_too_large), do: "This request exceeds the AI model’s context limit. Your mod and saved conversation are intact. You can adjust the request and retry here."
   def message(:timeout), do: "The AI model took too long to respond. Continue to try again; changes already made are still available."
   def message(504), do: message(:timeout)
   def message(:step_limit), do: "ModSmith reached its tool limit before finishing. Changes already made remain available to inspect or undo."

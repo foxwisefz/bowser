@@ -34,19 +34,26 @@ defmodule BowserBrain.DirectAgentTest do
     :ok
   end
 
-  test "oversized working context reaches the provider after automatic reduction" do
-    owner = %{"role" => "user", "content" => "Keep improving this mod"}
-    input = [owner] ++ Enum.flat_map(1..8, fn id ->
-      [%{"type" => "function_call", "call_id" => to_string(id), "name" => "read_mod", "arguments" => "{}"},
-       %{"type" => "function_call_output", "call_id" => to_string(id), "output" => String.duplicate("result", 10_000)}]
-    end)
+  test "requests are sent unchanged and oversized requests fail without automatic trimming" do
+    payload = %{"input" => [%{"role" => "user", "content" => "Keep improving this mod"}], "instructions" => "contract", "tools" => []}
     Application.put_env(:bowser_brain, :ai_transport, fn _, _, body, _ ->
-      assert byte_size(JSON.encode!(body)) <= 262_144
-      assert hd(body["input"]) == owner
-      assert length(body["input"]) == length(input)
+      assert body == payload
       {:ok, %{"output" => []}}
     end)
-    assert {:ok, []} = DirectAgent.completion({:responses, "https://api.bowser.app/v1/ai/responses", "fixture", nil}, input, DirectAgent.tools(), "contract")
+    assert {:ok, _} = AI.request("https://api.bowser.app/v1/ai/responses", "fixture", payload)
+    oversized = put_in(payload["input"], [%{"role" => "user", "content" => String.duplicate("x", 262_144)}])
+    assert {:error, :request_too_large} = AI.request("https://api.bowser.app/v1/ai/responses", "fixture", oversized)
+  end
+
+  test "provider context overflow and body size failures have specific errors" do
+    assert AI.response_error(413, "too large") == :request_too_large
+    for code <- ["context_length_exceeded", "context_window_exceeded", "prompt_too_long"] do
+      assert AI.response_error(400, JSON.encode!(%{error: %{code: code}})) == :context_too_large
+    end
+    assert AI.response_error(400, JSON.encode!(%{error: %{type: "invalid_request_error", message: "prompt is too long: 210000 tokens > 200000 maximum"}})) == :context_too_large
+    assert AI.response_error(400, JSON.encode!(%{error: %{type: "invalid_request_error", message: "invalid tools"}})) == 400
+    assert AI.response_error(400, "not JSON") == 400
+    assert AI.response_error(429, "context_length_exceeded") == 429
   end
 
   test "screenshots stay multimodal instead of hitting the JSON tool-size limit" do
