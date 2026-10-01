@@ -301,8 +301,9 @@ automatically into your live mods directory.
 `chrome: "notch"` enables the rounded backing; `background: "#112233"` sets its
 color. The slots participate in centering and magnification geometry.
 When items exceed the available height, the strip scrolls vertically while header
-and footer stay fixed. Overflow rows retain stable spacing as icons magnify;
-changing the active item brings it into view.
+and footer stay fixed. The pointer anchors a smooth magnifying lens: neighboring rows move apart as
+icons enlarge. Reserved space keeps the scroll range stable during hover;
+changing the active item brings it into view. Reduced motion disables the lens.
 
 For example, `header: vstack([profile_avatar(profile_id, size: 22),
 profile_name(profile_id, size: 9)], spacing: 1)` follows the profile's current

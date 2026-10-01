@@ -148,7 +148,8 @@ defmodule BowserBrain.View do
 
   @doc """
   Proximity-magnification icon strip — the physics half of dock-like UIs.
-  The shell owns cursor tracking + distance-falloff scaling; you supply
+  The shell owns cursor tracking and a smooth, pointer-anchored lens that
+  enlarges icons and separates neighboring rows; you supply
   items and receive only discrete select events (value = item id).
 
       magnify_strip(

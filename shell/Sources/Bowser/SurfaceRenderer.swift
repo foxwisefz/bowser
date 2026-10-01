@@ -351,6 +351,52 @@ struct DockNotchShape: Shape {
     }
 }
 
+/// A lens maps space, rather than independently resizing fixed rows. Integrating
+/// a cosine bell keeps the point under the pointer fixed and opens room on both
+/// sides. Its derivative is continuous at the center and at the edge of the lens.
+struct StripLens {
+    var focus: CGFloat
+    var strength: CGFloat
+    var radius: CGFloat
+    var magnification: CGFloat
+
+    var reach: CGFloat { max(0, magnification - 1) * radius / 2 }
+
+    func map(_ position: CGFloat) -> CGFloat {
+        guard radius > 0 else { return position }
+        let distance = position - focus
+        let bounded = min(radius, max(-radius, distance))
+        let integral = bounded / 2 + radius * sin(.pi * bounded / radius) / (2 * .pi)
+        return position + strength * max(0, magnification - 1) * integral
+    }
+
+    func row(center: CGFloat, size: CGFloat) -> (scale: CGFloat, offset: CGFloat) {
+        guard size > 0 else { return (1, 0) }
+        let lower = map(center - size / 2)
+        let upper = map(center + size / 2)
+        return ((upper - lower) / size, (upper + lower) / 2 - center)
+    }
+}
+
+/// Animate the lens itself. Interpolating each icon's final size separately
+/// makes fast sweeps dissolve between two bulges instead of moving one lens.
+private struct StripLensRow<Content: View>: View, Animatable {
+    nonisolated var lens: StripLens
+    var center: CGFloat
+    var size: CGFloat
+    @ViewBuilder var content: (CGFloat) -> Content
+
+    nonisolated var animatableData: AnimatablePair<CGFloat, CGFloat> {
+        get { AnimatablePair(lens.focus, lens.strength) }
+        set { lens.focus = newValue.first; lens.strength = newValue.second }
+    }
+
+    var body: some View {
+        let row = lens.row(center: center, size: size)
+        content(row.scale).offset(y: row.offset)
+    }
+}
+
 /// Proximity-magnification icon strip — the physics half of dock-like UIs.
 /// Mods supply items (icons + ids); this widget owns cursor tracking and
 /// distance-falloff scaling natively, emitting only discrete select events.
@@ -371,6 +417,8 @@ struct MagnifyStripView: View {
     // activation never twitches.
     @State private var bounceStamp = 0
     @State private var scrollOffset: CGFloat = 0
+    @State private var lastLensY: CGFloat = 0
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
     @ObservedObject private var dragPreview = TabDragPreview.shared
     // Slots are ordinary live surface trees; the strip only reserves geometry.
     private var header: [String: Any]? { node["header"] as? [String: Any] }
@@ -414,35 +462,31 @@ struct MagnifyStripView: View {
         return max(minPad, (viewHeight - content - headerHeight - footerHeight) / 2) + headerHeight
     }
 
-    private func scale(forRow index: Int, top: CGFloat) -> CGFloat {
-        if surfaceId == "edge_dock", dragPreview.source != nil { return 1 }
-        guard let point = cursor.point else { return 1 }
-        let slot = baseSize + spacing
-        let center = top + CGFloat(index) * slot + baseSize / 2
-        let distance = abs(point.y - center)
-        let radius = baseSize * 2.6
-        guard distance < radius else { return 1 }
-        return 1 + (magnify - 1) * (1 - distance / radius)
-    }
-
     var body: some View {
         GeometryReader { geo in
+            let motionDisabled = reduceDockMotion || systemReduceMotion
+            let lens = StripLens(
+                focus: cursor.point?.y ?? lastLensY,
+                strength: cursor.point != nil && !motionDisabled && !(surfaceId == "edge_dock" && dragPreview.source != nil) ? 1 : 0,
+                radius: (baseSize + spacing) * 2.5, magnification: magnify
+            )
+            // Reserve the maximum displacement, so hovering never changes the
+            // scroll range, recenters the list, or covers header/footer controls.
+            let lensPad = lens.reach + 8
             let top = Self.centeredTop(
                 viewHeight: geo.size.height, count: items.count,
-                size: baseSize, spacing: spacing, minPad: topPad, headerHeight: headerHeight, footerHeight: footerHeight
+                size: baseSize, spacing: spacing, minPad: topPad + lensPad, headerHeight: headerHeight, footerHeight: footerHeight
             )
-            let overflowing = CGFloat(items.count) * (baseSize + spacing) - spacing + headerHeight + footerHeight + topPad * 2 > geo.size.height
-            let viewportTop = top - 8
+            let overflowing = CGFloat(items.count) * (baseSize + spacing) - spacing + headerHeight + footerHeight + (topPad + lensPad) * 2 > geo.size.height
+            let viewportTop = top - lensPad
             let viewportHeight = max(0, geo.size.height - viewportTop - footerHeight - topPad)
-            let contentHeight = items.indices.reduce(CGFloat.zero) {
-                $0 + baseSize * scale(forRow: $1, top: top)
-            } + CGFloat(max(0, items.count - 1)) * spacing
+            let contentHeight = max(0, CGFloat(items.count) * (baseSize + spacing) - spacing)
             ZStack(alignment: .topLeading) {
                 if notch, !items.isEmpty {
                     DockNotchShape()
                         .fill(SurfaceServices.color(hex: node["background"] as? String).map { Color(nsColor: $0) } ?? .black)
-                        .frame(width: geo.size.width, height: (overflowing ? viewportHeight : contentHeight) + (surfaceId == "edge_dock" && dragPreview.target != nil ? baseSize + spacing : 0) + (headerOutside ? 0 : headerHeight) + footerHeight + 64)
-                        .offset(y: top - (headerOutside ? 0 : headerHeight) - 32)
+                        .frame(width: geo.size.width, height: (overflowing ? viewportHeight : contentHeight + lensPad * 2) + (surfaceId == "edge_dock" && dragPreview.target != nil ? baseSize + spacing : 0) + (headerOutside ? 0 : headerHeight) + footerHeight + 64)
+                        .offset(y: viewportTop - (headerOutside ? 0 : headerHeight) - 32)
                         .allowsHitTesting(false)
                 }
                 if let header, !items.isEmpty {
@@ -460,12 +504,12 @@ struct MagnifyStripView: View {
                         }
                     }
                     .frame(width: geo.size.width, height: headerHeight)
-                    .offset(y: top - headerHeight)
+                    .offset(y: viewportTop - headerHeight)
                 }
                 if let footer, !items.isEmpty {
                     SurfaceTreeView(surfaceId: surfaceId, node: footer)
                         .frame(width: geo.size.width, height: footerHeight)
-                        .offset(y: overflowing ? viewportTop + viewportHeight : top + contentHeight)
+                        .offset(y: overflowing ? viewportTop + viewportHeight : top + contentHeight + lensPad)
                 }
                 ScrollViewReader { proxy in
                   ScrollView(.vertical) {
@@ -473,66 +517,69 @@ struct MagnifyStripView: View {
                     ForEach(identifiedItems) { entry in
                         let index = entry.index
                         let item = entry.value
-                        let s = scale(forRow: index, top: top - scrollOffset)
                         let active = item["active"] as? Bool ?? false
                         // Visual aging (tab rot): dim fades idle icons; glow is
                         // the warm halo of recently-used tabs. Both animate so
                         // decay ticks crossfade instead of snapping.
                         let dim = min(1, max(0.1, CGFloat(item["dim"] as? Double ?? 1)))
                         let glow = min(1, max(0, CGFloat(item["glow"] as? Double ?? 0)))
-                        Button(action: { emit(eventId, item["id"]) }) {
-                            ZStack {
-                                if glow > 0 {
-                                    Circle()
-                                        .fill(Color(nsColor: SurfaceServices.color(hex: "#ffb340") ?? .systemOrange))
-                                        .frame(width: min(baseSize * s + 12, geo.size.width),
-                                               height: min(baseSize * s + 12, geo.size.width))
-                                        .blur(radius: 6)
-                                        .opacity(0.5 * glow)
-                                        .animation(.easeInOut(duration: 0.8), value: glow)
+                        StripLensRow(lens: lens,
+                            center: top - scrollOffset + CGFloat(index) * (baseSize + spacing) + baseSize / 2,
+                            size: baseSize) { s in
+                            Button(action: { emit(eventId, item["id"]) }) {
+                                ZStack {
+                                    if glow > 0 {
+                                        Circle()
+                                            .fill(Color(nsColor: SurfaceServices.color(hex: "#ffb340") ?? .systemOrange))
+                                            .frame(width: min(baseSize * s + 12, geo.size.width),
+                                                   height: min(baseSize * s + 12, geo.size.width))
+                                            .blur(radius: 6)
+                                            .opacity(0.5 * glow)
+                                            .animation(.easeInOut(duration: 0.8), value: glow)
+                                    }
+                                    if active {
+                                        RoundedRectangle(cornerRadius: 11, style: .continuous)
+                                            .fill(.white.opacity(0.16))
+                                            .frame(width: min(baseSize * s + 8, geo.size.width - 2),
+                                                   height: baseSize * s + 8)
+                                    }
+                                    // Decay goes through icon()'s opacity param
+                                    // so the tint dot overlay stays vivid on
+                                    // dimmed items.
+                                    icon(for: item, opacity: dim)
+                                        .frame(width: baseSize * s, height: baseSize * s)
+                                        .animation(.easeOut(duration: 1.2), value: dim)
+                                        .shadow(color: .black.opacity(0.35), radius: 3, y: 1)
+                                    if active {
+                                        RoundedRectangle(cornerRadius: 11, style: .continuous)
+                                            .strokeBorder(Color.accentColor, lineWidth: 2)
+                                            .frame(width: min(baseSize * s + 8, geo.size.width - 2),
+                                                   height: baseSize * s + 8)
+                                    }
                                 }
-                                if active {
-                                    RoundedRectangle(cornerRadius: 11, style: .continuous)
-                                        .fill(.white.opacity(0.16))
-                                        .frame(width: min(baseSize * s + 8, geo.size.width - 2),
-                                               height: baseSize * s + 8)
-                                }
-                                // Decay goes through icon()'s opacity param
-                                // so the tint dot overlay stays vivid on
-                                // dimmed items.
-                                icon(for: item, opacity: dim)
-                                    .frame(width: baseSize * s, height: baseSize * s)
-                                    .animation(.easeOut(duration: 1.2), value: dim)
-                                    .shadow(color: .black.opacity(0.35), radius: 3, y: 1)
-                                if active {
-                                    RoundedRectangle(cornerRadius: 11, style: .continuous)
-                                        .strokeBorder(Color.accentColor, lineWidth: 2)
-                                        .frame(width: min(baseSize * s + 8, geo.size.width - 2),
-                                               height: baseSize * s + 8)
+                                .frame(height: baseSize * s)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .opacity(surfaceId == "edge_dock" && UInt64(entry.id) == dragPreview.source && dragPreview.source != nil ? 0.25 : 1)
+                            .padding(.top, surfaceId == "edge_dock" ? dragPreview.gap(for: UInt64(entry.id) ?? 0, after: false, size: baseSize + spacing) : 0)
+                            .padding(.bottom, surfaceId == "edge_dock" ? dragPreview.gap(for: UInt64(entry.id) ?? 0, after: true, size: baseSize + spacing) : 0)
+                            .animation(.easeOut(duration: 0.16), value: dragPreview.target)
+                            .overlay {
+                                if surfaceId == "edge_dock", let id = item["id"] as? String,
+                                   let webviewID = UInt64(id) {
+                                    SurfaceDragTarget(webviewID: webviewID) { emit(eventId, item["id"]) }.id(webviewID)
                                 }
                             }
-                            .frame(height: baseSize * s)
-                            .contentShape(Rectangle())
+                            .help(item["title"] as? String ?? "")
+                            .accessibilityValue(active ? "Active tab" : "")
                         }
-                        .buttonStyle(.plain)
-                        .frame(height: overflowing ? baseSize : nil)
-                        .opacity(surfaceId == "edge_dock" && UInt64(entry.id) == dragPreview.source && dragPreview.source != nil ? 0.25 : 1)
-                        .padding(.top, surfaceId == "edge_dock" ? dragPreview.gap(for: UInt64(entry.id) ?? 0, after: false, size: baseSize + spacing) : 0)
-                        .padding(.bottom, surfaceId == "edge_dock" ? dragPreview.gap(for: UInt64(entry.id) ?? 0, after: true, size: baseSize + spacing) : 0)
-                        .animation(.easeOut(duration: 0.16), value: dragPreview.target)
-                        .overlay {
-                            if surfaceId == "edge_dock", let id = item["id"] as? String,
-                               let webviewID = UInt64(id) {
-                                SurfaceDragTarget(webviewID: webviewID) { emit(eventId, item["id"]) }.id(webviewID)
-                            }
-                        }
-                        .help(item["title"] as? String ?? "")
-                        .accessibilityValue(active ? "Active tab" : "")
-                        .animation(reduceDockMotion ? nil : .easeOut(duration: 0.09), value: cursor.point)
+                        .frame(height: baseSize)
+                        .animation(motionDisabled ? nil : .interactiveSpring(response: 0.22, dampingFraction: 0.86), value: cursor.point)
                         // The hop: out fast, settle back springy. The left-edge
                         // dock bounces rightward, into the page.
-                        .phaseAnimator([false, true], trigger: active && !reduceDockMotion ? bounceStamp : -1) { content, out in
-                            content.offset(x: out && active && !reduceDockMotion ? (surfaceId == "edge_dock" ? 4 : 10) : 0)
+                        .phaseAnimator([false, true], trigger: active && !motionDisabled ? bounceStamp : -1) { content, out in
+                            content.offset(x: out && active && !motionDisabled ? (surfaceId == "edge_dock" ? 4 : 10) : 0)
                         } animation: { out in
                             out ? .spring(duration: 0.15, bounce: 0.4)
                                 : .spring(duration: 0.45, bounce: 0.65)
@@ -540,7 +587,7 @@ struct MagnifyStripView: View {
                         .id(entry.id)
                     }
                     }
-                    .padding(.vertical, 8)
+                    .padding(.vertical, lensPad)
                     .frame(maxWidth: .infinity)
                   }
                   .scrollIndicators(.never)
@@ -549,7 +596,7 @@ struct MagnifyStripView: View {
                   .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, offset in
                       scrollOffset = offset
                   }
-                  .frame(height: overflowing ? viewportHeight : contentHeight + 16)
+                  .frame(height: overflowing ? viewportHeight : contentHeight + lensPad * 2)
                   .onAppear { if overflowing, let activeId { proxy.scrollTo(activeId) } }
                   .onChange(of: activeId) { _, newValue in
                       if let newValue {
@@ -570,6 +617,9 @@ struct MagnifyStripView: View {
                 }
             }
             .environment(\.colorScheme, surfaceId == "edge_dock" ? .dark : colorScheme)
+        }
+        .onChange(of: cursor.point) { _, point in
+            if let point { lastLensY = point.y }
         }
         .onContinuousHover { phase in
             // Edge panels keep their reliable AppKit mouse tracking. Other

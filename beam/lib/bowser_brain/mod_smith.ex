@@ -680,8 +680,10 @@ defmodule BowserBrain.ModSmith do
     dimmed items. Strip options: header: / footer: ordinary view trees,
     header_height: / footer_height: points (0–240, default 48), header_outside: true
     excludes the header from the notch backing, chrome: "notch", background: hex.
-    Overflowing strips scroll vertically with fixed header/footer slots and stable
-    row spacing. Changing the active item scrolls it into view.
+    The pointer anchors a smooth lens that enlarges icons and opens space between
+    neighboring rows. Overflowing strips scroll with fixed header/footer slots
+    and a stable scroll range during hover. Reduced motion disables magnification.
+    Changing the active item scrolls it into view.
     profile_avatar(profile_id) / profile_avatar(profile_id, opts), and
     profile_name(profile_id) / profile_name(profile_id, opts),
     bind to local profile identity (no remote asset URL); size: points (8–128).
