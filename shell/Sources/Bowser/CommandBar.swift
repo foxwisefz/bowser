@@ -32,6 +32,26 @@ import BowserSurfaceKit
         panel.makeKeyAndOrderFront(nil)
         state.focus()
     }
+    var isVisible: Bool { panel?.isVisible == true }
+
+    /// Send the second physical shortcut straight to WebKit, bypassing Bowser's
+    /// local event monitor and menu equivalents. Sites decide whether to handle it.
+    @discardableResult
+    func handShortcutToPage(_ event: NSEvent, for controller: BrowserWindowController) -> Bool {
+        guard isVisible, target === controller, let window = controller.window,
+              let page = controller.activeTab?.webView else { return false }
+        hide()
+        window.makeKeyAndOrderFront(nil)
+        window.makeFirstResponder(page)
+        guard let forwarded = NSEvent.keyEvent(with: event.type, location: .zero,
+            modifierFlags: event.modifierFlags, timestamp: event.timestamp,
+            windowNumber: window.windowNumber, context: nil,
+            characters: event.characters ?? "k", charactersIgnoringModifiers: event.charactersIgnoringModifiers ?? "k",
+            isARepeat: false, keyCode: event.keyCode) else { return true }
+        page.keyDown(with: forwarded)
+        return true
+    }
+
     func hide() { state.modScope.freeze(); panel?.orderOut(nil) }
     func receiveScope(id: String, choice: String) {
         state.modScope.receive(id: id, choice: choice)

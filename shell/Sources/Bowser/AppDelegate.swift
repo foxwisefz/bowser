@@ -168,6 +168,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case "k", "l":
             guard SiteAppConfiguration.current == nil else { return event }
             if let controller {
+                if key == "k" {
+                    guard !event.isARepeat else { return nil }
+                    if CommandBar.shared.handShortcutToPage(event, for: controller) { return nil }
+                }
                 CommandBar.shared.show(for: controller)
             }
             return nil

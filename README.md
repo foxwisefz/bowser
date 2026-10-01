@@ -72,6 +72,8 @@ they are not required for this source-build workflow.
 
 A browser window appears. `⌘K` opens the command bar: type a URL, or a
 `:command`. Useful ones out of the box: `:settings`, `:panels`, `:do`.
+Press `⌘K` again while Bowser’s command bar is open to send `⌘K` to the webpage and open its own command menu, when supported.
+
 `⌘F` find in page (`Return`/`⇧Return` or `⌘G`/`⇧⌘G` for matches; `Esc` closes),
 `⌘T` new tab, `⌘⇧[`/`⌘⇧]` cycle tabs, `⌃Tab` last focused tab, `⌘R` reload, `⌘0/+/-` zoom.
 Clicking a neighboring or previously focused tab in DockTabs teaches its shortcut with a brief centered hint. Hints taper off and stop after using the shortcut.
