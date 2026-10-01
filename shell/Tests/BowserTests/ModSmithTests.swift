@@ -11,6 +11,36 @@ final class ModSmithTests: XCTestCase {
         return data
     }
 
+    @MainActor func testOverviewAndGuidePreserveDraftWithoutStartingWork() {
+        let model = ModSmithModel()
+        model.connected = { true }
+        var events: [[String: Any]] = []
+        model.send = { events.append($0) }
+        model.receive(snapshot(selected: "existing"))
+        model.workspacePage = "history"
+        model.draft = "Keep my changes"
+        model.instructionsOpen = true
+        model.action("overview")
+        XCTAssertEqual(model.workspacePage, "overview")
+        XCTAssertEqual(model.draft, "Keep my changes")
+        XCTAssertTrue(events.isEmpty)
+        model.action("select", project: "existing")
+        XCTAssertEqual(model.workspacePage, "history")
+        XCTAssertEqual(model.draft, "Keep my changes")
+        XCTAssertEqual(events.last?["action"] as? String, "select")
+        XCTAssertFalse(events.contains { ["document", "submit"].contains($0["action"] as? String ?? "") })
+    }
+
+    @MainActor func testCatalogDeduplicatesDisabledFilesAndKeepsModsWithoutHistory() throws {
+        let raw: [String: Any] = ["busy": false, "progress": [], "stage": "Ready", "projects": [["id": "p", "name": "Reader", "scope": "site", "url": "https://example.com", "status": "active", "summary": "Ready", "turns": [], "files": ["sites/example.com/reader.css.off"], "enabled": false, "can_undo": false]], "available_mods": [
+            ["path": "sites/example.com/reader.css", "name": "Reader", "scope": "example.com", "enabled": false],
+            ["path": "mods/new.ex", "name": "New", "scope": "Across Bowser", "enabled": true]]]
+        let data = try JSONDecoder().decode(ModSmithSnapshot.self, from: JSONSerialization.data(withJSONObject: raw))
+        XCTAssertEqual(data.unrepresentedMods.map(\.path), ["mods/new.ex"])
+        XCTAssertEqual(data.projects.first?.statusLabel, "Ready")
+        XCTAssertFalse(try XCTUnwrap(data.projects.first).enabled)
+    }
+
     @MainActor func testStopTargetsActiveRunWhenItsConversationIsFilteredOut() {
         let model = ModSmithModel()
         model.connected = { true }
@@ -145,7 +175,7 @@ final class ModSmithTests: XCTestCase {
         ]
         func receive() { model.receive(["projects": [project], "selected": "downloader", "busy": false, "progress": [], "stage": "Ready"]) }
         receive()
-        XCTAssertEqual(model.project?.statusLabel, "Disabled")
+        XCTAssertEqual(model.project?.statusLabel, "Needs your input")
         XCTAssertEqual(model.project?.canEnableAndTest, true)
         XCTAssertEqual(model.project?.turns.first?.displayText, "Mod is disabled.")
         model.draft = "Keep my request"
@@ -194,7 +224,7 @@ final class ModSmithTests: XCTestCase {
             ]
             model.receive(["projects": [project], "selected": "filter", "busy": false, "progress": [], "stage": "Ready"])
             XCTAssertEqual(model.project?.canContinue, ["partial", "needs_help", "failed", "interrupted"].contains(status))
-            if status == "partial" { XCTAssertEqual(model.project?.statusLabel, "Unfinished") }
+            if status == "partial" { XCTAssertEqual(model.project?.statusLabel, "Draft") }
         }
         model.draft = "Keep this next idea"
         model.action("continue", project: "filter")
@@ -231,7 +261,7 @@ final class ModSmithTests: XCTestCase {
         XCTAssertNotNil(model.connectionError)
     }
 
-    @MainActor func testRenderNativeWorkspace() throws {
+    @MainActor func testRenderNativeWorkspace() async throws {
         guard let directory = ProcessInfo.processInfo.environment["BOWSER_MODSMITH_RENDER"] else {
             throw XCTSkip("Set BOWSER_MODSMITH_RENDER for native visual verification")
         }
@@ -261,9 +291,16 @@ final class ModSmithTests: XCTestCase {
                  "notes": "The sticky navigation still needs work.", "checks": ["Confirmed the paragraph font is 20px.", "Checked that the article stays scrollable."]]
             ]
         ]
-        for (name, width, filled) in [("empty", 1060, false), ("result", 1060, true), ("compact", 880, true), ("success", 1060, true), ("input", 1060, true), ("prerequisite", 880, true), ("disabled", 1060, true), ("running-other", 880, true), ("running-filtered", 880, true)] {
+        for (name, width, filled) in [("overview-empty", 1060, false), ("overview", 1060, true), ("guide", 1200, true), ("compact-guide", 880, true), ("failed", 1060, true), ("empty", 1060, false), ("result", 1060, true), ("compact", 880, true), ("success", 1060, true), ("input", 1060, true), ("prerequisite", 880, true), ("disabled", 1060, true), ("running-other", 880, true), ("running-filtered", 880, true)] {
             if filled {
                 model.receive(["projects": [project], "selected": "reading", "busy": false, "progress": [], "stage": "Ready"])
+            }
+            model.workspacePage = name.hasPrefix("overview") ? "overview" : filled ? "history" : "new"
+            model.instructionsOpen = name == "guide"
+            if name == "failed" {
+                var failed = project
+                failed["status"] = "failed"
+                model.receive(["projects": [failed], "selected": "reading", "busy": false, "progress": [], "stage": "Ready"])
             }
             if name == "success" {
                 var success = project
@@ -318,6 +355,20 @@ final class ModSmithTests: XCTestCase {
             window.contentView = view
             view.frame = NSRect(x: 0, y: 0, width: width, height: 660)
             view.layoutSubtreeIfNeeded()
+            if name == "compact-guide" {
+                window.makeKeyAndOrderFront(nil)
+                model.draft = "Keep this refinement"
+                model.instructionsOpen = true
+                for _ in 0..<30 where window.sheets.isEmpty { try await Task.sleep(for: .milliseconds(20)) }
+                let sheet = try XCTUnwrap(window.sheets.first)
+                try await Task.sleep(for: .milliseconds(300))
+                XCTAssertGreaterThan(sheet.frame.width, 400)
+                model.instructionsOpen = false
+                for _ in 0..<30 where !window.sheets.isEmpty { try await Task.sleep(for: .milliseconds(20)) }
+                XCTAssertTrue(window.sheets.isEmpty)
+                XCTAssertEqual(model.draft, "Keep this refinement")
+                window.orderOut(nil)
+            }
             let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
             view.cacheDisplay(in: view.bounds, to: bitmap)
             let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))

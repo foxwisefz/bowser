@@ -71,16 +71,17 @@ public struct ModSmithProject: Decodable, Identifiable {
         nextStep?.options != nil || (status == "needs_help" && !canEnableAndTest) || (canContinue && nextStep != nil)
     }
     public var statusLabel: String {
-        if canEnableAndTest && ["needs_help", "disabled"].contains(status) { return "Disabled" }
+        if files.isEmpty && status != "working" { return "Draft" }
         switch status {
-        case "working": return "Working"
+        case "working": return "Building…"
         case "partial": return "Unfinished"
         case "failed": return "Needs attention"
         case "needs_help": return "Needs your input"
         case "interrupted": return "Interrupted"
         case "restored": return files.isEmpty ? "Removed" : "Restored"
-        case "ready": return "Ready to edit"
-        default: return enabled ? "Active" : "Disabled"
+        case "ready": return "Not yet verified"
+        case "active": return "Ready"
+        default: return "Not yet verified"
         }
     }
 }
@@ -115,10 +116,17 @@ public struct ModSmithSnapshot: Decodable {
     public var error: String?
     public var progress: [String] = []
     public var stage = "Inspecting page"
+    public var unrepresentedMods: [ModSmithExisting] {
+        func canonical(_ path: String) -> String { path.hasSuffix(".off") ? String(path.dropLast(4)) : path }
+        let owned = Set(projects.flatMap { $0.files }.map(canonical))
+        return (available_mods ?? []).filter { !owned.contains(canonical($0.path)) }
+    }
     public var canStop: Bool { busy && (running_run != nil || projects.contains(where: { $0.status == "working" })) }
 }
 
 @MainActor public protocol ModSmithPresentation: AnyObject {
+    var workspacePage: String { get set }
+    var instructionsOpen: Bool { get set }
     var isSiteApp: Bool { get }
     var snapshot: ModSmithSnapshot { get }
     var draft: String { get set }

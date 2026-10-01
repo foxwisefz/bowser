@@ -420,30 +420,47 @@ struct ModSmithScreen: View {
         get { context.binding("showDetails", default: false).wrappedValue }
         nonmutating set { context.binding("showDetails", default: false).wrappedValue = newValue }
     }
+    @ObservedObject private var profileServices = SurfaceServices.shared
+    @State private var deletingPath: String?
+    private var query: Binding<String> { context.binding("modsSearch", default: "") }
+    private var filter: Binding<String> { context.binding("modsFilter", default: "all") }
+    private var guideBinding: Binding<Bool> { Binding(get: { model.instructionsOpen }, set: { model.instructionsOpen = $0 }) }
     var body: some View {
-        HStack(spacing: 0) {
-            sidebar
-            Divider()
-            VStack(spacing: 0) {
-                header
-                Divider()
-                conversation
-                activeBuild
-                composer
-            }.frame(maxWidth: .infinity, maxHeight: .infinity)
+        GeometryReader { geometry in
+            ZStack {
+                VStack(spacing: 0) {
+                    header
+                    Divider()
+                    HSplitView {
+                        buildContent.frame(minWidth: 540)
+                        if geometry.size.width >= 1000 && model.instructionsOpen && model.project != nil {
+                            usagePanel.frame(minWidth: 280, idealWidth: 330, maxWidth: 440)
+                        }
+                    }
+                }
+                .opacity(model.workspacePage == "overview" ? 0 : 1)
+                .allowsHitTesting(model.workspacePage != "overview")
+                .disabled(model.workspacePage == "overview")
+                .accessibilityHidden(model.workspacePage == "overview")
+                if model.workspacePage == "overview" { overview }
+            }
+            .sheet(isPresented: Binding(get: { geometry.size.width < 1000 && model.instructionsOpen && model.workspacePage != "overview" }, set: { if !$0 { model.instructionsOpen = false } })) {
+                usagePanel.frame(width: 480, height: 540)
+            }
         }
         .background {
             Color(nsColor: .windowBackgroundColor)
             LinearGradient(colors: [Color.purple.opacity(0.045), .clear], startPoint: .topLeading, endPoint: .bottomTrailing)
         }
         .alert("Delete this mod?", isPresented: Binding(
-            get: { deletingProject != nil }, set: { if !$0 { deletingProject = nil } }
+            get: { deletingProject != nil || deletingPath != nil }, set: { if !$0 { deletingProject = nil; deletingPath = nil } }
         )) {
             Button("Delete mod", role: .destructive) {
                 if let id = deletingProject { model.action("delete", project: id, path: nil) }
-                deletingProject = nil
+                if let path = deletingPath { model.action("delete_existing", path: path) }
+                deletingProject = nil; deletingPath = nil
             }
-            Button("Cancel", role: .cancel) { deletingProject = nil }
+            Button("Cancel", role: .cancel) { deletingProject = nil; deletingPath = nil }
         } message: {
             Text("This removes the mod’s files and all its ModSmith conversation and undo history. This can’t be undone. Website actions and saved mod data stay as they are.")
         }
@@ -451,77 +468,159 @@ struct ModSmithScreen: View {
             if model.project == nil && !model.isSiteApp { model.scopeChoice.update(text) }
         }
         .onAppear {
-            if context.values["hasAppeared"] as? Bool != true { composerFocused = true; context.values["hasAppeared"] = true }
+            if context.values["hasAppeared"] as? Bool != true { composerFocused = model.workspacePage != "overview"; context.values["hasAppeared"] = true }
         }
     }
 
-    private var sidebar: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Label("ModSmith", systemImage: "sparkles")
-                .font(.system(size: 16, weight: .semibold, design: .rounded))
-                .padding(.horizontal, 12).padding(.top, 8)
-            if let profile = model.snapshot.workspace_profile {
-                profileIdentity(profile, caption: "Profile")
-                    .padding(10).frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color.accentColor.opacity(0.07), in: RoundedRectangle(cornerRadius: 10))
-            } else if model.isSiteApp {
-                Label("This app", systemImage: "app").font(.caption).foregroundStyle(.secondary)
-                    .padding(.horizontal, 12)
+    private var buildContent: some View {
+        VStack(spacing: 0) { conversation; activeBuild; composer }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func matches(_ name: String, scope: String, url: String) -> Bool {
+        let search = query.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard search.isEmpty || (name + " " + url).localizedCaseInsensitiveContains(search) else { return false }
+        if filter.wrappedValue == "browser" { return scope == "browser" }
+        if filter.wrappedValue == "site" {
+            guard scope != "browser", let host = URL(string: model.targetURL)?.host,
+                  let expected = URL(string: url)?.host else { return false }
+            return host == expected || host.hasSuffix("." + expected)
+        }
+        return true
+    }
+
+    private var remainingMods: [ModSmithExisting] { model.snapshot.unrepresentedMods }
+
+    private var overview: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack {
+                Text("Mods").font(.largeTitle.weight(.semibold))
+                Spacer()
+                if !model.isSiteApp {
+                    Menu {
+                        ForEach(profileServices.profiles, id: \.id) { profile in
+                            Button(profile.name) { model.action("profile", path: profile.id) }
+                        }
+                    } label: { Text(model.snapshot.workspace_profile?.name ?? "Profile") }
+                }
+                Button("New mod", systemImage: "plus") {
+                    model.instructionsOpen = false; model.action("new"); composerFocused = true
+                }.buttonStyle(.borderedProminent)
             }
-            Button { model.action("new"); composerFocused = true } label: {
-                Label("New mod", systemImage: "plus").frame(maxWidth: .infinity, alignment: .leading)
-            }.buttonStyle(.bordered).controlSize(.large)
-            Text("MODS & HISTORY").font(.system(size: 10, weight: .semibold))
-                .tracking(0.8).foregroundStyle(.secondary).padding(.horizontal, 12)
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 5) {
-                    ForEach(model.snapshot.projects) { project in
-                        Button {
-                            model.action("select", project: project.id)
-                            composerFocused = true
-                        } label: {
-                            HStack(alignment: .top, spacing: 9) {
-                                modIcon(project.favicon, fallback: project.scope == "browser" ? "macwindow" : "globe", size: 20)
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(project.name).font(.system(size: 12, weight: .medium)).lineLimit(2)
-                                    Text(project.files.isEmpty && project.status != "working" ? "Draft · saved chat" : project.statusLabel)
-                                        .font(.system(size: 10)).foregroundStyle(.secondary)
-                                }
-                                Spacer(minLength: 0)
-                            }.padding(10).frame(maxWidth: .infinity, alignment: .leading)
-                                .background(model.snapshot.selected == project.id ? Color.accentColor.opacity(0.13) : .clear,
-                                            in: RoundedRectangle(cornerRadius: 9))
-                                .contentShape(Rectangle())
-                        }.buttonStyle(.plain)
-                            .accessibilityAddTraits(model.snapshot.selected == project.id ? [.isSelected] : [])
-                    }
-                    ForEach((model.snapshot.available_mods ?? []).filter { mod in
-                        !model.snapshot.projects.contains { $0.files.contains(mod.path) }
-                    }) { mod in
-                        Button {
-                            model.action("edit_existing", path: mod.path)
-                            composerFocused = true
-                        } label: {
-                            HStack(alignment: .top, spacing: 9) {
-                                modIcon(mod.favicon, fallback: mod.scope == "Across Bowser" ? "macwindow" : "globe", size: 20)
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(mod.name).font(.system(size: 12, weight: .medium)).lineLimit(2)
-                                    Text("Open mod chat").font(.system(size: 10)).foregroundStyle(.secondary)
-                                }
-                                Spacer(minLength: 0)
-                            }.padding(10).frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
-                        }.buttonStyle(.plain)
-                    }
-                    if model.snapshot.projects.isEmpty && (model.snapshot.available_mods ?? []).isEmpty {
-                        Text("Your mods and saved conversations will appear here.")
-                            .font(.callout).foregroundStyle(.secondary).padding(12)
-                    }
+            HStack {
+                TextField("Search mods", text: query).textFieldStyle(.roundedBorder)
+                if !model.isSiteApp {
+                    Picker("Show", selection: filter) {
+                        Text("All").tag("all")
+                        Text("This website").tag("site")
+                        Text("Across Bowser").tag("browser")
+                    }.pickerStyle(.segmented).frame(width: 350)
                 }
             }
-            Text("One mod. One conversation.").font(.system(size: 10)).foregroundStyle(.secondary)
-                .padding(.horizontal, 12)
-        }.padding(12).frame(width: 210).frame(maxHeight: .infinity)
-            .background(Color.primary.opacity(0.025))
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    ForEach(model.snapshot.projects.filter { matches($0.name, scope: $0.scope, url: $0.url) }) { project in
+                        VStack(alignment: .leading, spacing: 12) {
+                            HStack(spacing: 12) {
+                                modIcon(project.favicon, fallback: project.scope == "browser" ? "macwindow" : "globe", size: 28)
+                                Button { openHistory(project.id) } label: {
+                                    VStack(alignment: .leading, spacing: 5) {
+                                        Text(project.name).font(.headline).lineLimit(2)
+                                        Text("\(project.scopeLabel) · \(project.statusLabel)").font(.caption).foregroundStyle(.secondary)
+                                    }.frame(maxWidth: .infinity, alignment: .leading)
+                                }.buttonStyle(.plain)
+                                if !project.files.isEmpty { enabledControl(project) }
+                                projectMenu(project)
+                            }
+                            HStack(spacing: 18) {
+                                Button("Build history") { openHistory(project.id) }
+                                if !project.files.isEmpty { Button("How to use") { openHistory(project.id, guide: true) } }
+                            }.buttonStyle(.link).padding(.leading, 40)
+                        }.padding(.vertical, 18)
+                        Divider()
+                    }
+                    ForEach(remainingMods.filter { matches($0.name, scope: $0.scope == "Across Bowser" ? "browser" : "site", url: "https://" + $0.scope) }) { mod in
+                        VStack(alignment: .leading, spacing: 12) {
+                            HStack(spacing: 12) {
+                                modIcon(mod.favicon, fallback: mod.scope == "Across Bowser" ? "macwindow" : "globe", size: 28)
+                                Button { openExisting(mod.path) } label: {
+                                    VStack(alignment: .leading, spacing: 5) {
+                                        Text(mod.name).font(.headline)
+                                        Text("\(mod.scope) · Not yet verified").font(.caption).foregroundStyle(.secondary)
+                                    }.frame(maxWidth: .infinity, alignment: .leading)
+                                }.buttonStyle(.plain)
+                                Toggle(mod.enabled ? "On" : "Off", isOn: Binding(get: { mod.enabled }, set: { if $0 != mod.enabled { model.action("toggle_existing", path: mod.path) } }))
+                                    .toggleStyle(.switch).fixedSize().disabled(model.snapshot.busy)
+                                Menu { Button("Delete mod…", role: .destructive) { deletingPath = mod.path } } label: { Image(systemName: "ellipsis") }
+                                    .menuStyle(.borderlessButton).menuIndicator(.hidden).frame(width: 24).disabled(model.snapshot.busy)
+                            }
+                            HStack(spacing: 18) {
+                                Button("Build history") { openExisting(mod.path) }
+                                Button("How to use") { openExisting(mod.path, guide: true) }
+                            }.buttonStyle(.link).padding(.leading, 40)
+                        }.padding(.vertical, 18)
+                        Divider()
+                    }
+                    if model.snapshot.projects.isEmpty && remainingMods.isEmpty {
+                        ContentUnavailableView("Make Bowser yours", systemImage: "sparkles", description: Text("Create a mod to change how a website or your browser works."))
+                    } else if model.snapshot.projects.filter({ matches($0.name, scope: $0.scope, url: $0.url) }).isEmpty && remainingMods.filter({ matches($0.name, scope: $0.scope == "Across Bowser" ? "browser" : "site", url: "https://" + $0.scope) }).isEmpty {
+                        ContentUnavailableView("No matching mods", systemImage: "magnifyingglass", description: Text("Try a different search or filter."))
+                    }
+                }.frame(maxWidth: .infinity, alignment: .leading)
+            }
+            if let error = model.snapshot.error ?? model.connectionError { Text(error).foregroundStyle(.red) }
+            if model.snapshot.canStop { activeBuild }
+        }.padding(28).background(Color(nsColor: .windowBackgroundColor))
+    }
+
+    private func openHistory(_ id: String, guide: Bool = false) {
+        model.instructionsOpen = guide
+        model.action("select", project: id)
+    }
+    private func openExisting(_ path: String, guide: Bool = false) {
+        model.instructionsOpen = guide
+        model.action("edit_existing", path: path)
+    }
+    private func enabledControl(_ project: ModSmithProject) -> some View {
+        Toggle(project.enabled ? "On" : "Off", isOn: Binding(get: { project.enabled }, set: { if $0 != project.enabled { model.action("toggle", project: project.id) } }))
+            .toggleStyle(.switch).fixedSize().disabled(model.snapshot.busy).accessibilityLabel("Enable \(project.name)")
+    }
+    private func projectMenu(_ project: ModSmithProject) -> some View {
+        Menu {
+            if project.canUndo {
+                Button("Undo last change") { model.action("undo", project: project.id) }
+                    .help("Restores mod files. Website actions and saved data stay as they are.")
+            }
+            Button("Delete mod…", role: .destructive) { deletingProject = project.id }
+        } label: { Image(systemName: "ellipsis") }
+            .menuStyle(.borderlessButton).menuIndicator(.hidden).frame(width: 24).disabled(model.snapshot.busy)
+    }
+
+    private var usagePanel: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack {
+                Label("How to use", systemImage: "book").font(.headline)
+                Spacer()
+                Button { model.instructionsOpen = false } label: { Image(systemName: "xmark") }
+                    .buttonStyle(.plain).accessibilityLabel("Close instructions")
+            }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    if let guide = model.project?.usage {
+                        Text(guide.entryPoint).font(.headline)
+                        ForEach(Array(guide.steps.enumerated()), id: \.offset) { index, step in
+                            Text("\(index + 1). \(step)")
+                        }
+                        if !guide.tips.isEmpty { Text(guide.tips).foregroundStyle(.secondary) }
+                    } else {
+                        Text("No instructions yet").font(.headline)
+                        Text("ModSmith can read this mod and write a guide to its controls.").foregroundStyle(.secondary)
+                    }
+                    Button(model.project?.usage == nil ? "Generate instructions" : "Update instructions", systemImage: "arrow.clockwise") { model.action("document") }
+                        .disabled(model.snapshot.busy || model.project == nil)
+                }.frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
+            }
+        }.padding(22).frame(maxWidth: .infinity, maxHeight: .infinity).background(Color.primary.opacity(0.025))
     }
 
     @ViewBuilder private func modIcon(_ path: String?, fallback: String, size: CGFloat = 24) -> some View {
@@ -553,50 +652,26 @@ struct ModSmithScreen: View {
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 9) {
+        VStack(alignment: .leading, spacing: 12) {
+            Button("All mods", systemImage: "chevron.left") { composerFocused = false; model.action("overview") }.buttonStyle(.plain).foregroundStyle(.secondary)
             if let project = model.project {
-                Text(project.name).font(.system(size: 24, weight: .semibold, design: .rounded)).lineLimit(2)
-            }
-            if let project = model.project {
-                HStack {
-                    HStack(spacing: 6) {
-                        modIcon(project.favicon, fallback: project.scope == "browser" ? "macwindow" : "globe", size: 16)
-                        Text(project.scopeLabel)
-                    }.font(.caption).foregroundStyle(.secondary)
+                HStack(spacing: 12) {
+                    modIcon(project.favicon, fallback: project.scope == "browser" ? "macwindow" : "globe")
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(project.name).font(.title2.weight(.semibold)).lineLimit(2)
+                        Text("\(model.snapshot.workspace_profile?.name ?? "This app") · \(project.scopeLabel) · \(project.statusLabel)").font(.caption).foregroundStyle(.secondary)
+                    }
                     Spacer()
-                    Text(project.statusLabel).font(.caption.weight(.medium))
-                }
-                HStack {
-                    Button("Delete mod", systemImage: "trash", role: .destructive) {
-                        deletingProject = project.id
-                    }.help("Delete this mod and its ModSmith history")
-                    if project.canUndo {
-                        Button("Undo last change", systemImage: "arrow.uturn.backward") { model.action("undo") }
-                            .help("Restore mod files before: \(project.undoLabel ?? "last change"). Website actions and stored mod data are not reversed.")
-                    }
                     if !project.files.isEmpty {
-                        Spacer()
-                        Toggle(project.enabled ? "Enabled" : "Disabled", isOn: Binding(
-                            get: { project.enabled },
-                            set: { if $0 != project.enabled { model.action("toggle") } }
-                        )).toggleStyle(.switch).fixedSize()
-                            .accessibilityIdentifier("modsmith-enabled")
+                        Button("How to use", systemImage: "book") { model.instructionsOpen.toggle() }
+                        enabledControl(project)
                     }
-                }.controlSize(.small).disabled(model.snapshot.busy)
-                if project.canUndo {
-                    Text("Undo restores mod files. Website actions and saved mod data stay as they are.")
-                        .font(.system(size: 10)).foregroundStyle(.secondary)
+                    projectMenu(project)
                 }
-            } else if model.isSiteApp {
-                Label("Only this app", systemImage: "app").font(.caption).foregroundStyle(.secondary)
             } else {
-                VStack(alignment: .leading, spacing: 14) {
-                    Text("What would you change?")
-                        .font(.system(size: 28, weight: .semibold, design: .rounded))
-                    Text("Make a little change. Make it yours.").font(.callout).foregroundStyle(.secondary)
-                    ModScopeCards(choice: model.scopeChoice)
-                }
-
+                Text("What would you change?").font(.title.weight(.semibold))
+                if model.isSiteApp { Label("Only this app", systemImage: "app") }
+                else { ModScopeCards(choice: model.scopeChoice) }
             }
         }.padding(20).frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -605,13 +680,13 @@ struct ModSmithScreen: View {
         guard let project = model.project else { return "bottom" }
         if project.needsNextStep { return "required-input" }
         if project.canEnableAndTest { return "next-action" }
-        return project.status == "active" ? "completion" : "bottom"
+        return "bottom"
     }
 
     private var conversation: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
+                LazyVStack(alignment: .leading, spacing: 20) {
                     if let project = model.project {
                         if project.needsNextStep {
                             VStack(alignment: .leading, spacing: 12) {
@@ -679,56 +754,7 @@ struct ModSmithScreen: View {
                             Text("What would you like to change about this mod?").font(.headline)
                             Text("Describe the next change below. Your existing files will be refined in place.").foregroundStyle(.secondary)
                         }
-                        if project.status == "active" && project.enabled && !project.files.isEmpty {
-                            VStack(alignment: .leading, spacing: 14) {
-                                HStack(spacing: 12) {
-                                    Image(systemName: "checkmark.circle.fill")
-                                        .font(.system(size: 32)).foregroundStyle(.green)
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text("Your mod is ready").font(.system(size: 20, weight: .semibold, design: .rounded))
-                                        Text(project.enabled ? "Enabled · \(project.scopeLabel)" : "Disabled · Turn it on above to try it")
-                                            .font(.caption).foregroundStyle(.secondary)
-                                    }
-                                }
-                                HStack(spacing: 12) {
-                                    Button("Try it", systemImage: "arrow.up.right") { model.action("try") }
-                                        .buttonStyle(.borderedProminent)
-                                    Button("Make changes", systemImage: "square.and.pencil") { composerFocused = true }
-                                    Spacer()
-                                }.controlSize(.regular)
-                            }.padding(20).frame(maxWidth: .infinity, alignment: .leading)
-                                .background(Color.green.opacity(0.07), in: RoundedRectangle(cornerRadius: 18))
-                                .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(Color.green.opacity(0.2)))
-                                .id("completion")
-                        }
-                        if !project.files.isEmpty {
-                            VStack(alignment: .leading, spacing: 12) {
-                                Label("How to use", systemImage: "book")
-                                    .font(.system(size: 20, weight: .semibold, design: .rounded))
-                                if let guide = project.usage {
-                                    Text(guide.entryPoint).font(.headline)
-                                    ForEach(Array(guide.steps.enumerated()), id: \.offset) { index, step in
-                                        HStack(alignment: .top, spacing: 10) {
-                                            Text("\(index + 1).").foregroundStyle(.secondary)
-                                            Text(step).frame(maxWidth: .infinity, alignment: .leading)
-                                        }
-                                    }
-                                    if !guide.tips.isEmpty { Text(guide.tips).font(.callout).foregroundStyle(.secondary) }
-                                    Button("Update instructions", systemImage: "arrow.clockwise") { model.action("document") }
-                                        .disabled(model.snapshot.busy)
-                                } else {
-                                    Text("Get a guide to this mod’s controls and how to use them.").foregroundStyle(.secondary)
-                                    Button("Generate instructions", systemImage: "book") { model.action("document") }
-                                        .buttonStyle(.borderedProminent).disabled(model.snapshot.busy)
-                                }
-                                Divider()
-                                Text("Turn this mod on or off using Enabled above or Settings → Mods. To change it, describe what you want below. Select this mod in the sidebar to return to its guide and chat history.")
-                                    .font(.caption).foregroundStyle(.secondary)
-                            }.padding(20).frame(maxWidth: .infinity, alignment: .leading)
-                                .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 18))
-                                .textSelection(.enabled)
-                        }
-                        ForEach(project.turns) { turn in turnView(turn) }
+                        ForEach(project.turns) { turn in turnView(turn).id(turn.id) }
                         if project.status == "interrupted" || project.status == "restored" {
                             Text(project.summary).font(.callout).foregroundStyle(.secondary)
                         }
@@ -755,24 +781,28 @@ struct ModSmithScreen: View {
                         }.font(.caption).foregroundStyle(.secondary)
                     }
                     Color.clear.frame(height: 1).id("bottom")
-                }.padding(22).frame(maxWidth: .infinity, alignment: .leading)
+                }.scrollTargetLayout().padding(22).frame(maxWidth: .infinity, alignment: .leading)
             }
-            .onChange(of: model.project?.turns.count) { _, _ in
-                proxy.scrollTo(resultAnchor, anchor: resultAnchor == "bottom" ? .bottom : .top)
+            .scrollPosition(id: context.binding("scroll:" + (model.project?.id ?? "new"), default: Optional<String>.none), anchor: .top)
+            .onAppear {
+                if let saved = context.values["scroll:" + (model.project?.id ?? "new")] as? String { proxy.scrollTo(saved, anchor: .top) }
             }
-            .onChange(of: model.project?.status) { _, status in
-                if resultAnchor != "bottom" { proxy.scrollTo(resultAnchor, anchor: .top) }
-            }
-            .onChange(of: model.snapshot.selected) { _, _ in
-                proxy.scrollTo(resultAnchor, anchor: resultAnchor == "bottom" ? .bottom : .top)
+            .onChange(of: "\(model.project?.id ?? "new")|\(model.project?.turns.count ?? 0)|\(model.project?.status ?? "")") { previous, current in
+                let projectChanged = previous.split(separator: "|").first != current.split(separator: "|").first
+                if projectChanged, let saved = context.values["scroll:" + (model.project?.id ?? "new")] as? String {
+                    proxy.scrollTo(saved, anchor: .top)
+                } else { proxy.scrollTo(resultAnchor, anchor: resultAnchor == "bottom" ? .bottom : .top) }
             }
         }
     }
 
     private func turnView(_ turn: ModSmithTurn) -> some View {
         VStack(alignment: .leading, spacing: 9) {
-            Text(turn.role == "user" ? "You" : turn.role == "system" ? "Revision history" : turn.role == "activity" ? "Activity" : "ModSmith")
-                .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            HStack {
+                Text(turn.role == "user" ? "You" : turn.role == "system" ? "Revision history" : turn.role == "activity" ? "Activity" : "ModSmith")
+                    .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                if turn.status == "active" { Label("Ready", systemImage: "checkmark.circle.fill").font(.caption).foregroundStyle(.green) }
+            }
             Text(turn.displayText).font(.system(size: 13)).textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
             if let notes = turn.notes, !notes.isEmpty {

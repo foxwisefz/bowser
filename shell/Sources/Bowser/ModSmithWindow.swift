@@ -3,6 +3,8 @@ import SwiftUI
 
 @MainActor
 final class ModSmithModel: ObservableObject, ModSmithPresentation {
+    @Published var workspacePage = "overview"
+    @Published var instructionsOpen = false
     var isSiteApp: Bool { SiteAppConfiguration.current != nil }
     @Published var snapshot = ModSmithSnapshot()
     @Published var draft = ""
@@ -23,7 +25,8 @@ final class ModSmithModel: ObservableObject, ModSmithPresentation {
     var send: ([String: Any]) -> Void = { BrainBridge.shared.send($0) }
     var connected: () -> Bool = { BrainBridge.shared.isConnected }
     var project: ModSmithProject? { snapshot.projects.first { $0.id == snapshot.selected } }
-    var key: String { snapshot.selected ?? "new" }
+    var key: String { snapshot.selected ?? newDraftKey }
+    private var newDraftKey: String { snapshot.workspace_profile.map { "new:" + $0.id } ?? "new" }
     init() {
         scopeChoice.request = { [weak self] id, text, host in
             guard let self, self.connected() else { return }
@@ -57,12 +60,36 @@ final class ModSmithModel: ObservableObject, ModSmithPresentation {
         deletingProjects = deletingProjects.filter { id in incoming.projects.contains { $0.id == id } }
         if incoming.error != nil { pending = nil; deletingProjects.removeAll() }
         LearnGuideProgress.shared.receive(incoming)
+        if incoming.accepted != snapshot.accepted && incoming.accepted != nil { workspacePage = "history" }
+        if let route = message["workspace_view"] as? String { workspacePage = route }
+        if let old = snapshot.selected, incoming.selected != old, !incoming.projects.contains(where: { $0.id == old }), workspacePage == "history" { workspacePage = "overview" }
+        if let url = message["target_url"] as? String { targetURL = url }
+        if let webview = message["target_webview"] as? UInt64 { targetWebview = webview }
         snapshot = incoming
         draft = drafts[key] ?? ""
         connectionError = nil
     }
 
     func action(_ action: String, project id: String? = nil, path: String? = nil) {
+        if action == "overview" { workspacePage = "overview"; return }
+        if action == "open" { workspacePage = "overview" }
+        if ["new", "select", "edit_existing"].contains(action) {
+            workspacePage = action == "new" ? "new" : "history"
+        }
+        if action == "profile", let path {
+            guard let profile = ProfileSettingsModel.shared.profiles.first(where: { $0.id == path }) else { return }
+            let controller = BrowserWindowController.all.first { $0.profile.id == path }
+                ?? BrowserWindowController(profile: profile)
+            controller.window?.makeKeyAndOrderFront(nil)
+            targetWebview = controller.activeTab?.webviewId
+            targetURL = controller.activeTab?.currentURLString ?? ""
+            workspacePage = "overview"
+            var event: [String: Any] = ["op": "event", "event": "modsmith", "action": "open"]
+            if let targetWebview { event["webview"] = targetWebview }
+            send(event)
+            ModSmithWindow.shared.show(captureTarget: false)
+            return
+        }
         if action == "try" {
             let stored = project.flatMap { projectTargets[$0.id] }
             let matching = BrowserWindowController.all.flatMap(\.tabs).first { tab in
@@ -86,15 +113,18 @@ final class ModSmithModel: ObservableObject, ModSmithPresentation {
             message["run"] = run
             message["project"] = snapshot.running_project
         }
+        if action == "open", let targetWebview { message["webview"] = targetWebview }
         if let path { message["path"] = path }
         if action == "delete", let id = id ?? snapshot.selected { deletingProjects.insert(id) }
         send(message)
     }
 
     func prepareNewDraft(_ text: String, scope: String = "site", start: Bool = false) {
+        workspacePage = "new"
+        instructionsOpen = false
         drafts[key] = draft
         snapshot.selected = nil
-        drafts["new"] = text
+        drafts[newDraftKey] = text
         draft = text
         scopeChoice.reset(url: targetURL, selected: scope, manual: start, faviconPath: targetFavicon)
         if start && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -148,7 +178,7 @@ final class ModSmithWindow: NSObject {
         if window == nil {
             let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1060, height: 720),
                              styleMask: [.titled, .closable, .resizable, .miniaturizable], backing: .buffered, defer: false)
-            w.title = "ModSmith"
+            w.title = "Mods"
             w.subtitle = "Make Bowser yours"
             w.minSize = NSSize(width: 880, height: 520)
             w.isReleasedWhenClosed = false

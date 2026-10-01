@@ -76,7 +76,7 @@ import BowserSurfaceKit
 
         let viewMenuItem = NSMenuItem()
         let view = NSMenu(title: "View")
-        let modsmith = NSMenuItem(title: "ModSmith…", action: NSSelectorFromString("open:"), keyEquivalent: "")
+        let modsmith = NSMenuItem(title: "Mods…", action: NSSelectorFromString("open:"), keyEquivalent: "")
         modsmith.target = context.targets["modsmith"]
         view.addItem(modsmith)
         let permissions = view.addItem(withTitle: "Website Permissions…", action: NSSelectorFromString("show:"), keyEquivalent: "")
