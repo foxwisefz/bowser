@@ -34,6 +34,21 @@ defmodule BowserBrain.DirectAgentTest do
     :ok
   end
 
+  test "oversized working context reaches the provider after automatic reduction" do
+    owner = %{"role" => "user", "content" => "Keep improving this mod"}
+    input = [owner] ++ Enum.flat_map(1..8, fn id ->
+      [%{"type" => "function_call", "call_id" => to_string(id), "name" => "read_mod", "arguments" => "{}"},
+       %{"type" => "function_call_output", "call_id" => to_string(id), "output" => String.duplicate("result", 10_000)}]
+    end)
+    Application.put_env(:bowser_brain, :ai_transport, fn _, _, body, _ ->
+      assert byte_size(JSON.encode!(body)) <= 262_144
+      assert hd(body["input"]) == owner
+      assert length(body["input"]) == length(input)
+      {:ok, %{"output" => []}}
+    end)
+    assert {:ok, []} = DirectAgent.completion({:responses, "https://api.bowser.app/v1/ai/responses", "fixture", nil}, input, DirectAgent.tools(), "contract")
+  end
+
   test "screenshots stay multimodal instead of hitting the JSON tool-size limit" do
     image = Base.encode64(:binary.copy("pixels", 20_000))
     [receipt, message] = DirectAgent.tool_output("capture-1", %{ok: true, image: image, mimeType: "image/png", width: 320})

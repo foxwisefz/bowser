@@ -1,6 +1,7 @@
 defmodule BowserBrain.AI do
   @moduledoc "Direct HTTP providers and the account-authenticated Bowser AI service."
   alias BowserBrain.{Settings, Paths}
+  require Logger
 
   def route(settings \\ Settings.all()) do
     provider =
@@ -55,6 +56,11 @@ defmodule BowserBrain.AI do
   end
 
   def request(url, key, payload, headers \\ []) do
+    original_bytes = byte_size(JSON.encode!(payload))
+    payload = BowserBrain.AIContext.fit(payload)
+    request_bytes = byte_size(JSON.encode!(payload))
+    if request_bytes != original_bytes,
+      do: Logger.info("modsmith event=context_reduced original_bytes=#{original_bytes} request_bytes=#{request_bytes}")
     transport = Application.get_env(:bowser_brain, :ai_transport, &http/4)
     uri = URI.parse(url)
 
@@ -68,7 +74,8 @@ defmodule BowserBrain.AI do
       (uri.scheme != "https" and not local_test) or uri.userinfo != nil ->
         {:error, :invalid_endpoint}
 
-      byte_size(JSON.encode!(payload)) > 262_144 ->
+      request_bytes > 262_144 ->
+        Logger.warning("modsmith event=request_oversized request_bytes=#{request_bytes}")
         {:error, :context_too_large}
 
       true ->
@@ -116,7 +123,7 @@ defmodule BowserBrain.AI do
 
   def message(401), do: "Your AI access could not be verified. Please try again."
   def message(403), do: message(401)
-  def message(:context_too_large), do: "This request is too large. Start a new mod conversation."
+  def message(:context_too_large), do: "This request still contains too much content after reducing working context. Shorten large pasted text and retry here; your mod and conversation are saved."
   def message(:timeout), do: "The AI model took too long to respond. Continue to try again; changes already made are still available."
   def message(504), do: message(:timeout)
   def message(:step_limit), do: "ModSmith reached its tool limit before finishing. Changes already made remain available to inspect or undo."
