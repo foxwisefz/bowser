@@ -22,6 +22,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     private(set) var activeTab: EngineView!
     private weak var lastFocusedTab: EngineView?
     var pendingTabLesson: UInt64?
+    var pendingTabLessonPoint = NSPoint.zero
     private(set) var pageFindBar: PageFindBar?
 
     func showFindInPage() {
@@ -426,7 +427,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
             if pendingTabLesson == view.webviewId, let window {
                 let lesson = TabShortcutLesson.lesson(order: tabs.map(\.webviewId), from: previous.webviewId,
                     to: view.webviewId, last: lastFocusedTab?.webviewId)
-                if let lesson { TabShortcutLesson.show(lesson, in: window) }
+                if let lesson { TabShortcutLesson.show(lesson, in: window, from: pendingTabLessonPoint) }
             }
             pendingTabLesson = nil
             lastFocusedTab = previous

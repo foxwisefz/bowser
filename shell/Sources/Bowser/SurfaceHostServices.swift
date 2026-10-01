@@ -12,6 +12,7 @@ import BowserSurfaceKit
                let value = message["value"], let id = UInt64(String(describing: value)),
                let host = BrowserWindowController.host(of: id) {
                 host.pendingTabLesson = id
+                host.pendingTabLessonPoint = NSEvent.mouseLocation
             }
             if message["event"] as? String == "surface_dismiss", let id = message["surface"] as? String {
                 SurfaceManager.shared.dismiss(id: id)

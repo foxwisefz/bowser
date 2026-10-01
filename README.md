@@ -76,7 +76,7 @@ Press `⌘K` again while Bowser’s command bar is open to send `⌘K` to the we
 
 `⌘F` find in page (`Return`/`⇧Return` or `⌘G`/`⇧⌘G` for matches; `Esc` closes),
 `⌘T` new tab, `⌘⇧[`/`⌘⇧]` cycle tabs, `⌃Tab` last focused tab, `⌘R` reload, `⌘0/+/-` zoom.
-Clicking a neighboring or previously focused tab in DockTabs teaches its shortcut with a brief centered hint. Hints taper off and stop after using the shortcut.
+Clicking a neighboring or previously focused tab in DockTabs teaches its shortcut with shortcut glyphs that float inward from the clicked tab and fade away. Hints taper off and stop after using the shortcut.
 **View → Picture in Picture** (`⌥⌘P`) toggles a floating player for a supported
 video on the current page. Some embedded players require their own PiP control.
 Open local HTML, images, PDFs or text with **File → Open File…** (`⌘O`),
