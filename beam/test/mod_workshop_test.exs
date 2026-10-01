@@ -490,7 +490,7 @@ defmodule BowserBrain.ModWorkshopTest do
 
   test "observer faults trigger internal repair and clear only after a verified replacement" do
     on_exit(fn -> Application.delete_env(:bowser_brain, :modsmith_verifier) end)
-    event("submit", %{"text" => "Add a page control", "scope" => "browser"})
+    event("submit", %{"text" => "Add a page control", "scope" => "site"})
     assert_receive {:runner, pid, token, _, _, _}, 1000
     name = "fault-#{token}.js"
     args = %{"host" => "example.com", "name" => name, "content" => "window.fixture = 1"}
@@ -778,7 +778,7 @@ end
   test "verification is tied to the exact result and invalidated by subsequent tool activity" do
     on_exit(fn -> Application.delete_env(:bowser_brain, :modsmith_verifier) end)
     for changed <- [false, true] do
-      state = event("submit", %{"text" => "Inspect theme", "scope" => "browser"})
+      state = event("submit", %{"text" => "Inspect theme", "scope" => "site"})
       assert_receive {:runner, pid, token, _, _, _}, 1000
       name = "verified-#{token}.css"
       assert %{ok: true} = ModWorkshop.tool(token, "put_payload", %{"host" => "example.com", "name" => name, "content" => "body {}"})
@@ -1226,6 +1226,21 @@ end
     assert ModRevision.read("mods/bypass.ex") == nil
     [project] = :sys.get_state(ModWorkshop).data["projects"]
     assert project["status"] == "failed"
+  end
+
+  test "browser scope rejects site-only drafts and final files" do
+    event("submit", %{"text" => "Interact with DOM across websites", "scope" => "browser"})
+    assert_receive {:runner, pid, token, _, _, _}, 1000
+    assert %{ok: false} = ModWorkshop.tool(token, "put_payload", %{
+      "host" => "example.com", "name" => "scope.js", "content" => "window.scopeFixture = true"
+    })
+    assert %{ok: false} = ModWorkshop.tool(token, "put_mod", %{
+      "name" => "scope.ex", "content" => "defmodule ScopeFixture do use BowserBrain.Mod, host: \"example.com\" end"
+    })
+    complete(pid, [%{"path" => "sites/example.com/scope.js", "content" => "window.scopeFixture = true"}])
+    assert ModRevision.read("sites/example.com/scope.js") == nil
+    assert ModRevision.read("mods/scope.ex") == nil
+    assert hd(:sys.get_state(ModWorkshop).data["projects"])["status"] == "failed"
   end
 
   test "Elixir drafts share final revision history and Undo removes the installed file" do

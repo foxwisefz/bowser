@@ -1,5 +1,7 @@
 User mods belong to one browser profile. ModSmith stamps new Elixir, CSS, and JS files with a `bowser-profile` comment; untagged files belong to Default. Keep this comment when editing. Existing filenames owned by another profile cannot be overwritten; choose a distinct file and module name. Browser-wide means all windows in the owning profile, not all profiles.
 
+ModSmith’s selected scope is authoritative. Across Bowser uses an Elixir mod without `host:`; site payloads and host-restricted modules are rejected in that scope. The current webpage is a test target. Browser-wide mods may render effects inside webpages with `Page.set_scripts/set_styles`; scope controls availability, not whether rendering is native or in-page.
+
 Page hooks must mount idempotently and ignore their own DOM changes. The injected
 `MutationObserver` constructor tracks observers per script. Bowser disconnects
 that script's observers after 100 callbacks or 50 ms of callback work without

@@ -938,7 +938,8 @@ defmodule BowserBrain.ModWorkshop do
         host,
         ModSmith.page_digest(wv, p["app"]),
         Enum.map(payloads, fn {name, source} -> {name, BowserBrain.ModScope.untag(source)} end),
-        catalog
+        catalog,
+        p["scope"]
       )
 
     base <>
@@ -986,6 +987,9 @@ defmodule BowserBrain.ModWorkshop do
 
         String.starts_with?(path, "app-mods/") ->
           {:error, "Saved-app files are outside this mod's scope"}
+
+        p["scope"] == "browser" and String.starts_with?(path, "sites/") ->
+          {:error, "Across Bowser requires an Elixir mod without host:, not a site payload. Use Page.set_scripts/set_styles for page effects."}
 
         p["scope"] == "site" and not String.starts_with?(path, "sites/#{host}/") and
             not String.starts_with?(path, "mods/") ->
@@ -1045,6 +1049,11 @@ defmodule BowserBrain.ModWorkshop do
             _ -> false
           end) ->
             {:error, "Every site mod must directly declare host: #{host}"}
+          p["scope"] == "browser" and Enum.any?(declarations, fn
+            [opts] when is_list(opts) -> List.keymember?(opts, "host", 0)
+            _ -> false
+          end) ->
+            {:error, "Across Bowser mods must omit host:; the current page is only a test target"}
           true -> :ok
         end
       else

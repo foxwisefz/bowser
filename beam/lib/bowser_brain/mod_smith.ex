@@ -76,7 +76,7 @@ defmodule BowserBrain.ModSmith do
     end
   end
 
-  def build_prompt(request, url, host, digest, existing, catalog) do
+  def build_prompt(request, url, host, digest, existing, catalog, scope \\ "site") do
     existing_block =
       case existing do
         [] ->
@@ -128,6 +128,15 @@ defmodule BowserBrain.ModSmith do
     {"tier":"payload"|"mod","summary":"<one line>","files":[{"path":"...","content":"..."}],"notes":"<caveats>"}
 
     TIERS:
+    #{if scope == "browser" do
+      """
+      Use tier "mod": an Elixir module under mods/*.ex using BowserBrain.Mod without host:.
+      Across Bowser is the owner's explicit selection. Site payloads under sites/<host>/
+      cannot provide browser-wide behavior. Use Page.set_scripts/set_styles from the mod
+      when the feature interacts with webpage DOM. In-page rendering does not imply site scope.
+      """
+    else
+      """
     - "payload" (preferred for deterministic styling and DOM changes): files under sites/#{host}/ named *.css or *.js.
       They are auto-injected on every page of #{host}, persistently. CSS over JS
       when possible. To change an existing payload, return the same path with new
@@ -136,6 +145,9 @@ defmodule BowserBrain.ModSmith do
       background processing are required): one file under mods/*.ex,
       an Elixir module using the mod API below. A site-scoped mod runs on BEAM;
       site scope limits which pages it serves, not its runtime to page JavaScript.
+
+      """
+    end}
 
     HARD RULES: paths only under sites/ or mods/; never read or touch password,
     credit-card, or one-time-code fields; keep CSS resilient (avoid brittle
@@ -189,6 +201,17 @@ defmodule BowserBrain.ModSmith do
     unfinished parts go in "notes". If time runs out you will be asked to return
     what you have; a partial working envelope beats a lost run.
 
+    #{if scope == "browser" do
+      """
+      SCOPE RULE: Across Bowser. The current URL and DOM are a test page, not a host
+      restriction. Do not narrow scope based on that page or earlier site-specific drafts.
+      Make the feature available across websites within the owning profile. Use generic DOM
+      handling and verify navigation/tab behavior, not just this one page. Provide a browser
+      entry point for user-triggered features. Page effects may render inside each webpage;
+      choose controls according to the requested experience rather than the test site's layout.
+      """
+    else
+      """
     SCOPE RULE: a request about a specific page/site must be limited to that
     site by default. Payloads are auto host-scoped. A tier-"mod" for
     page-specific behavior MUST declare its host directly in a top-level defmodule:
@@ -198,6 +221,9 @@ defmodule BowserBrain.ModSmith do
     — events from tabs on other sites then never reach handle_event
     (subdomains included). Omit host: ONLY for genuinely browser-wide mods
     (tab docks, global chrome).
+
+      """
+    end}
 
     CONTROL PLACEMENT: for page/site-specific mods, default to compact IN-PAGE
     controls beside the content they affect (for example, beside search results).
