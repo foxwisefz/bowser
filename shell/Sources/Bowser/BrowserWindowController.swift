@@ -594,13 +594,11 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
 
     func activateLastFocusedTab() {
         guard let last = lastFocusedTab, tabs.contains(where: { $0 === last }), last !== activeTab else { return }
-        TabShortcutLesson.learned(.last)
         activate(last)
     }
 
     /// ⌘⇧[/]: cycle the window's tab order, wrapping at the ends.
     func activateAdjacentTab(offset: Int) {
-        TabShortcutLesson.learned(offset < 0 ? .previous : .next)
         if BrainBridge.shared.resources.shouldCoordinate, let active = activeTab {
             _ = BrainBridge.shared.resources.request(["action":"cycle", "tab":active.webviewId, "offset":offset]); return
         }

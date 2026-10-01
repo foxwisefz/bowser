@@ -1,6 +1,6 @@
 import AppKit
 
-/// Small, persistent lessons: three spaced reminders, retired after shortcut use.
+/// Ghost shortcut hints shown on every applicable mouse-driven tab switch.
 @MainActor enum TabShortcutLesson {
     enum Action: String {
         case previous, next, last
@@ -20,21 +20,9 @@ import AppKit
         if target == (source + order.count - 1) % order.count { return .previous }
         return nil
     }
-    static func learned(_ action: Action, defaults: UserDefaults = .standard) {
-        defaults.set(true, forKey: "tabLesson.\(action.rawValue).learned")
-    }
-    static func shouldShow(_ action: Action, now: TimeInterval = Date.timeIntervalSinceReferenceDate,
-                           defaults: UserDefaults = .standard) -> Bool {
-        let key = "tabLesson.\(action.rawValue)"
-        guard !defaults.bool(forKey: key + ".learned"), defaults.integer(forKey: key + ".count") < 3,
-              now - defaults.double(forKey: "tabLesson.lastShown") >= 60 else { return false }
-        defaults.set(defaults.integer(forKey: key + ".count") + 1, forKey: key + ".count")
-        defaults.set(now, forKey: "tabLesson.lastShown")
-        return true
-    }
     private static weak var current: NSPanel?
     static func show(_ action: Action, in owner: NSWindow, from point: NSPoint) {
-        guard owner.isVisible, shouldShow(action) else { return }
+        guard owner.isVisible else { return }
         if let current { current.parent?.removeChildWindow(current); current.close() }
         // Emerge from the clicked tab and drift inward, using the toolbar ghost's
         // glyphs, halo, fade curve and duration.

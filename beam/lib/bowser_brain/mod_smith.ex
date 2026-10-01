@@ -683,7 +683,8 @@ defmodule BowserBrain.ModSmith do
     The pointer anchors a smooth lens that enlarges icons and opens space between
     neighboring rows. Overflowing strips scroll with fixed header/footer slots
     and a stable scroll range during hover. Reduced motion disables magnification.
-    Changing the active item scrolls it into view.
+    Changing the active item scrolls it into view. Active items use a clear
+    accent-colored outline instead of the recency halo and share the strip's lens motion.
     profile_avatar(profile_id) / profile_avatar(profile_id, opts), and
     profile_name(profile_id) / profile_name(profile_id, opts),
     bind to local profile identity (no remote asset URL); size: points (8–128).

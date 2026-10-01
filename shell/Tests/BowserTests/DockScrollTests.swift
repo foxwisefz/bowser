@@ -96,3 +96,77 @@ import XCTest
         }
     }
 }
+
+@MainActor final class DockLensMotionTests: XCTestCase {
+    func testActiveTabKeepsASeparateSilhouetteDuringSweepsAndExit() async throws {
+        _ = NSApplication.shared
+        let cursor = CursorModel()
+        let count = 10
+        func root(active: Int) -> some View {
+            HStack(spacing: 0) {
+                ForEach(0..<2) { column in
+                    MagnifyStripView(surfaceId: "edge_dock",
+                        node: ["items": (0..<count).map {
+                            ["id": String($0), "symbol": "square.fill", "active": column == 0 && $0 == active] as [String: Any]
+                        }, "size": 32.0, "spacing": 8.0, "magnify": 1.4], emit: { _, _ in })
+                        .frame(width: 48)
+                }
+            }.environmentObject(cursor).accentColor(.blue).background(Color.black)
+        }
+        let hosting = NSHostingView(rootView: root(active: 3))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 96, height: 540),
+            styleMask: [.borderless], backing: .buffered, defer: false)
+        window.contentView = hosting
+        window.orderFront(nil)
+        defer { window.orderOut(nil) }
+        try await Task.sleep(for: .milliseconds(150))
+        // Reverse direction before settling, then leave the strip abruptly.
+        let targets: [CGFloat?] = [110, 190, 270, 350, 430, 350, 270, 190, 110, 430, 110, nil]
+        var frame = 0
+        for (index, target) in targets.enumerated() {
+            if index.isMultiple(of: 3) { hosting.rootView = root(active: index.isMultiple(of: 2) ? 4 : 5) }
+            cursor.point = target.map { CGPoint(x: 24, y: $0) }
+            for _ in 0..<3 {
+                try await Task.sleep(for: .milliseconds(16))
+                hosting.layoutSubtreeIfNeeded()
+                let bitmap = try XCTUnwrap(hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds))
+                hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
+                // Compare the neutral icon silhouettes, excluding the blue
+                // selection outline. A collision merges adjacent runs.
+                let scale = CGFloat(bitmap.pixelsHigh) / 540
+                func silhouettes(column: Int) throws -> [Range<Int>] {
+                    var runs: [Range<Int>] = []
+                    var start: Int?
+                    let x = bitmap.pixelsWide * (column * 2 + 1) / 4
+                    for y in 0..<bitmap.pixelsHigh {
+                        let color = try XCTUnwrap(bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB))
+                        let bright = max(color.redComponent, color.greenComponent, color.blueComponent)
+                        let dark = min(color.redComponent, color.greenComponent, color.blueComponent)
+                        if bright * color.alphaComponent > 0.2 && bright - dark < 0.08 {
+                            if start == nil { start = y }
+                        } else if let lower = start {
+                            runs.append(lower..<y); start = nil
+                        }
+                    }
+                    if let start { runs.append(start..<bitmap.pixelsHigh) }
+                    return runs.filter { CGFloat($0.count) > 12 * scale }
+                }
+                let selected = try silhouettes(column: 0)
+                let reference = try silhouettes(column: 1)
+                XCTAssertEqual(selected.count, count, "Overlapping icons at moving frame \(frame)")
+                XCTAssertEqual(reference.count, count)
+                for (selected, reference) in zip(selected, reference) {
+                    XCTAssertEqual(CGFloat(selected.lowerBound), CGFloat(reference.lowerBound), accuracy: 2 * scale,
+                        "Selection must not change tab motion at frame \(frame)")
+                    XCTAssertEqual(CGFloat(selected.upperBound), CGFloat(reference.upperBound), accuracy: 2 * scale,
+                        "Selection must not change tab size at frame \(frame)")
+                }
+                if let directory = ProcessInfo.processInfo.environment["BOWSER_SURFACE_RENDER"] {
+                    let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+                    try png.write(to: URL(fileURLWithPath: directory).appendingPathComponent(String(format: "sweep-%03d.png", frame)))
+                }
+                frame += 1
+            }
+        }
+    }
+}

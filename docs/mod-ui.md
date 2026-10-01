@@ -304,6 +304,8 @@ When items exceed the available height, the strip scrolls vertically while heade
 and footer stay fixed. The pointer anchors a smooth magnifying lens: neighboring rows move apart as
 icons enlarge. Reserved space keeps the scroll range stable during hover;
 changing the active item brings it into view. Reduced motion disables the lens.
+The active item uses a clear accent-colored outline and shares the same lens motion as its
+neighbors; its outline replaces the recency halo.
 
 For example, `header: vstack([profile_avatar(profile_id, size: 22),
 profile_name(profile_id, size: 9)], spacing: 1)` follows the profile's current

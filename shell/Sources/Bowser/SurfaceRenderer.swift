@@ -378,13 +378,11 @@ struct StripLens {
     }
 }
 
-/// Animate the lens itself. Interpolating each icon's final size separately
-/// makes fast sweeps dissolve between two bulges instead of moving one lens.
-private struct StripLensRow<Content: View>: View, Animatable {
+/// One animation drives the entire strip, including the active tab. Per-row
+/// animation scopes can drift apart during fast sweeps and overlap neighbors.
+private struct AnimatedStripLens<Content: View>: View, Animatable {
     nonisolated var lens: StripLens
-    var center: CGFloat
-    var size: CGFloat
-    @ViewBuilder var content: (CGFloat) -> Content
+    @ViewBuilder var content: (StripLens) -> Content
 
     nonisolated var animatableData: AnimatablePair<CGFloat, CGFloat> {
         get { AnimatablePair(lens.focus, lens.strength) }
@@ -392,8 +390,9 @@ private struct StripLensRow<Content: View>: View, Animatable {
     }
 
     var body: some View {
-        let row = lens.row(center: center, size: size)
-        content(row.scale).offset(y: row.offset)
+        // Geometry is already interpolated by this lens. Child frames and
+        // selection overlays must not start a second implicit animation.
+        content(lens).transaction { $0.animation = nil }
     }
 }
 
@@ -411,11 +410,6 @@ struct MagnifyStripView: View {
     @EnvironmentObject var cursor: CursorModel
     @Environment(\.colorScheme) private var colorScheme
 
-    // Dock bounce (bowser-browser-r0g): when the active item changes, the
-    // newly active icon hops outward once. The stamp is the animation
-    // trigger; inactive items are guarded to zero offset so losing
-    // activation never twitches.
-    @State private var bounceStamp = 0
     @State private var scrollOffset: CGFloat = 0
     @State private var lastLensY: CGFloat = 0
     @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
@@ -513,6 +507,7 @@ struct MagnifyStripView: View {
                 }
                 ScrollViewReader { proxy in
                   ScrollView(.vertical) {
+                    AnimatedStripLens(lens: lens) { animatedLens in
                     VStack(spacing: spacing) {
                     ForEach(identifiedItems) { entry in
                         let index = entry.index
@@ -523,12 +518,14 @@ struct MagnifyStripView: View {
                         // decay ticks crossfade instead of snapping.
                         let dim = min(1, max(0.1, CGFloat(item["dim"] as? Double ?? 1)))
                         let glow = min(1, max(0, CGFloat(item["glow"] as? Double ?? 0)))
-                        StripLensRow(lens: lens,
+                        let row = animatedLens.row(
                             center: top - scrollOffset + CGFloat(index) * (baseSize + spacing) + baseSize / 2,
-                            size: baseSize) { s in
+                            size: baseSize)
+                        let s = row.scale
+                        Group {
                             Button(action: { emit(eventId, item["id"]) }) {
                                 ZStack {
-                                    if glow > 0 {
+                                    if glow > 0 && !active {
                                         Circle()
                                             .fill(Color(nsColor: SurfaceServices.color(hex: "#ffb340") ?? .systemOrange))
                                             .frame(width: min(baseSize * s + 12, geo.size.width),
@@ -537,27 +534,28 @@ struct MagnifyStripView: View {
                                             .opacity(0.5 * glow)
                                             .animation(.easeInOut(duration: 0.8), value: glow)
                                     }
-                                    if active {
-                                        RoundedRectangle(cornerRadius: 11, style: .continuous)
-                                            .fill(.white.opacity(0.16))
-                                            .frame(width: min(baseSize * s + 8, geo.size.width - 2),
-                                                   height: baseSize * s + 8)
-                                    }
                                     // Decay goes through icon()'s opacity param
                                     // so the tint dot overlay stays vivid on
                                     // dimmed items.
                                     icon(for: item, opacity: dim)
                                         .frame(width: baseSize * s, height: baseSize * s)
                                         .animation(.easeOut(duration: 1.2), value: dim)
-                                        .shadow(color: .black.opacity(0.35), radius: 3, y: 1)
-                                    if active {
-                                        RoundedRectangle(cornerRadius: 11, style: .continuous)
-                                            .strokeBorder(Color.accentColor, lineWidth: 2)
-                                            .frame(width: min(baseSize * s + 8, geo.size.width - 2),
-                                                   height: baseSize * s + 8)
-                                    }
+                                        .shadow(color: .black.opacity(0.18), radius: 1, y: 1)
+
                                 }
                                 .frame(height: baseSize * s)
+                                .overlay {
+                                    if active {
+                                        // The outline follows the same lens geometry
+                                        // without changing the icon's layout or timing.
+                                        let side = min(baseSize * s + 6, geo.size.width - 2)
+                                        RoundedRectangle(cornerRadius: side * 0.26, style: .continuous)
+                                            .strokeBorder(Color.accentColor, lineWidth: 2)
+                                            .frame(width: side, height: side)
+                                            .transition(.identity)
+                                            .allowsHitTesting(false)
+                                    }
+                                }
                                 .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
@@ -574,19 +572,13 @@ struct MagnifyStripView: View {
                             .help(item["title"] as? String ?? "")
                             .accessibilityValue(active ? "Active tab" : "")
                         }
+                        .offset(y: row.offset)
                         .frame(height: baseSize)
-                        .animation(motionDisabled ? nil : .interactiveSpring(response: 0.22, dampingFraction: 0.86), value: cursor.point)
-                        // The hop: out fast, settle back springy. The left-edge
-                        // dock bounces rightward, into the page.
-                        .phaseAnimator([false, true], trigger: active && !motionDisabled ? bounceStamp : -1) { content, out in
-                            content.offset(x: out && active && !motionDisabled ? (surfaceId == "edge_dock" ? 4 : 10) : 0)
-                        } animation: { out in
-                            out ? .spring(duration: 0.15, bounce: 0.4)
-                                : .spring(duration: 0.45, bounce: 0.65)
-                        }
                         .id(entry.id)
                     }
                     }
+                    }
+                    .animation(motionDisabled ? nil : .interactiveSpring(response: 0.18, dampingFraction: 1), value: cursor.point)
                     .padding(.vertical, lensPad)
                     .frame(maxWidth: .infinity)
                   }
@@ -600,7 +592,6 @@ struct MagnifyStripView: View {
                   .onAppear { if overflowing, let activeId { proxy.scrollTo(activeId) } }
                   .onChange(of: activeId) { _, newValue in
                       if let newValue {
-                          bounceStamp += 1
                           if overflowing { proxy.scrollTo(newValue) }
                       }
                   }
