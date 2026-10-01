@@ -3,6 +3,27 @@ import XCTest
 @testable import Bowser
 
 final class CaptureModeTests: XCTestCase {
+    @MainActor func testProfileChromeFollowsProfileCountIncludingDuringCapture() throws {
+        _ = NSApplication.shared
+        let original = Profile.all
+        defer { Profile.all = original }
+        Profile.all = [.defaultProfile]
+        let browser = BrowserWindowController(profile: .defaultProfile)
+        defer { browser.window?.close() }
+        let indicator = browser.captureChromeViews[1]
+        XCTAssertTrue(indicator.isHidden)
+        browser.setProfileIndicatorVisible(true, animated: false)
+        XCTAssertTrue(indicator.isHidden)
+        Profile.all.append(Profile(id: "work", name: "Work", tint: nil, icon: nil, uuid: UUID().uuidString))
+        browser.profileDidChange()
+        XCTAssertFalse(indicator.isHidden)
+        browser.setCaptureMode(true)
+        Profile.all = [.defaultProfile]
+        browser.profileDidChange()
+        browser.setCaptureMode(false)
+        XCTAssertTrue(indicator.isHidden)
+    }
+
     func testManualModeSurvivesSharingEnding() {
         var state = CaptureModeState()
         XCTAssertFalse(state.isEnabled)

@@ -5,6 +5,26 @@ defmodule EdgeDockTabsTest do
 
   defp ev(state, map), do: BowserBrain.TabDeck.handle_event(map, state)
 
+  test "profile header updates with an unchanged tab list when profiles change" do
+    previous = Application.get_env(:bowser_brain, :profiles_path)
+    path = Path.join(System.tmp_dir!(), "dock-profiles-#{System.unique_integer([:positive])}.json")
+    Application.put_env(:bowser_brain, :profiles_path, path)
+    on_exit(fn ->
+      if previous, do: Application.put_env(:bowser_brain, :profiles_path, previous),
+        else: Application.delete_env(:bowser_brain, :profiles_path)
+      File.rm(path)
+    end)
+    File.write!(path, JSON.encode!([%{"id" => "default", "name" => "Personal"}]))
+    state = base() |> ev(%{"event" => "hello", "tabs" => [%{"id" => 1}], "active" => 1})
+    assert state.last_header == nil
+    File.write!(path, JSON.encode!([%{"id" => "default", "name" => "Personal"}, %{"id" => "work", "name" => "Work"}]))
+    added = ev(state, %{"event" => "profiles_changed"})
+    assert added.last_items == state.last_items
+    assert added.last_header.profile_id == "default"
+    File.write!(path, JSON.encode!([%{"id" => "default", "name" => "Personal"}]))
+    assert ev(added, %{"event" => "profiles_changed"}).last_header == nil
+  end
+
   test "profile cycle follows profile order, wraps, and reuses existing tabs" do
     profiles = Enum.map(["default", "work", "reading"], &%{"id" => &1})
     state = %{tabs: %{1 => %{profile: "default"}, 2 => %{profile: "work"}}, order: [1, 2], active: 1}

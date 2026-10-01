@@ -27,7 +27,7 @@ defmodule BowserBrain.ViewTest do
   end
 
   test "strip chrome is a composable JSON tree, including profile bindings and actions" do
-    header = BowserBrain.TabDeck.profile_header("work")
+    header = BowserBrain.TabDeck.profile_header("work", [%{"id" => "default"}, %{"id" => "work"}])
     footer = View.action("New tab", event: "new", symbol: "plus")
     tree = View.magnify_strip([], header: header, footer: footer, header_height: 48, header_outside: true,
       footer_height: 32, chrome: "notch", background: "#112233")

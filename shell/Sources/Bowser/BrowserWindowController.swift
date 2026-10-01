@@ -41,6 +41,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     private var clusterWidth: NSLayoutConstraint?
     private var toolbarTop: NSLayoutConstraint?
     private var profileTop: NSLayoutConstraint?
+    private var profileSpacing: NSLayoutConstraint?
+    private var singleProfileSpacing: NSLayoutConstraint?
     private var toolbarIntentObserver: ToolbarIntentObserver?
     private var profileIntentObserver: ToolbarIntentObserver?
     private(set) var isCaptureMode = false
@@ -204,9 +206,10 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
                 notch.leadingAnchor.constraint(equalTo: titlebar.leadingAnchor, constant: ToolbarCornerGeometry.inset),
                 notch.heightAnchor.constraint(equalToConstant: ToolbarCornerGeometry.height),
                 notch.trailingAnchor.constraint(equalTo: titleViewport.trailingAnchor, constant: 12),
-                notch.trailingAnchor.constraint(lessThanOrEqualTo: profileNotch.leadingAnchor, constant: -8),
                 titleViewport.widthAnchor.constraint(greaterThanOrEqualToConstant: 0),
             ])
+            profileSpacing = notch.trailingAnchor.constraint(lessThanOrEqualTo: profileNotch.leadingAnchor, constant: -8)
+            singleProfileSpacing = notch.trailingAnchor.constraint(lessThanOrEqualTo: titlebar.trailingAnchor, constant: -ToolbarCornerGeometry.inset)
             let top = notch.topAnchor.constraint(equalTo: titlebar.topAnchor, constant: ToolbarCornerGeometry.inset)
             toolbarTop = top
             top.isActive = true
@@ -223,6 +226,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
             })
             profileIntentObserver = ToolbarIntentObserver(window: window, mode: .reference, target: { [weak self, weak window] in
                 guard let self, let window else { return .zero }
+                guard !self.profileNotch.isHidden else { return .zero }
                 let frame = window.convertToScreen(self.profileNotch.convert(self.profileNotch.bounds, to: nil))
                 return NSRect(x: frame.minX,
                               y: window.frame.maxY - ToolbarCornerGeometry.inset - ToolbarCornerGeometry.height,
@@ -659,6 +663,11 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private func refreshProfileBadge() {
+        let hidden = Profile.all.count <= 1 || SiteAppConfiguration.current != nil
+        profileNotch.isHidden = hidden || isCaptureMode
+        if isCaptureMode { captureHiddenViews[ObjectIdentifier(profileNotch)] = (profileNotch, hidden) }
+        profileSpacing?.isActive = !hidden
+        singleProfileSpacing?.isActive = hidden
         profileBadge.stringValue = profile.label
         profileBadge.textColor = profile.color ?? .white
         profileBadge.isHidden = SiteAppConfiguration.current != nil || (profile.id == "default" && profile.icon == nil && profile.tint == nil && profile.avatar == nil)
@@ -742,7 +751,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     }
 
     func setProfileIndicatorVisible(_ visible: Bool, animated: Bool = true) {
-        guard !isCaptureMode else { return }
+        guard !isCaptureMode, !profileNotch.isHidden else { return }
         let offset = visible ? ToolbarCornerGeometry.inset : -ToolbarCornerGeometry.height * 0.5
         guard profileTop?.constant != offset else { return }
         ToolbarRevealAnimation.perform(views: [profileNotch],

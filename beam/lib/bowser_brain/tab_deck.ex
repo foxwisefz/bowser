@@ -53,6 +53,8 @@ defmodule BowserBrain.TabDeck do
     state |> put_tab(wv, profile: ev["profile"]) |> apply_order(ev["order"]) |> render()
   end
 
+  def handle_event(%{"event" => "profiles_changed"}, state), do: render(state)
+
   def handle_event(%{"event" => "tabs_reordered", "order" => order}, state),
     do: state |> apply_order(order) |> render()
 
@@ -309,14 +311,16 @@ defmodule BowserBrain.TabDeck do
         end
       end)
 
+    header = profile_header(active_profile(state), profiles)
+
     # Decay ticks land here between events; only ship real changes.
-    if items == Map.get(state, :last_items) do
+    if items == Map.get(state, :last_items) and header == Map.get(state, :last_header) do
       state
     else
       BowserBrain.Surface.show(
         :edge_dock,
         magnify_strip(items, size: 32, spacing: 8, magnify: 1.4, event: "select",
-          header: profile_header(active_profile(state)), header_height: 82, header_outside: true, chrome: "notch")
+          header: header, header_height: 82, header_outside: true, chrome: "notch")
         |> Map.put(:profile_id, active_profile(state)),
         title: "Tabs",
         kind: :edge,
@@ -326,7 +330,7 @@ defmodule BowserBrain.TabDeck do
         width: 48
       )
 
-      Map.put(state, :last_items, items)
+      state |> Map.put(:last_items, items) |> Map.put(:last_header, header)
     end
   end
 
@@ -367,9 +371,11 @@ defmodule BowserBrain.TabDeck do
     |> then(&("#" <> String.downcase(&1)))
   end
 
-  def profile_header(nil), do: nil
-  def profile_header(id) do
-    profile = Enum.find(BowserBrain.Profiles.list(), &(&1["id"] == id)) || %{}
+  def profile_header(id), do: profile_header(id, BowserBrain.Profiles.list())
+  def profile_header(nil, _profiles), do: nil
+  def profile_header(_id, profiles) when length(profiles) <= 1, do: nil
+  def profile_header(id, profiles) do
+    profile = Enum.find(profiles, &(&1["id"] == id)) || %{}
     name = if id == "default", do: "Default", else: profile["name"] || id
     profile_avatar(id, size: 18, badge: true, help: "Profile: " <> name)
   end
