@@ -236,12 +236,21 @@ final class SurfaceManager {
 
     private var edgeConfigs: [String: (edge: String, peek: Double, width: Double, attach: String)] = [:]
     private var edgeRevealed: Set<String> = []
+    private var dockAlwaysShow = false
+    private var dockReduceMotion = false
     private var edgeCursor: [String: CursorModel] = [:]
 
     private func showEdge(
         id: String, edge: String, peek: Double, width: Double, attach: String, tree: [String: Any]
     ) {
         observeActivation()
+        if id == "edge_dock" {
+            let preferences = tree["dock_preferences"] as? [String: Any] ?? [:]
+            let reduced = preferences["reduce_motion"] as? Bool ?? false
+            if reduced && !dockReduceMotion { edgeRevealed.remove(id) }
+            dockAlwaysShow = preferences["always_show"] as? Bool ?? false
+            dockReduceMotion = reduced
+        }
         // Remember the browser owner even though screen-attached docks are not child windows.
         if activeBrowserWindow == nil {
             activeBrowserWindow = NSApp.mainWindow.flatMap { $0.windowController is BrowserWindowController ? $0 : nil }
@@ -364,6 +373,7 @@ final class SurfaceManager {
         pulseGeneration += 1
         let generation = pulseGeneration
         for id in edgeConfigs.keys {
+            if id == "edge_dock" && dockReduceMotion { continue }
             setEdgeRevealed(id, true)
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { [weak self] in
@@ -400,7 +410,7 @@ final class SurfaceManager {
 
         let width = CGFloat(config.width)
         let hidden = width - CGFloat(config.peek)
-        let revealed = edgeRevealed.contains(id)
+        let revealed = edgeRevealed.contains(id) || (id == "edge_dock" && dockAlwaysShow)
 
         // Collapsed window-attached surfaces park fully OUTSIDE the window:
         // overlapping the edge stole the window's resize zone.
@@ -419,7 +429,7 @@ final class SurfaceManager {
             x: x, y: reference.minY,
             width: width, height: reference.height - topInset
         )
-        if animated {
+        if animated && !(id == "edge_dock" && dockReduceMotion) {
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = 0.18
                 context.timingFunction = CAMediaTimingFunction(name: .easeOut)

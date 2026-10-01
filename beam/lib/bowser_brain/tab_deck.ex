@@ -27,7 +27,7 @@ defmodule BowserBrain.TabDeck do
   # Full tab snapshot on connect — rebuild from scratch (also prunes closed tabs).
   def handle_event(%{"event" => "hello"} = ev, state) do
     BowserBrain.Chrome.hide_tab_bar()
-    base = %{state | tabs: %{}, order: []} |> Map.put(:last_items, nil)
+    base = %{state | tabs: %{}, order: []} |> Map.put(:last_items, nil) |> Map.put(:preferences, BowserBrain.Settings.dock_preferences())
 
     state =
       ev
@@ -52,6 +52,9 @@ defmodule BowserBrain.TabDeck do
   def handle_event(%{"event" => "tab_opened", "webview" => wv} = ev, state) do
     state |> put_tab(wv, profile: ev["profile"]) |> apply_order(ev["order"]) |> render()
   end
+
+  def handle_event(%{"event" => "dock_settings_changed"}, state),
+    do: state |> Map.put(:preferences, BowserBrain.Settings.dock_preferences()) |> render()
 
   def handle_event(%{"event" => "profiles_changed"}, state), do: render(state)
 
@@ -313,15 +316,18 @@ defmodule BowserBrain.TabDeck do
 
     header = profile_header(active_profile(state), profiles)
 
+    preferences = Map.get_lazy(state, :preferences, &BowserBrain.Settings.dock_preferences/0)
+
     # Decay ticks land here between events; only ship real changes.
-    if items == Map.get(state, :last_items) and header == Map.get(state, :last_header) do
+    if items == Map.get(state, :last_items) and header == Map.get(state, :last_header) and preferences == Map.get(state, :last_preferences) do
       state
     else
       BowserBrain.Surface.show(
         :edge_dock,
         magnify_strip(items, size: 32, spacing: 8, magnify: 1.4, event: "select",
           header: header, header_height: 82, header_outside: true, chrome: "notch")
-        |> Map.put(:profile_id, active_profile(state)),
+        |> Map.put(:profile_id, active_profile(state))
+        |> Map.put(:dock_preferences, preferences),
         title: "Tabs",
         kind: :edge,
         edge: :left,
@@ -330,7 +336,7 @@ defmodule BowserBrain.TabDeck do
         width: 48
       )
 
-      state |> Map.put(:last_items, items) |> Map.put(:last_header, header)
+      state |> Map.put(:last_items, items) |> Map.put(:last_header, header) |> Map.put(:last_preferences, preferences) |> Map.put(:preferences, preferences)
     end
   end
 

@@ -3,6 +3,37 @@ import XCTest
 @testable import Bowser
 
 @MainActor final class DockWindowVisibilityTests: XCTestCase {
+    func testReducedMotionSuppressesPulseButAllowsHoverAndAlwaysShow() throws {
+        let controller = BrowserWindowController(profile: .defaultProfile)
+        let window = try XCTUnwrap(controller.window)
+        let manager = SurfaceManager()
+        defer { manager.handle(["surface": "close", "id": "edge_dock"]); window.close() }
+        window.makeKeyAndOrderFront(nil)
+        manager.orderAllFront(parent: window)
+        let before = Set(NSApp.windows.map(ObjectIdentifier.init))
+        func show(always: Bool) {
+            manager.handle(["surface": "show", "id": "edge_dock", "kind": "edge", "attach": "screen",
+                "profile": "default", "width": 48.0,
+                "view": ["t": "text", "text": "Tabs", "dock_preferences": ["always_show": always, "reduce_motion": true]]])
+        }
+        show(always: false)
+        let panel = try XCTUnwrap(NSApp.windows.first { !before.contains(ObjectIdentifier($0)) } as? NSPanel)
+        let hidden = panel.frame
+        manager.pulseEdges(for: 0.01)
+        XCTAssertEqual(panel.frame, hidden)
+        manager.setEdgeRevealed("edge_dock", true)
+        XCTAssertNotEqual(panel.frame, hidden)
+        manager.setEdgeRevealed("edge_dock", false)
+        XCTAssertEqual(panel.frame, hidden)
+        show(always: true)
+        let visible = panel.frame
+        XCTAssertNotEqual(visible, hidden)
+        manager.setEdgeRevealed("edge_dock", false)
+        XCTAssertEqual(panel.frame, visible)
+        show(always: false)
+        XCTAssertEqual(panel.frame, hidden)
+    }
+
     func testMinimizedProfileDockStaysHiddenThroughUpdatesAndReturnsOnRestore() async throws {
         let controller = BrowserWindowController(profile: .defaultProfile)
         let window = try XCTUnwrap(controller.window)

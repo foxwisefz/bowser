@@ -38,6 +38,25 @@ defmodule BowserBrain.SettingsTest do
     assert Settings.all() == %{}
   end
 
+  test "DockTabs defaults and immediate controls preserve typed preferences" do
+    assert Settings.dock_preferences() == %{always_show: false, reduce_motion: false}
+    state = %{declared: %{}}
+    edit = fn id, value ->
+      Settings.handle_info({:browser_event, %{"event" => "surface", "surface" => "settings", "id" => id, "value" => value}}, state)
+    end
+    deck = BowserBrain.TabDeck.handle_event(%{"event" => "hello", "tabs" => [], "active" => nil}, BowserBrain.TabDeck.initial_state())
+    edit.("dock_always_show", nil)
+    updated = BowserBrain.TabDeck.handle_event(%{"event" => "dock_settings_changed"}, deck)
+    assert updated.last_items == deck.last_items
+    assert updated.last_preferences.always_show
+    edit.("dock_reduce_motion", true)
+    assert Settings.dock_preferences() == %{always_show: true, reduce_motion: true}
+    edit.("dock_auto_hide", nil)
+    assert Settings.dock_preferences() == %{always_show: false, reduce_motion: true}
+    edit.("dock_reduce_motion", false)
+    assert Settings.dock_preferences() == %{always_show: false, reduce_motion: false}
+  end
+
   test "deleting an unset key works before the settings directory exists" do
     assert :ok = Settings.delete("absent")
     assert Settings.all() == %{}
@@ -65,7 +84,8 @@ defmodule BowserBrain.SettingsTest do
     stored = Map.new(internal ++ ["old_unused_key"], &{&1, "configured"})
     Enum.each(stored, fn {key, value} -> Settings.put(key, value) end)
 
-    assert %{children: []} = Settings.view(declared, Settings.all())
+    tree = JSON.encode!(Settings.view(declared, Settings.all()))
+    for key <- internal, do: refute(tree =~ key)
     assert Settings.all() == stored
   end
 

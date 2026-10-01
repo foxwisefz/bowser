@@ -378,6 +378,7 @@ struct MagnifyStripView: View {
     private var headerOutside: Bool { node["header_outside"] as? Bool == true }
     private var headerHeight: CGFloat { header == nil ? 0 : min(240, max(0, node["header_height"] as? Double ?? 48)) }
     private var footerHeight: CGFloat { footer == nil ? 0 : min(240, max(0, node["footer_height"] as? Double ?? 48)) }
+    private var reduceDockMotion: Bool { surfaceId == "edge_dock" && (node["dock_preferences"] as? [String: Any])?["reduce_motion"] as? Bool == true }
     private var notch: Bool { (node["chrome"] as? String ?? (surfaceId == "edge_dock" ? "notch" : "none")) == "notch" }
 
     private var items: [[String: Any]] { node["items"] as? [[String: Any]] ?? [] }
@@ -527,11 +528,11 @@ struct MagnifyStripView: View {
                         }
                         .help(item["title"] as? String ?? "")
                         .accessibilityValue(active ? "Active tab" : "")
-                        .animation(.easeOut(duration: 0.09), value: cursor.point)
+                        .animation(reduceDockMotion ? nil : .easeOut(duration: 0.09), value: cursor.point)
                         // The hop: out fast, settle back springy. The left-edge
                         // dock bounces rightward, into the page.
-                        .phaseAnimator([false, true], trigger: active ? bounceStamp : -1) { content, out in
-                            content.offset(x: out && active ? (surfaceId == "edge_dock" ? 4 : 10) : 0)
+                        .phaseAnimator([false, true], trigger: active && !reduceDockMotion ? bounceStamp : -1) { content, out in
+                            content.offset(x: out && active && !reduceDockMotion ? (surfaceId == "edge_dock" ? 4 : 10) : 0)
                         } animation: { out in
                             out ? .spring(duration: 0.15, bounce: 0.4)
                                 : .spring(duration: 0.45, bounce: 0.65)
