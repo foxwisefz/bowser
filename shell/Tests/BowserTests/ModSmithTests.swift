@@ -163,7 +163,7 @@ final class ModSmithTests: XCTestCase {
 
     @MainActor func testGenericNextStepsAndRepairNoticesAreIndependent() {
         let model = ModSmithModel()
-        for action in ["reply", "resume"] {
+        for action in ["reply", "resume", "repair"] {
             let project: [String: Any] = [
                 "id": "organizer", "name": "Organizer", "scope": "browser", "url": "",
                 "status": "needs_help", "summary": "Choose where to apply this change.",

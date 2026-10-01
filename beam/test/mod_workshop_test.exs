@@ -481,7 +481,60 @@ defmodule BowserBrain.ModWorkshopTest do
     send(ModWorkshop, {:browser_event, %{"event" => "mod_script_fault", "webview" => 7, "reason" => "observer_loop"}})
     [project] = complete(pid, [file("body {}")], %{"status" => "active"}).data["projects"]
     assert project["status"] == "failed"
-    assert project["summary"] =~ "observer"
+    assert project["summary"] == BowserBrain.ModSmithOutcome.runtime_fault_summary()
+    assert project["next_step"]["action"] == "repair"
+    assert event("continue", %{"project" => project["id"]}).run != nil
+    assert_receive {:runner, _, _, prompt, _, _}, 1000
+    refute prompt =~ "The owner confirmed completing this prerequisite"
+  end
+
+  test "observer faults trigger internal repair and clear only after a verified replacement" do
+    on_exit(fn -> Application.delete_env(:bowser_brain, :modsmith_verifier) end)
+    event("submit", %{"text" => "Add a page control", "scope" => "browser"})
+    assert_receive {:runner, pid, token, _, _, _}, 1000
+    name = "fault-#{token}.js"
+    args = %{"host" => "example.com", "name" => name, "content" => "window.fixture = 1"}
+    assert %{ok: true} = ModWorkshop.tool(token, "put_payload", args)
+    output = JSON.encode!(%{status: "active", summary: "Verified", files: [%{path: "sites/example.com/#{name}"}]})
+    send(ModWorkshop, {:browser_event, %{"event" => "mod_script_fault", "webview" => 7, "reason" => "observer_loop"}})
+    assert {:error, _} = BowserBrain.ModVerification.check(output, token)
+    partial = JSON.encode!(%{status: "failed", files: []})
+    assert {:error, _} = BowserBrain.ModVerification.check(partial, token)
+    assert :sys.get_state(ModWorkshop).run.script_fault
+    assert %{ok: true} = ModWorkshop.tool(token, "put_payload", %{args | "content" => "window.fixture = 2"})
+    assert :sys.get_state(ModWorkshop).run.script_fault
+    assert %{ok: true} = ModWorkshop.tool(token, "shell_theme", %{})
+    Application.put_env(:bowser_brain, :modsmith_verifier, fn prompt ->
+      data = JSON.decode!(prompt)
+      assert data["script_fault"]
+      assert data["repair_write"] > data["fault_write"]
+      {:ok, JSON.encode!(%{verified: true, reason: "Replacement checked without a pause", evidence: [List.last(data["receipts"])["id"]]})}
+    end)
+    assert :ok = BowserBrain.ModVerification.check(output, token)
+    refute :sys.get_state(ModWorkshop).run.script_fault
+    send(pid, {:result, {nil, {:output, output}}})
+    await(fn -> :sys.get_state(ModWorkshop).run == nil end)
+    assert hd(:sys.get_state(ModWorkshop).data["projects"])["status"] == "active"
+  end
+
+  test "direct agent attempts observer repair before returning a user-facing result", %{root: root} do
+    File.write!(Path.join(root, "registration.json"), JSON.encode!(%{"telemetryToken" => "fixture-token"}))
+    on_exit(fn -> Application.delete_env(:bowser_brain, :ai_transport) end)
+    event("submit", %{"text" => "Create page control"})
+    assert_receive {:runner, _, token, _, _, _}, 1000
+    send(ModWorkshop, {:browser_event, %{"event" => "mod_script_fault", "webview" => 7, "reason" => "observer_loop"}})
+    Process.put(:modsmith_run, token)
+    Process.put(:fault_calls, 0)
+    Application.put_env(:bowser_brain, :ai_transport, fn _, _, body, _ ->
+      n = Process.get(:fault_calls)
+      Process.put(:fault_calls, n + 1)
+      if n > 0, do: assert(List.last(body["input"])["content"] =~ "runaway page observer")
+      output = JSON.encode!(%{status: "failed", summary: "Could not finish", files: []})
+      {:ok, %{"output" => [%{"type" => "message", "content" => [%{"type" => "output_text", "text" => output}]}]}}
+    end)
+    assert {nil, {:output, _}} = BowserBrain.DirectAgent.run("fixture", nil, fn _ -> :ok end, nil)
+    assert Process.get(:fault_calls) == 3
+    assert :sys.get_state(ModWorkshop).run.script_fault
   end
 
   test "saving files preserves nonworking outcomes and allows continuation" do

@@ -640,6 +640,9 @@ struct ModSmithScreen: View {
                                         }
                                         Button(step.options == nil ? "Reply" : "Answer another way", systemImage: "text.bubble") { composerFocused = true }
                                             .buttonStyle(.bordered).disabled(model.snapshot.busy)
+                                    } else if step.action == "repair" {
+                                        Button("Try repair", systemImage: "wrench.and.screwdriver") { model.action("continue", project: project.id) }
+                                            .buttonStyle(.borderedProminent).disabled(model.snapshot.busy)
                                     } else if step.action == "resume" {
                                         Button("I’ve done this — resume", systemImage: "play.fill") { model.action("continue", project: project.id) }
                                             .buttonStyle(.borderedProminent).disabled(model.snapshot.busy)

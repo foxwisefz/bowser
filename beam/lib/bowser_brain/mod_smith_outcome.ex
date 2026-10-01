@@ -1,6 +1,14 @@
 defmodule BowserBrain.ModSmithOutcome do
   @moduledoc "User-facing ModSmith activity and next steps, independent of mod behavior."
 
+  @legacy_fault "A page hook was paused because its observer kept triggering itself. Repair the hook, then run verification again."
+  def runtime_fault_summary, do: "Bowser paused this customization to keep the page responsive. It still needs a fix."
+  def runtime_fault_step, do: %{"title" => "Let ModSmith repair it", "detail" => "ModSmith can try fixing the problem and test the result. Your existing work is saved.", "action" => "repair"}
+
+  def visible_project(%{"summary" => @legacy_fault} = project),
+    do: project |> Map.put("summary", runtime_fault_summary()) |> Map.put("next_step", runtime_fault_step())
+  def visible_project(project), do: project
+
   def activity("enable_and_test"), do: "Mod enabled. Testing it now…"
   def activity("continue"), do: "Resuming testing and fixes…"
   def activity("retry"), do: "Trying your request again…"
@@ -16,6 +24,7 @@ defmodule BowserBrain.ModSmithOutcome do
   def visible_turn(turn) do
     label = if turn["role"] == "user", do: legacy_activity(turn["text"]), else: nil
     turn = if label, do: Map.merge(turn, %{"role" => "activity", "text" => label}), else: turn
+    turn = if turn["text"] == @legacy_fault, do: Map.put(turn, "text", runtime_fault_summary()), else: turn
     Map.drop(turn, ["instruction"])
   end
 

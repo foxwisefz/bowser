@@ -2,6 +2,16 @@ defmodule BowserBrain.ModSmithOutcomeTest do
   use ExUnit.Case, async: true
   alias BowserBrain.ModSmithOutcome, as: Outcome
 
+  test "existing runtime failure conversations get a repair action without changing stored history" do
+    legacy = "A page hook was paused because its observer kept triggering itself. Repair the hook, then run verification again."
+    saved = %{"summary" => legacy, "status" => "failed"}
+    visible = Outcome.visible_project(saved)
+    assert visible["next_step"]["action"] == "repair"
+    assert visible["summary"] == Outcome.runtime_fault_summary()
+    assert saved["summary"] == legacy
+    assert Outcome.visible_turn(%{"role" => "assistant", "text" => legacy})["text"] == visible["summary"]
+  end
+
   test "usage guides require an entry point and useful bounded steps" do
     assert Outcome.usage(%{}) == nil
     assert Outcome.usage(%{"usage" => %{"entry_point" => "", "steps" => ["Click"]}}) == nil

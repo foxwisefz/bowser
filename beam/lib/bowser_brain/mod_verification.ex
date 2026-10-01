@@ -16,6 +16,8 @@ defmodule BowserBrain.ModVerification do
     successful compilation, enabled flag or source inspection alone does not prove its action works.
     A disabled core action, rejected request or graceful error message does not fulfill that action.
     UI-only requests CAN be verified by observed UI state. Successful no-op decisions can be valid.
+    If script_fault is true, the browser paused a runaway observer. Require live evidence
+    that the replacement hook runs correctly after reload without another pause.
     Earlier failures may be resolved by later relevant successful checks; do not blindly reject all errors.
     Do not accept invented causation or an untested repair. If a service probe succeeds, also require
     evidence that the installed feature uses it correctly. Respect existing owner authorization;
@@ -54,23 +56,24 @@ defmodule BowserBrain.ModVerification do
   end
 
   def check(output, token) do
-    with true <- active?(output) or external_blocker?(output),
-         {:ok, context} <- GenServer.call(ModWorkshop, {:verification_context, token, output}) do
-      context = Map.put(context, :assessment, if(external_blocker?(output), do: "blocker", else: "outcome"))
-      verdict = if context.documentation, do: :ok, else: assess(context)
-
-      GenServer.call(
-        ModWorkshop,
-        {:verification_result, token, ModAuditor.digest(output), verdict}
-      )
-
-      verdict
+    review? = active?(output) or external_blocker?(output)
+    with {:ok, context} <- GenServer.call(ModWorkshop, {:verification_context, token, output}) do
+      if review? or Map.get(context, :script_fault, false) do
+        context = Map.put(context, :assessment, if(external_blocker?(output), do: "blocker", else: "outcome"))
+        verdict = if context.documentation and not Map.get(context, :script_fault, false), do: :ok, else: assess(context)
+        GenServer.call(ModWorkshop, {:verification_result, token, ModAuditor.digest(output), verdict})
+      else
+        :ok
+      end
     else
-      false -> :ok
-      _ -> {:error, "The run ended before verification completed."}
+      _ -> if review?, do: {:error, "The run ended before verification completed."}, else: :ok
     end
   catch
     :exit, _ -> {:error, "Verification is unavailable; the result remains unverified."}
+  end
+
+  def runtime_fault_instruction do
+    "The browser paused a runaway page observer. Inspect mod_diagnostics and the current source, repair the self-triggering hook, reinstall it, then reload and verify the requested behavior without another pause. This is an implementation failure for you to repair, not an instruction for the owner."
   end
 
   def external_blocker?(output) do
@@ -94,6 +97,9 @@ defmodule BowserBrain.ModVerification do
       end)
 
     cond do
+      Map.get(context, :script_fault, false) and Map.get(context, :repair_write, 0) <= Map.get(context, :fault_write, 0) ->
+        {:error, runtime_fault_instruction()}
+
       not blocker and not context.installed ->
         {:error,
          "Install the proposed files and verify that exact version before reporting success."}
