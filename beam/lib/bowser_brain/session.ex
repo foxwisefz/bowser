@@ -32,17 +32,13 @@ defmodule BowserBrain.Session do
   @impl true
   def init(nil) do
     {:ok, _} = Registry.register(BowserBrain.Events, :browser_event, nil)
-    # cookies: %{origin => %{url: sample_url, cookies: [map]}} — snapshotted
-    # from the living engine, replayed into a fresh one BEFORE tabs navigate,
-    # so restored pages load already logged in. Brain memory only: secrets
-    # never touch disk (ADR 0004 territory).
     # disk: %{tabs: [...], active: index} persisted at ~/.bowser/session.json
     # so a FULL-stack restart (brain + engine dying together) still restores
-    # tabs. Logins survive via WebKit's own on-disk store.
+    # tabs. The native shell preserves profile cookies across clean restarts.
     # restore: %{remaining: n} — counts tab_opened events after a restore
     # until the remembered active tab's webview appears, then activates it.
     # profiles: %{webview => profile id} — which window family a tab lives in.
-    {:ok, %{tabs: %{}, active: nil, cookies: %{}, disk: load_disk(), restore: nil, profiles: %{}}}
+    {:ok, %{tabs: %{}, active: nil, disk: load_disk(), restore: nil, profiles: %{}}}
   end
 
   @impl true
@@ -110,18 +106,9 @@ defmodule BowserBrain.Session do
   def handle_info({:browser_event, %{"event" => "tabs_reordered"} = event}, state),
     do: {:noreply, state |> note_order(event) |> persist()}
 
-  # Page finished loading: snapshot its origin's cookie jar.
-  def handle_info({:browser_event, %{"event" => "load_status", "status" => 2, "webview" => wv}}, state) do
-    with url when is_binary(url) <- state.tabs[wv],
-         origin when is_binary(origin) <- origin_of(url),
-         {:ok, cookies} <- safe_get_cookies(url, Map.get(state.profiles, wv, "default")) do
-      {:noreply, put_in(state.cookies[{Map.get(state.profiles, wv, "default"), origin}], %{url: url, cookies: cookies, profile: Map.get(state.profiles, wv, "default")})}
-    else
-      _ -> {:noreply, state}
-    end
-  end
-
   def handle_info({:browser_event, %{"event" => "hello"} = hello}, state) do
+    # Drop snapshots retained by a previous backend generation during handoff.
+    state = Map.delete(state, :cookies)
     engine_tabs = Map.get(hello, "tabs", [])
     engine_urls = for %{"url" => u} <- engine_tabs, real_url?(u), do: u
     remembered = ordered_urls(state.tabs, Map.get(state, :order, []))
@@ -173,20 +160,10 @@ defmodule BowserBrain.Session do
         {:noreply, seed_restore(state, disk_entries(state.disk), state.disk.active, engine_tabs, restore)}
 
       remembered != [] ->
-        cookie_count =
-          state.cookies |> Enum.map(fn {_o, %{cookies: c}} -> length(c) end) |> Enum.sum()
-
-        Logger.info(
-          "session: fresh engine — replaying #{cookie_count} cookies, restoring #{length(remembered)} tabs"
-        )
-
-        # Styles BEFORE navigations, deterministically (bowser-browser-6eu),
-        # and cookies first, so restored tabs load logged in AND styled.
+        Logger.info("session: fresh engine — restoring #{length(remembered)} tabs")
+        # The native profile store owns cookies. Replaying load-time snapshots
+        # can overwrite tokens rotated by a page after its load event.
         BowserBrain.UserContent.push_now()
-
-        for {_origin, %{url: url, cookies: cookies, profile: profile}} <- state.cookies,
-            cookie <- cookies,
-            do: Bridge.set_cookie(url, cookie, profile)
 
         restore = rebuild(saved, saved_active, engine_tabs, hello["deferred_restore"] == true)
         # Seed saved URLs before any navigation or quit can persist a partial list.
@@ -382,19 +359,4 @@ defmodule BowserBrain.Session do
     state
   end
 
-  defp origin_of(url) do
-    case URI.parse(url) do
-      %URI{scheme: scheme, host: host} when is_binary(scheme) and is_binary(host) ->
-        "#{scheme}://#{host}"
-
-      _ ->
-        nil
-    end
-  end
-
-  defp safe_get_cookies(url, profile) do
-    Bridge.get_cookies_for(url, profile)
-  catch
-    :exit, _ -> {:error, :timeout}
-  end
 end

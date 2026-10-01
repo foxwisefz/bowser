@@ -7,6 +7,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var didFinishLaunching = false
     private(set) var admissionRequired = false
     private var browserStarted = false
+    private var browserStarting = false
     private(set) var isTerminating = false
     private var pendingExternalURLs: [URL] = []
     private lazy var externalProfilePicker = ExternalProfilePicker { [weak self] urls, profile in
@@ -52,7 +53,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func startBrowser() {
-        guard !admissionRequired, !browserStarted else { return }
+        guard !admissionRequired, !browserStarted, !browserStarting else { return }
+        browserStarting = true
+        if SiteAppConfiguration.current != nil || !FileManager.default.fileExists(atPath: SessionCookies.file.path) {
+            finishStartingBrowser()
+            return
+        }
+        Task {
+            if SiteAppConfiguration.current == nil {
+                do { try await SessionCookies.restore() }
+                catch { NSLog("Session cookie restoration failed (%@)", String(describing: type(of: error))) }
+            }
+            if isTerminating {
+                try? await SessionCookies.save()
+                NSApp.reply(toApplicationShouldTerminate: true)
+                return
+            }
+            finishStartingBrowser()
+        }
+    }
+
+    private func finishStartingBrowser() {
+        browserStarting = false
         browserStarted = true
         if SiteAppConfiguration.current != nil { SiteAppNotifications.shared.start() }
         buildMenu()
@@ -167,6 +189,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         isTerminating = true
+        if browserStarting { return .terminateLater }
         return browserStarted ? BackendLifecycle.shared.quit() : .terminateNow
     }
 
@@ -183,6 +206,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         if admissionRequired { showAdmission(); return false }
+        if browserStarting { return false }
         guard SiteAppConfiguration.current != nil else {
             if BrowserWindowController.all.isEmpty && externalProfilePicker.model.linkCount == 0 { openWindow() }
             return true
@@ -214,6 +238,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func openExternalURLs(_ urls: [URL]) {
         if admissionRequired { pendingExternalURLs.append(contentsOf: urls); showAdmission(); return }
+        if browserStarting { pendingExternalURLs.append(contentsOf: urls); return }
         if SiteAppConfiguration.current == nil {
             externalProfilePicker.receive(urls)
             return
