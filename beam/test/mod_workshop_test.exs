@@ -270,6 +270,35 @@ defmodule BowserBrain.ModWorkshopTest do
     assert length(state.data["projects"]) == 1
   end
 
+  test "overview toggles and deletes an installed mod through its single history", %{root: root} do
+    File.mkdir_p!(Path.join(root, "sites/example.com"))
+    path = "sites/example.com/overview.css"
+    File.write!(Path.join(root, path), "body { color: red }")
+    state = event("toggle_existing", %{"path" => path})
+    assert state.error == nil
+    [project] = state.data["projects"]
+    assert File.exists?(Path.join(root, path <> ".off"))
+    state = event("edit_existing", %{"path" => path <> ".off"})
+    assert length(state.data["projects"]) == 1
+    assert ModWorkshop.snapshot(state, "main").selected == project["id"]
+    state = event("toggle_existing", %{"path" => path})
+    assert File.exists?(Path.join(root, path))
+    assert length(state.data["projects"]) == 1
+    state = event("delete_existing", %{"path" => path})
+    assert state.data["projects"] == []
+    refute File.exists?(Path.join(root, path))
+  end
+
+  test "overview cannot toggle another profile's installed mod", %{root: root} do
+    File.mkdir_p!(Path.join(root, "sites/example.com"))
+    path = "sites/example.com/foreign.css"
+    File.write!(Path.join(root, path), "/* bowser-profile: other */\nbody {}")
+    state = event("toggle_existing", %{"path" => path})
+    assert state.error != nil
+    assert state.data["projects"] == []
+    assert File.exists?(Path.join(root, path))
+  end
+
   test "saved-app picker includes disabled files only from its own app", %{root: root} do
     id = "com.foxwiseai.bowser.site.0123456789abcdef"
     app = %{"id" => id, "url" => "https://example.com", "name" => "Example"}

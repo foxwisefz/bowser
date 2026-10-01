@@ -277,8 +277,9 @@ defmodule BowserBrain.ModWorkshop do
   end
 
   def handle_info({:browser_event, %{"event" => "modsmith"} = event}, state) do
+    state = if event["action"] == "open" && is_integer(event["webview"]), do: %{state | active: event["webview"]}, else: state
     state = action(state, event) |> Map.put(:error_client, client(event))
-    publish(state, client(event), event["action"] == "open")
+    publish(state, client(event), event["action"] == "open", if(event["action"] == "open", do: "overview"))
     {:noreply, state}
   rescue
     error ->
@@ -708,6 +709,14 @@ defmodule BowserBrain.ModWorkshop do
     cond do
       action == "open" ->
         %{state | error: nil}
+
+      action in ["toggle_existing", "delete_existing"] and state.run == nil ->
+        next = edit_existing(state, event)
+        if next.error do
+          next
+        else
+          action(next, event |> Map.put("action", if(action == "toggle_existing", do: "toggle", else: "delete")) |> Map.put("project", selected(next, client)))
+        end
 
       action == "edit_existing" ->
         edit_existing(state, event)
@@ -1550,6 +1559,8 @@ defmodule BowserBrain.ModWorkshop do
 
     %{
       op: "modsmith_state",
+      target_url: if(client == "main", do: state.urls[state.active] || ""),
+      target_webview: if(client == "main", do: state.active),
       workspace_profile: if(client == "main", do: profile_identity(BowserBrain.ModScope.profile_of(state.active))),
       running_profile: if(client == "main" && state.run && state.run.app == nil,
         do: profile_identity(Map.get(state.run, :profile, "default"))),
@@ -1602,10 +1613,10 @@ defmodule BowserBrain.ModWorkshop do
     Map.take(profile, ["id", "name", "icon", "character"])
   end
 
-  defp publish(state, client \\ nil, show \\ false) do
+  defp publish(state, client \\ nil, show \\ false, view \\ nil) do
     clients =
       if client, do: [client], else: Enum.uniq(["main" | Map.keys(state.data["selected"])])
 
-    Enum.each(clients, fn c -> Bridge.cast_msg(Map.put(snapshot(state, c), :show, show)) end)
+    Enum.each(clients, fn c -> Bridge.cast_msg(snapshot(state, c) |> Map.put(:show, show) |> Map.put(:workspace_view, view || if(show, do: "history"))) end)
   end
 end
