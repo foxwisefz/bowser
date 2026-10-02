@@ -33,7 +33,7 @@ import XCTest
             }
             let glyph = try XCTUnwrap(ghost.contentView?.subviews.compactMap { $0 as? NSTextField }.first)
             XCTAssertEqual(glyph.stringValue, action.label)
-            XCTAssertNotNil(glyph.layer?.animation(forKey: "shortcut-fade"))
+            XCTAssertNotNil(ghost.contentView?.layer?.animation(forKey: "shortcut-fade"))
             previous = ghost
         }
     }
