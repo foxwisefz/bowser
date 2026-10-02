@@ -555,6 +555,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             app.addItem(withTitle: "Quit Bowser", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
             for (title, action, key) in [("Cut", "cut:", "x"), ("Copy", "copy:", "c"), ("Paste", "paste:", "v"), ("Select All", "selectAll:", "a")] {
                 edit.addItem(withTitle: title, action: NSSelectorFromString(action), keyEquivalent: key)
+                if action == "paste:" {
+                    let pasteMatchingStyle = edit.addItem(withTitle: "Paste and Match Style", action: NSSelectorFromString("pasteAsPlainText:"), keyEquivalent: "v")
+                    pasteMatchingStyle.keyEquivalentModifierMask = [.command, .option, .shift]
+                }
             }
             let editItem = NSMenuItem(); editItem.submenu = edit; main.addItem(editItem)
             NSApp.mainMenu = main

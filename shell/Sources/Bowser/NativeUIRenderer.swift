@@ -70,6 +70,8 @@ import BowserSurfaceKit
         editMenu.addItem(withTitle: "Cut", action: NSSelectorFromString("cut:"), keyEquivalent: "x")
         editMenu.addItem(withTitle: "Copy", action: NSSelectorFromString("copy:"), keyEquivalent: "c")
         editMenu.addItem(withTitle: "Paste", action: NSSelectorFromString("paste:"), keyEquivalent: "v")
+        let pasteMatchingStyle = editMenu.addItem(withTitle: "Paste and Match Style", action: NSSelectorFromString("pasteAsPlainText:"), keyEquivalent: "v")
+        pasteMatchingStyle.keyEquivalentModifierMask = [.command, .option, .shift]
         editMenu.addItem(withTitle: "Select All", action: NSSelectorFromString("selectAll:"), keyEquivalent: "a")
         editMenu.addItem(.separator())
         editMenu.addItem(withTitle: "Find in Page…", action: NSSelectorFromString("findInPage:"), keyEquivalent: "f")
