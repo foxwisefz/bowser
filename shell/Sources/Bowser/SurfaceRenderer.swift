@@ -539,7 +539,7 @@ struct MagnifyStripView: View {
                                     // dimmed items.
                                     icon(for: item, opacity: dim)
                                         .frame(width: baseSize * s, height: baseSize * s)
-                                        .animation(.easeOut(duration: 1.2), value: dim)
+                                        .animation(active ? nil : .easeOut(duration: 1.2), value: dim)
                                         .shadow(color: .black.opacity(0.18), radius: 1, y: 1)
 
                                 }
