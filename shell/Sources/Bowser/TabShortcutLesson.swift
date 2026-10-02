@@ -52,15 +52,7 @@ import AppKit
         glyph.wantsLayer = true
         glyph.drawsBackground = false
         glyph.isBordered = false
-        let dark = owner.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        glyph.textColor = dark
-            ? NSColor(calibratedRed: 0.9, green: 0.97, blue: 1, alpha: 1)
-            : NSColor(calibratedRed: 0.14, green: 0.3, blue: 0.58, alpha: 1)
-        glyph.layer?.masksToBounds = false
-        glyph.layer?.shadowColor = NSColor(calibratedRed: 0.35, green: 0.7, blue: 1, alpha: 1).cgColor
-        glyph.layer?.shadowOffset = .zero
-        glyph.layer?.shadowRadius = 7
-        glyph.layer?.shadowOpacity = 0.95
+        ShortcutHintStyle.apply(to: glyph, appearance: owner.effectiveAppearance)
         glyph.setAccessibilityElement(false)
         canvas.addSubview(glyph)
         panel.contentView = canvas

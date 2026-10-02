@@ -267,16 +267,7 @@ private enum ShortcutGhost {
         badge.wantsLayer = true
         badge.drawsBackground = false
         badge.isBordered = false
-        // Only the glyphs cast the halo; no badge fill, border or shadow box.
-        let dark = owner.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        badge.textColor = dark
-            ? NSColor(calibratedRed: 0.9, green: 0.97, blue: 1, alpha: 1)
-            : NSColor(calibratedRed: 0.14, green: 0.3, blue: 0.58, alpha: 1)
-        badge.layer?.masksToBounds = false
-        badge.layer?.shadowColor = NSColor(calibratedRed: 0.35, green: 0.7, blue: 1, alpha: 1).cgColor
-        badge.layer?.shadowOffset = .zero
-        badge.layer?.shadowRadius = 7
-        badge.layer?.shadowOpacity = 0.95
+        ShortcutHintStyle.apply(to: badge, appearance: owner.effectiveAppearance)
         badge.setAccessibilityElement(false)
         canvas.addSubview(badge)
         panel.contentView = canvas
