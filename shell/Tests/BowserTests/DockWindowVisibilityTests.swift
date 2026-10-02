@@ -1,8 +1,27 @@
 import AppKit
+import BowserSurfaceKit
 import XCTest
 @testable import Bowser
 
 @MainActor final class DockWindowVisibilityTests: XCTestCase {
+    func testDockSelectionRaisesOwningWindowBeforeBackendReply() throws {
+        SurfaceHostServices.configure()
+        let owner = BrowserWindowController(profile: .defaultProfile)
+        let other = BrowserWindowController(profile: .defaultProfile)
+        let window = try XCTUnwrap(owner.window)
+        defer { window.close(); other.window?.close() }
+        window.orderOut(nil)
+        other.window?.makeKeyAndOrderFront(nil)
+        let tab = try XCTUnwrap(owner.activeTab)
+        SurfaceServices.shared.emit(["op": "event", "event": "surface", "surface": "edge_dock",
+                                     "id": "select", "value": String(tab.webviewId)])
+        XCTAssertTrue(window.isVisible)
+        XCTAssertEqual(owner.pendingTabLesson, tab.webviewId)
+        window.makeFirstResponder(nil)
+        XCTAssertTrue(owner.activateTab(id: tab.webviewId))
+        XCTAssertTrue(window.firstResponder === tab.webView)
+    }
+
     func testReducedMotionSuppressesPulseButAllowsHoverAndAlwaysShow() throws {
         let controller = BrowserWindowController(profile: .defaultProfile)
         let window = try XCTUnwrap(controller.window)

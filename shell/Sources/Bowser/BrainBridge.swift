@@ -503,12 +503,9 @@ final class BrainBridge {
             SurfaceManager.shared.handle(message)
 
         case "activate_tab":
-            // Mount it as the window's content — no window ordering games,
-            // the tab has no window of its own any more.
             if let host = BrowserWindowController.host(of: requested),
                host.activateTab(id: requested) {
-                host.window?.makeKeyAndOrderFront(nil)
-                NSApp.activate()
+                host.focusWindow()
             }
 
         case "close_tab":

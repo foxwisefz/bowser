@@ -446,10 +446,6 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
             }
             activeTab = view
             container.webview = view.webviewId
-            // The old first responder just left the hierarchy — hand the
-            // keyboard to the page that's actually on screen.
-            if focusPage { window?.makeFirstResponder(view.webView) }
-            mark("responder_ms")
             adoptChrome(from: view)
             mark("chrome_ms")
             syncModButtons()
@@ -471,6 +467,9 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
             pendingTabPreviewCapture = capture
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: capture)
         }
+        // Also restore page focus when the selected tab was already active.
+        if focusPage { window?.makeFirstResponder(view.webView) }
+        mark("responder_ms")
         BrainBridge.shared.send([
             "op": "event", "event": "tab_activated", "webview": view.webviewId,
         ])
@@ -617,6 +616,13 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         guard let view = tabs.first(where: { $0.webviewId == id }) else { return false }
         activate(view)
         return true
+    }
+
+    /// Honor an explicit selection even when its window is minimized or on another display.
+    func focusWindow() {
+        window?.deminiaturize(nil)
+        window?.makeKeyAndOrderFront(nil)
+        NSApp.activate()
     }
 
     /// Reorder without activating, reloading, or detaching any live page.
