@@ -88,7 +88,7 @@ enum BowserAPI {
     }
     static var terms: URL {
         ProcessInfo.processInfo.environment["BOWSER_API_ENDPOINT"] == nil
-            ? URL(string: "https://bowser.app/terms.html")!
+            ? URL(string: "https://www.bowser.app/terms.html")!
             : base.appendingPathComponent("terms.html")
     }
     static func allows(_ url: URL) -> Bool {
