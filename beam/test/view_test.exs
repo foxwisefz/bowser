@@ -3,6 +3,20 @@ defmodule BowserBrain.ViewTest do
 
   alias BowserBrain.View
 
+  test "scroll wraps a keyed content tree with sizing and axis options" do
+    content = View.vstack([View.button("Item", event: :open, payload: "item-1")])
+    assert View.scroll(content) == %{t: "scroll", content: content, axis: "vertical", indicators: true}
+    tree = View.scroll(content, key: :items, height: 240, axis: :both, indicators: false)
+    wire = tree |> JSON.encode!() |> JSON.decode!()
+    assert wire["key"] == "items"
+    assert wire["height"] == 240
+    assert wire["axis"] == "both"
+    assert wire["indicators"] == false
+    assert hd(wire["content"]["children"])["payload"] == "item-1"
+    assert View.scroll(content, fill_height: true).fill_height
+    assert_raise ArgumentError, fn -> View.scroll(content, axis: :diagonal) end
+  end
+
   test "state, editor, commands and preview are independent native nodes" do
     editor = View.editor(:body, monospaced: true, fill_height: true)
     preview = View.preview(:body)

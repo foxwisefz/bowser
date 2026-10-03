@@ -48,6 +48,27 @@ also clears them. Drafts are local UI state, not durable storage.
 
 ## Layouts
 
+- `scroll(content, opts \\ [])` wraps one tree in a native scroll viewport.
+  `axis: :vertical` (default), `:horizontal`, or `:both`; `indicators: true`
+  by default. The viewport defaults to 320 points high. Override with `height:`
+  or `max_height:`, or use `fill_height: true` inside a bounded parent.
+  Keep the scroll node's `key` and each record's key stable across updates.
+  Headers and input controls remain fixed when placed outside the scroll node:
+
+  ```elixir
+  vstack([
+    text("Items", style: :title),
+    scroll(vstack(rows), key: :items, height: 320),
+    action("Add item", event: :add)
+  ])
+  ```
+
+  Use this for growing lists in panels, settings and other mod surfaces. Stacks
+  and grids alone do not scroll. The viewport clips overflowing content; its
+  children keep their ordinary events and local form state. Verify the last item
+  remains reachable as records are added. Scroll position survives updates while
+  the keyed viewport remains mounted; it is not persisted across restarts.
+
 - `fields([field("Name:", input(:name), key: :name), ...])` aligns labels and
   controls in shared columns.
 - `grid(children, columns: 3, spacing: 12)` creates equal-width columns (1–12).

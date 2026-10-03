@@ -25,6 +25,18 @@ defmodule BowserBrain.View do
     ui(%{t: "hstack", children: children, spacing: Keyword.get(opts, :spacing, 8)}, opts)
   end
 
+  @doc """
+  Bounded native scrolling around one content tree. axis: :vertical (default),
+  :horizontal or :both; indicators: true by default. Defaults to a 320-point
+  viewport unless height:, max_height: or fill_height: true supplies a bound.
+  Keep fixed headers/actions as siblings outside this node. Use stable keys.
+  """
+  def scroll(content, opts \\ []) when is_map(content) do
+    axis = Keyword.get(opts, :axis, :vertical)
+    unless axis in [:vertical, :horizontal, :both], do: raise(ArgumentError, "scroll axis must be :vertical, :horizontal or :both")
+    ui(%{t: "scroll", content: content, axis: to_string(axis), indicators: Keyword.get(opts, :indicators, true)}, opts)
+  end
+
   @doc "style: :title | :caption | nil"
   def text(value, opts \\ []) do
     %{t: "text", value: to_string(value), style: Keyword.get(opts, :style)}

@@ -100,6 +100,8 @@ struct SurfaceTreeView: View {
                     SurfaceTreeView(surfaceId: surfaceId, node: child.value)
                 }
             })
+        case "scroll":
+            return AnyView(SurfaceScrollView(surfaceId: surfaceId, node: node))
         case "hstack":
             let spacing = node["spacing"] as? Double ?? 8
             return AnyView(HStack(spacing: spacing) {

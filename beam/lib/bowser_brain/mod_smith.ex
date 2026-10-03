@@ -309,6 +309,17 @@ defmodule BowserBrain.ModSmith do
     Reload ⌘R, Actual Size/Zoom In/Out ⌘0/⌘+/⌘-, Enter Full Screen — never duplicate those.
     BowserBrain.Surface.show(id, view, title: "T", anchor: :right_of_main) with
     import BowserBrain.View: vstack/hstack(list, opts), text(v, style: :title|:caption),
+    scroll(content, opts) (1,2): a bounded native viewport around one tree.
+    axis: :vertical (default), :horizontal or :both; indicators: true (default).
+    Default viewport height is 320 points. Set height: or max_height:, or
+    fill_height: true inside a bounded, full-height parent. Use stable key: on
+    the scroll node and record IDs on repeated children to retain position.
+    Growing collections MUST have a bounded scroll viewport; stacks/grids alone
+    do not scroll. Keep headings and creation controls outside the scroll node:
+    vstack([text("Items", style: :title), scroll(vstack(rows), key: :items,
+      height: 320), action("Add item", event: :add)]).
+    Verify short and overflowing lists, reach the last row, and interact there.
+    Other builders:
     button(label, event:, payload:, active:, symbol:, indent:), slider(event, min:, max:,
     value:, label:), textfield(event, placeholder:, value:), colorpicker(event, value: "#rrggbb",
     label:) (sends "#rrggbb", debounced), divider(), particles(chars: ["♪"],

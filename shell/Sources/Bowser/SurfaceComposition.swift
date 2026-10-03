@@ -1,6 +1,32 @@
 import BowserSurfaceKit
 import AppKit
 import SwiftUI
+
+struct SurfaceScrollView: View {
+    let surfaceId: String
+    let node: [String: Any]
+    private var axes: Axis.Set {
+        switch node["axis"] as? String {
+        case "horizontal": return .horizontal
+        case "both": return [.horizontal, .vertical]
+        default: return .vertical
+        }
+    }
+    private var defaultHeight: CGFloat? {
+        node["height"] is NSNumber || node["max_height"] is NSNumber || node["fill_height"] as? Bool == true ? nil : 320
+    }
+    var body: some View {
+        GeometryReader { geometry in
+            ScrollView(axes, showsIndicators: node["indicators"] as? Bool ?? true) {
+                SurfaceTreeView(surfaceId: surfaceId, node: node["content"] as? [String: Any] ?? [:])
+                    .frame(maxWidth: axes == .vertical ? .infinity : nil,
+                           minHeight: axes == .horizontal ? geometry.size.height : nil, alignment: .topLeading)
+            }
+        }
+        .frame(height: defaultHeight)
+    }
+}
+
 struct SurfaceModelScope: View {
     let surfaceId: String
     let node: [String: Any]
