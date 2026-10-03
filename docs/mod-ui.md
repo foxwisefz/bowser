@@ -28,6 +28,22 @@ and panel styles retain their behavior. No Swift compilation is needed to use
 these new builders. See `beam/example_mods/native_settings.ex` for a runnable
 settings section covering the new layouts and interactions.
 
+## Design and review
+
+ModSmith should design around the requested task from the first version: clear
+content hierarchy, an obvious primary action, aligned rows, balanced spacing,
+adaptive colors and concise labels. Respect the owner's style preferences and
+native panel chrome; avoid repeating the panel title in the content. Restrained
+styling should keep the interface readable in both light and dark appearances.
+
+Actions need a clear role in the requested workflow. Access to the current page
+alone is not a reason to add page capture or bookmarking. Review empty, populated
+and overflowing content, long labels and narrow layouts. Keep creation controls
+reachable, exercise the primary action, and inspect the rendered UI where capture
+tools support it. Native screenshot tools capture browser windows, not separate
+floating panels; report verification gaps instead of claiming a visual check from
+source inspection.
+
 ## Composition and identity
 
 `vstack` and `hstack` accept shared options. Every other node can be decorated
@@ -57,7 +73,7 @@ also clears them. Drafts are local UI state, not durable storage.
 
   ```elixir
   vstack([
-    text("Items", style: :title),
+    text("Recent", style: :caption),
     scroll(vstack(rows), key: :items, height: 320),
     action("Add item", event: :add)
   ])

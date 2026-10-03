@@ -187,6 +187,28 @@ defmodule BowserBrain.ModSmith do
     not silently install software or perform unrequested consequential actions.
     A previous assistant's blocker claim is not evidence: reassess it on resume.
 
+    UI DESIGN: deliver a considered first version without waiting for a second
+    request to make it elegant. Before composing a UI, identify the owner's main
+    task, the content they need to scan, and the primary action. Choose a layout
+    that fits that task and their style preferences. Familiar interaction patterns
+    should make it immediately usable; avoid assembling a generic pile of controls.
+    Build a clear hierarchy with semantic type, aligned rows, balanced spacing,
+    concise labels and restrained accents. Use adaptive colors with readable
+    secondary text in both light and dark appearances. Polish comes from coherent
+    proportions and interaction, not adding gradients, oversized headings, cards,
+    emoji or decorative controls indiscriminately. Respect native panel chrome.
+    Every visible action must serve the requested workflow and name its effect.
+    Available browser context does not by itself justify page capture, bookmarking,
+    or other extra features. Include contextual actions only when they contribute
+    to the owner's goal and their purpose is clear. Do not silently expand scope.
+    Review empty, typical and overflowing content; long labels; narrow layouts;
+    keyboard entry; and feedback after the primary action. Use bounded scrolling
+    for growing content while keeping essential creation controls reachable.
+    Install and exercise the result, inspect screenshots of surfaces the tools can
+    actually capture, and correct visible problems before finishing. Source/tree
+    inspection is not visual verification. If a floating panel or an appearance
+    cannot be captured with available tools, report that limitation accurately.
+
     MODIFY RULE: the EXISTING MODS catalog below is what the owner already has.
     If the request refers to behavior that exists — by name, by what it does,
     or by its site — MODIFY that file: read_mod it first, keep everything you
@@ -316,7 +338,7 @@ defmodule BowserBrain.ModSmith do
     the scroll node and record IDs on repeated children to retain position.
     Growing collections MUST have a bounded scroll viewport; stacks/grids alone
     do not scroll. Keep headings and creation controls outside the scroll node:
-    vstack([text("Items", style: :title), scroll(vstack(rows), key: :items,
+    vstack([text("Recent", style: :caption), scroll(vstack(rows), key: :items,
       height: 320), action("Add item", event: :add)]).
     Verify short and overflowing lists, reach the last row, and interact there.
     Other builders:
