@@ -310,6 +310,18 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
     var isSleeping: Bool { sleepingInteractionState != nil }
     var currentTitle: String { sleepingTitle ?? webView.title ?? "" }
     private var requestedURL: String?
+    private var pendingDownloadableResource: ResourceDownload?
+    private var resourceNavigation = UUID()
+    private var uncommittedPopup = false
+    private weak var downloadPopupOpener: EngineView?
+    private(set) var downloadableResource: ResourceDownload? {
+        didSet { BrowserWindowController.host(of: webviewId)?.syncModButtons() }
+    }
+    func saveResource(destination: NativeDownloads.Destination = .downloads) {
+        guard let downloadableResource else { return }
+        NativeDownloads.shared.startResource(downloadableResource, in: webView, tab: webviewId,
+                                        profile: profileId, destination: destination)
+    }
     private var failedNavigationURL: String?
     var currentURLString: String? { pendingRestoreURL ?? failedNavigationURL ?? webView.url?.absoluteString ?? requestedURL }
 
@@ -775,8 +787,15 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
         view.load(urlString: url.absoluteString)
     }
 
-    // A response WebKit can't display (a binary, a file with Content-
-    // Disposition: attachment) becomes a download instead of a blank page.
+    static func responsePolicy(_ response: URLResponse, canShowMIMEType: Bool) -> WKNavigationResponsePolicy {
+        let disposition = (response as? HTTPURLResponse)?
+            .value(forHTTPHeaderField: "Content-Disposition")?
+            .split(separator: ";", maxSplits: 1, omittingEmptySubsequences: false).first?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return !canShowMIMEType || disposition?.lowercased() == "attachment" ? .download : .allow
+    }
+
+    // Displayable files can still explicitly request a download.
     func webView(
         _ webView: WKWebView,
         decidePolicyFor navigationResponse: WKNavigationResponse,
@@ -796,15 +815,28 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
             showLoadFailure(url: url.absoluteString, message: detail)
             return
         }
-        decisionHandler(navigationResponse.canShowMIMEType ? .allow : .download)
+        let policy = Self.responsePolicy(navigationResponse.response, canShowMIMEType: navigationResponse.canShowMIMEType)
+        if navigationResponse.isForMainFrame && policy == .allow {
+            pendingDownloadableResource = ResourceDownload(response: navigationResponse.response)
+        }
+        decisionHandler(policy)
     }
 
     func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) {
-        NativeDownloads.shared.attach(download, tab: webviewId, profile: profileId)
+        receiveDownload(download)
     }
 
     func webView(_ webView: WKWebView, navigationResponse: WKNavigationResponse, didBecome download: WKDownload) {
-        NativeDownloads.shared.attach(download, tab: webviewId, profile: profileId)
+        receiveDownload(download)
+    }
+
+    private func receiveDownload(_ download: WKDownload) {
+        let host = BrowserWindowController.host(of: webviewId)
+        NativeDownloads.shared.attach(download, tab: webviewId, profile: profileId, window: host?.window ?? window)
+        guard uncommittedPopup, let host else { return }
+        uncommittedPopup = false
+        // The download delegate owns the transfer before the empty webview is retired.
+        host.closeTab(self, selecting: downloadPopupOpener?.webviewId)
     }
 
     static func uniqueDownloadURL(_ suggested: String) -> URL { NativeDownloads.uniqueURL(suggested) }
@@ -916,6 +948,8 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
     }
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        pendingDownloadableResource = nil
+        resourceNavigation = UUID()
         markNavigationTiming("provisional_ms")
         if !hasRenderedContent { showLoadingCover() }
         if failedNavigationURL == nil, let navigation {
@@ -946,6 +980,9 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
     }
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        uncommittedPopup = false
+        downloadPopupOpener = nil
+        downloadableResource = pendingDownloadableResource
         markNavigationTiming("commit_ms")
         if failedNavigationURL == nil { recordNavigationDiagnostic("committed", navigation: navigation) }
         hasRenderedContent = false
@@ -958,6 +995,14 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        if downloadableResource == nil && failedNavigationURL == nil {
+            let generation = resourceNavigation
+            webView.evaluateJavaScript(ResourceDownload.embeddedPDFScript, in: nil, in: .defaultClient) { [weak self] result in
+                guard let self, self.resourceNavigation == generation,
+                      case .success(let source as String) = result else { return }
+                self.downloadableResource = ResourceDownload(embeddedURL: source)
+            }
+        }
         markNavigationTiming("finish_ms")
         if navigationDiagnosticTrace.isCurrent(navigation) { navigationDiagnosticWatchdog?.cancel() }
         if failedNavigationURL == nil { recordNavigationDiagnostic("finished", navigation: navigation) }
@@ -1040,11 +1085,11 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
     }
 
     /// Cancellation (-999) means a newer load won the race; WebKit 102 means
-    /// the navigation became a download or app handoff. Everything else left
-    /// the user staring at a blank tab.
+    /// the navigation became a download or app handoff. WebKit 204 hands the
+    /// load to its media viewer rather than loading the same resource twice.
     static func shouldShowErrorPage(domain: String, code: Int) -> Bool {
         if domain == NSURLErrorDomain && code == NSURLErrorCancelled { return false }
-        if domain == "WebKitErrorDomain" && code == 102 { return false }
+        if domain == "WebKitErrorDomain" && [102, 204].contains(code) { return false }
         return true
     }
 
@@ -1240,6 +1285,8 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
             configuration: configuration, opener: webviewId,
             activate: intent != .backgroundTab
         )
+        view.uncommittedPopup = true
+        view.downloadPopupOpener = self
         return view.webView
     }
 }

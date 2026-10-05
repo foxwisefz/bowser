@@ -38,4 +38,11 @@ defmodule BowserBrain.ResourceControllerTest do
     assert %{discard: true, request: "r", sequence: 4} = Controller.decision(event)
     assert %{command: %{profile: "work", window: "w", revision: "rev", active: 3}} = Controller.decision(put_in(event, ["intent", "tab"], 2))
   end
+  test "download popup returns to its opener without stealing a changed selection" do
+    close = %{"action" => "close", "tab" => 2, "selecting" => 1}
+    assert %{active: 1} = Controller.tab_command(close, window())
+    assert %{active: 3} = Controller.tab_command(close, Map.put(window(), "active", 3))
+    assert %{active: 3} = Controller.tab_command(Map.put(close, "selecting", 99), window())
+    assert %{active: 3} = Controller.tab_command(Map.put(close, "selecting", 2), window())
+  end
 end

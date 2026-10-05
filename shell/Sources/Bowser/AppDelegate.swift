@@ -2,7 +2,7 @@ import AppKit
 import WebKit
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var siteTerminationObserver: NSObjectProtocol?
     private var didFinishLaunching = false
     private(set) var admissionRequired = false
@@ -183,6 +183,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return nil
         case "r":
             controller?.activeTab?.reloadPage()
+            return nil
+        case "s":
+            guard controller?.activeTab?.downloadableResource != nil else { return event }
+            controller?.activeTab?.saveResource(destination: .saveAs)
             return nil
         case ",":
             self.openSettings(nil)
@@ -455,6 +459,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func reloadPage(_ sender: Any?) {
         currentController?.activeTab?.reloadPage()
+    }
+
+    @objc func saveResource(_ sender: Any?) {
+        currentController?.activeTab?.saveResource(destination: .saveAs)
+    }
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(saveResource(_:)) { return currentController?.activeTab?.downloadableResource != nil }
+        return true
     }
 
     @objc func copyCurrentURL(_ sender: Any?) {

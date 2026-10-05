@@ -11,6 +11,7 @@ struct ToolbarSnapshot: Decodable {
     let modWidth: Double?
     let permissionsAvailable: Bool?
     let capturing: Bool?
+    let resourceAvailable: Bool?
     let revealed: Bool
     let tint: [Double]?
     let colors: [String: String]
@@ -180,6 +181,9 @@ struct ToolbarTheme {
         append(button("Back (⌘[)", "chevron.left", "back", shortcut: "⌘["), width: 20)
         append(button("Forward (⌘])", "chevron.right", "forward", shortcut: "⌘]"), width: 20)
         append(button("Reload this tab (⌘R)", "arrow.clockwise", "reload", shortcut: "⌘R"), width: 20)
+        if value.resourceAvailable == true {
+            append(button("Download file", "arrow.down.to.line", "download-resource"), width: 20)
+        }
         if value.revealed && !value.buttons.isEmpty {
             let scroll = NSScrollView()
             scroll.drawsBackground = false; scroll.hasHorizontalScroller = false; scroll.hasVerticalScroller = false

@@ -100,7 +100,7 @@ import AppKit
         slot.onAction = { actions.append($0) }
         var state: [String: Any] = ["revealed": true, "colors": [:], "buttonStyle": "flat",
             "cornerRadius": 6, "showNavigation": true, "modWidth": 40,
-            "permissionsAvailable": true, "capturing": true,
+            "permissionsAvailable": true, "capturing": true, "resourceAvailable": true,
             "siteMods": [["id": "site", "title": "Site toggle", "on": true]],
             "buttons": [["id": "one", "title": "First", "symbol": "star"],
                         ["id": "two", "title": "Second", "symbol": "star"]]]
@@ -117,7 +117,7 @@ import AppKit
         func control(_ id: String) throws -> NSButton {
             try XCTUnwrap(descendants(slot).compactMap { $0 as? NSButton }.first { $0.accessibilityIdentifier() == id })
         }
-        for action in ["command", "back", "forward", "reload", "mod:one", "mod:two", "permissions"] {
+        for action in ["command", "back", "forward", "reload", "download-resource", "mod:one", "mod:two", "permissions"] {
             try control(action).performClick(nil)
             XCTAssertEqual(actions.last, action)
         }
@@ -130,12 +130,13 @@ import AppKit
         let scroll = try XCTUnwrap(descendants(slot).compactMap { $0 as? NSScrollView }.first)
         XCTAssertEqual(scroll.frame.width, 40)
         XCTAssertGreaterThan(try XCTUnwrap(scroll.documentView).frame.width, scroll.frame.width)
-        state["revealed"] = false; state["capturing"] = false
+        state["revealed"] = false; state["capturing"] = false; state["resourceAvailable"] = false
         slot.setSnapshot(try JSONSerialization.data(withJSONObject: state))
         slot.layoutSubtreeIfNeeded()
         let remaining = descendants(slot).compactMap { ($0 as? NSButton)?.accessibilityIdentifier() }
         XCTAssertFalse(remaining.contains("mod:one"))
         XCTAssertFalse(remaining.contains("permissions"))
+        XCTAssertFalse(remaining.contains("download-resource"))
         XCTAssertNoThrow(try control("command"))
         XCTAssertEqual(slot.build, library.build)
     }

@@ -81,6 +81,7 @@ defmodule BowserBrain.ResourceController do
         panes = List.delete(Map.get(window, "panes", []), tab)
         next = cond do
           active != tab -> active
+          intent["selecting"] in rest -> intent["selecting"]
           panes != [] -> hd(panes)
           rest == [] -> nil
           true -> Enum.at(rest, min(Enum.find_index(order, &(&1 == tab)), length(rest) - 1))

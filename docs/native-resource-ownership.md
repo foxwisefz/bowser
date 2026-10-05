@@ -101,6 +101,14 @@ local media, not a physical-input or DRM qualification.
 
 ## Navigation and downloads
 
+Navigation responses with `Content-Disposition: attachment` download even when
+WebKit can display their MIME type (including video, audio, images, and PDFs).
+Inline responses keep their normal preview behavior. This also applies to
+cross-origin download links that open a new window.
+An uncommitted popup is retired after its request becomes a download, returning
+selection to its opener if the popup was selected. Popups that have committed a
+document remain open. Download ownership transfers before the empty tab closes.
+
 Elixir publishes ordered navigation rules with required/forbidden modifier names
 and a native tab action. The native owner validates the complete rule set before
 replacing its cached policy, then answers WebKit synchronously. External-scheme
@@ -113,6 +121,21 @@ controller from a native download snapshot. The native owner enforces profile
 identity, basename-only filenames, collision avoidance (including reserved paths)
 and single completion of each callback. Once started, a transfer continues
 without the controller. A source tab closing does not retire its download.
+Window-owned download cards show connecting/transfer progress, completion with
+Show in Finder, and failures for both website downloads and explicit saves.
+Cards do not take keyboard focus. Dismissing a card leaves the transfer running;
+concurrent transfers retain separate progress and completion states.
+
+Explicit file saves use the same native owner and the source webview's authenticated
+download session, preserving the original URL and signed query. The toolbar saves
+to Downloads; File → Save As opens a native save panel. Destinations are owned
+natively rather than chosen by the Elixir controller. Transfers are staged in a
+private temporary directory, checked for a successful response matching the original
+file type (or a binary stream), then moved to the destination. PDFs also require a
+PDF signature. Only a save-panel choice can replace an existing file. Filename
+extensions and save-panel types follow the original content type. Native completion
+feedback offers Show in Finder. Availability follows non-HTML main-frame response
+metadata or a single embedded PDF data URL and resets when another document commits.
 
 The native integration check also streams a real 1 MiB WebKit download from a
 loopback fixture, closes its source tab and restarts the controller before

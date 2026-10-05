@@ -62,6 +62,9 @@ import BowserSurfaceKit
         )
         closeWindowItem.keyEquivalentModifierMask = [.command, .shift]
         }
+        fileMenu.addItem(.separator())
+        let saveResource = fileMenu.addItem(withTitle: "Save As…", action: NSSelectorFromString("saveResource:"), keyEquivalent: "s")
+        saveResource.target = context.target
         fileMenuItem.submenu = fileMenu
         mainMenu.addItem(fileMenuItem)
 

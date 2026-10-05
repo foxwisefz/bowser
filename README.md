@@ -82,6 +82,10 @@ video on the current page. Some embedded players require their own PiP control.
 Open local HTML, images, PDFs or text with **File → Open File…** (`⌘O`),
 Finder’s **Open With → Bowser**, or a `file:///…`, `/…` or `~/…` path in `⌘K`.
 Local HTML can load assets from its containing directory.
+Directly opened PDFs, videos, audio, images, text, and other non-HTML files show a
+download button that saves the original file to Downloads. Use **File → Save As…**
+(`⌘S`) to choose a filename and location. This also works for pages containing a
+single PDF embedded as a data URL.
 
 Prefer to run the browser without the brain? `shell/.build/debug/Bowser`
 runs standalone (start order doesn't matter — they find each other).

@@ -656,7 +656,9 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     /// Close one tab. The window goes with the last one.
     func closeTab(_ view: EngineView, selecting preferred: UInt64? = nil) {
         if BrainBridge.shared.resources.shouldCoordinate {
-            _ = BrainBridge.shared.resources.request(["action":"close", "tab":view.webviewId]); return
+            var intent: [String: Any] = ["action":"close", "tab":view.webviewId]
+            if let preferred { intent["selecting"] = preferred }
+            _ = BrainBridge.shared.resources.request(intent); return
         }
         guard let index = tabs.firstIndex(where: { $0 === view }) else { return }
         let wasActive = activeTab === view
@@ -858,7 +860,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
             profileID: profile.id,
             siteMods: currentSiteMods,
             reveal: reveal,
-            modWidth: max(0, (clusterWidth?.constant ?? 202) - 202),
+            modWidth: max(0, (clusterWidth?.constant ?? 202) - 202 - (activeTab?.downloadableResource == nil ? 0 : 27)),
             tint: profile.color.map { Color(nsColor: $0) },
             openBar: { [weak self] in
                 guard let self else { return }
@@ -867,6 +869,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
             goBack: { [weak self] in self?.activeTab?.webView.goBack() },
             goForward: { [weak self] in self?.activeTab?.webView.goForward() },
             reload: { [weak self] in self?.activeTab?.reloadPage() },
+            downloadResource: activeTab?.downloadableResource == nil ? nil : { [weak self] in self?.activeTab?.saveResource() },
             modClick: { [weak self] id in self?.nativeToolbarAction("mod:" + id) },
             onHoverChanged: { [weak self] inside in self?.setToolbarHovered(inside) }
         )
@@ -893,16 +896,17 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     func syncModButtons(animated: Bool = false) {
         if isCaptureMode { setCaptureMode(true) }
         let expanded = reveal.lights
+        let resourceWidth: CGFloat = activeTab?.downloadableResource == nil ? 0 : 27
         let modCount = ChromeSurface.buttons(for: profile.id).count
         let modWidth = expanded ? min(CGFloat(modCount) * 27, min(135, max(0, (window?.frame.width ?? 800) - 520))) : 0
-        let availableTitle = min(220, max(0, (window?.frame.width ?? 800) - 484 - modWidth))
+        let availableTitle = min(220, max(0, (window?.frame.width ?? 800) - 484 - modWidth - resourceWidth))
         let targetWidth = expanded ? availableTitle : 0
-        if notchTitleWidth?.constant != targetWidth || clusterWidth?.constant != 202 + modWidth || titleTextWidth?.constant != availableTitle {
+        if notchTitleWidth?.constant != targetWidth || clusterWidth?.constant != 202 + modWidth + resourceWidth || titleTextWidth?.constant != availableTitle {
             ToolbarRevealAnimation.perform(
                 views: [notch, titleViewport, titleLabel, toolbarFavicon, nativeToolbar].compactMap { $0 },
                 animated: animated && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion && window?.inLiveResize != true
             ) {
-                clusterWidth?.constant = 202 + modWidth
+                clusterWidth?.constant = 202 + modWidth + resourceWidth
                 notchTitleWidth?.constant = targetWidth
                 // A fixed text width lets the viewport reveal text without reflow.
                 titleTextWidth?.constant = availableTitle
@@ -919,6 +923,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
             "buttonStyle": theme.buttonStyle, "cornerRadius": theme.cornerRadius,
             "showNavigation": theme.showNavigation,
             "permissionsAvailable": true,
+            "resourceAvailable": activeTab?.downloadableResource != nil,
             "capturing": tabs.contains { $0.webView.cameraCaptureState != .none || $0.webView.microphoneCaptureState != .none },
             "buttons": ChromeSurface.buttons(for: profile.id).prefix(128).map { ["id": $0.id, "title": $0.title, "symbol": $0.symbol as Any? ?? NSNull()] }
         ]
@@ -940,6 +945,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         case "back": activeTab?.webView.goBack()
         case "forward": activeTab?.webView.goForward()
         case "reload": activeTab?.reloadPage()
+        case "download-resource": activeTab?.saveResource()
         case "hover:1": setToolbarHovered(true)
         case "hover:0": setToolbarHovered(false)
         default:
@@ -1079,6 +1085,7 @@ struct CmdCluster: View {
     let goBack: () -> Void
     let goForward: () -> Void
     let reload: () -> Void
+    var downloadResource: (() -> Void)? = nil
     let modClick: (String) -> Void
     let onHoverChanged: (Bool) -> Void
 
@@ -1140,6 +1147,11 @@ struct CmdCluster: View {
                 clusterButton("chevron.right", action: goForward)
                 clusterButton("arrow.clockwise", action: reload)
                     .help("Reload this tab (⌘R)")
+                if let downloadResource {
+                    clusterButton("arrow.down.to.line", action: downloadResource)
+                        .help("Download file")
+                        .accessibilityLabel("Download file")
+                }
                 if reveal.lights && !ChromeSurface.buttons(for: profileID).isEmpty {
                     ScrollView(.horizontal) {
                         HStack(spacing: 7) {

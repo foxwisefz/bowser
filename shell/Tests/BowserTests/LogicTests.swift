@@ -87,6 +87,10 @@ final class LoadFailureTests: XCTestCase {
         XCTAssertFalse(EngineView.shouldShowErrorPage(domain: "WebKitErrorDomain", code: 102))
     }
 
+    @MainActor func testMediaViewerHandoffShowsNoErrorPage() {
+        XCTAssertFalse(EngineView.shouldShowErrorPage(domain: "WebKitErrorDomain", code: 204))
+    }
+
     @MainActor func testDNSFailureShowsErrorPage() {
         XCTAssertTrue(EngineView.shouldShowErrorPage(domain: NSURLErrorDomain,
                                                      code: NSURLErrorCannotFindHost))
