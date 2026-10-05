@@ -946,6 +946,11 @@ defmodule BowserBrain.ModSmith do
     installed drafts by path; include contents only for new or changed files, and describe what is unfinished in "notes". If nothing is usable
     yet, reply with a zero-file envelope explaining the blocker in plain language
     and the specific next step the owner can take. Do not mention internal agents.
+    Keep the summary to one or two short sentences about what works and what is
+    still unfinished or untested. Do not expose request counts or budget terminology.
+    A run ending is not a request for an owner decision; use partial when work can
+    continue without their input. Put actual observations in checks and concrete
+    limitations in notes, without repeating the summary.
     """
   end
 

@@ -1,9 +1,64 @@
 import XCTest
 import SwiftUI
 import AppKit
+import BowserSurfaceKit
 @testable import Bowser
 
 final class ModSmithTests: XCTestCase {
+    private func resultTurn(status: String?, checks: [String]? = nil, role: String = "assistant") throws -> ModSmithTurn {
+        var json: [String: Any] = ["id": "result", "role": role,
+            "text": "The sidebar layout is updated. Scrolling still needs a fix.",
+            "notes": "Long lists cannot yet be reached with the trackpad."]
+        if let status { json["status"] = status }
+        if let checks { json["checks"] = checks }
+        return try JSONDecoder().decode(ModSmithTurn.self, from: JSONSerialization.data(withJSONObject: json))
+    }
+
+    func testResultPresentationKeepsOutcomeSeparateFromReportedEvidence() throws {
+        let incomplete = try resultTurn(status: "partial", checks: [" ", "  Opened the sidebar and inspected the layout.  "])
+        XCTAssertEqual(incomplete.outcomeLabel, "Not finished")
+        XCTAssertEqual(incomplete.reportedChecks, ["Opened the sidebar and inspected the layout."])
+        let question = try resultTurn(status: "needs_help", checks: [])
+        XCTAssertEqual(question.outcomeLabel, "Action needed")
+        XCTAssertTrue(question.reportedChecks.isEmpty)
+        XCTAssertNil(try resultTurn(status: nil).outcomeLabel)
+        XCTAssertNil(try resultTurn(status: "active", role: "user").outcomeLabel)
+        XCTAssertEqual(try resultTurn(status: "active").outcomeLabel, "Completed and checked")
+        XCTAssertEqual(try resultTurn(status: "failed", checks: ["The sidebar opened before the action failed."]).reportedChecks.count, 1)
+    }
+
+    @MainActor func testResultCardsRenderWithReadableExpandedEvidence() async throws {
+        _ = NSApplication.shared
+        let partial = try resultTurn(status: "partial", checks: ["Opened the sidebar and confirmed the new layout.",
+            "The toolbar button opens and closes the sidebar. Trackpad scrolling is still not working."])
+        let question = try JSONDecoder().decode(ModSmithTurn.self, from: JSONSerialization.data(withJSONObject: [
+            "id": "question", "role": "assistant", "status": "needs_help", "checks": [],
+            "text": "Should the sidebar appear on every website or only on this site?"
+        ]))
+        for (name, scheme) in [("dark", ColorScheme.dark), ("light", ColorScheme.light)] {
+            let host = NSHostingView(rootView: VStack(alignment: .leading, spacing: 20) {
+                ModSmithTurnCard(turn: partial, detailsExpanded: true)
+                ModSmithTurnCard(turn: question)
+            }.padding(20).frame(width: 620).preferredColorScheme(scheme))
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 620, height: 500),
+                                  styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = host
+            host.frame.size = NSSize(width: 620, height: 500)
+            host.layoutSubtreeIfNeeded()
+            XCTAssertGreaterThan(host.fittingSize.height, 200)
+            if let directory = ProcessInfo.processInfo.environment["BOWSER_MODSMITH_PREVIEW"] {
+                window.orderFront(nil)
+                try await Task.sleep(for: .milliseconds(150))
+                window.displayIfNeeded()
+                let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+                host.cacheDisplay(in: host.bounds, to: bitmap)
+                try bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: directory).appendingPathComponent("modsmith-\(name).png"))
+            }
+            window.close()
+        }
+    }
+
     private func snapshot(selected: String? = nil, accepted: String? = nil) -> [String: Any] {
         var data: [String: Any] = ["projects": [], "busy": false, "progress": [], "stage": "Inspecting page"]
         if let selected { data["selected"] = selected }

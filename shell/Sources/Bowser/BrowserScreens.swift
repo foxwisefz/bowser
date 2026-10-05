@@ -3,6 +3,56 @@ import SwiftUI
 import WebKit
 import BowserSurfaceKit
 
+struct ModSmithTurnCard: View {
+    let turn: ModSmithTurn
+    @State var detailsExpanded = false
+    private var notes: String { (turn.notes ?? "").trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                Text(turn.role == "user" ? "You" : turn.role == "system" ? "Revision history" : turn.role == "activity" ? "Activity" : "ModSmith")
+                    .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                if let outcome = turn.outcomeLabel {
+                    Text(outcome).font(.caption.weight(.medium))
+                        .foregroundStyle(turn.status == "active" ? Color.green : Color.secondary)
+                }
+            }
+            Text(turn.displayText).font(.system(size: 13)).textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            if !notes.isEmpty || !turn.reportedChecks.isEmpty {
+                DisclosureGroup("Supporting details", isExpanded: $detailsExpanded) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        if !notes.isEmpty {
+                            VStack(alignment: .leading, spacing: 5) {
+                                Text("Notes and limitations").font(.caption.weight(.semibold))
+                                Text(notes).font(.callout).textSelection(.enabled)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                        if !turn.reportedChecks.isEmpty {
+                            VStack(alignment: .leading, spacing: 7) {
+                                Text("Checks reported").font(.caption.weight(.semibold))
+                                ForEach(Array(turn.reportedChecks.enumerated()), id: \.offset) { _, check in
+                                    HStack(alignment: .top, spacing: 7) {
+                                        Text("•")
+                                        Text(check).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                    }.font(.caption)
+                                }
+                            }
+                        }
+                    }.padding(.top, 8).frame(maxWidth: .infinity, alignment: .leading)
+                }.font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .padding(14).frame(maxWidth: .infinity, alignment: .leading)
+        .background(turn.role == "user" ? Color.accentColor.opacity(0.07) : Color(nsColor: .controlBackgroundColor),
+                    in: RoundedRectangle(cornerRadius: 12))
+    }
+}
+
 struct BrowserScreenRoot: View {
     @ObservedObject var context: BrowserScreenContext
     var body: some View {
@@ -659,7 +709,8 @@ struct ModSmithScreen: View {
                     modIcon(project.favicon, fallback: project.scope == "browser" ? "macwindow" : "globe")
                     VStack(alignment: .leading, spacing: 4) {
                         Text(project.name).font(.title2.weight(.semibold)).lineLimit(2)
-                        Text("\(model.snapshot.workspace_profile?.name ?? "This app") · \(project.scopeLabel) · \(project.statusLabel)").font(.caption).foregroundStyle(.secondary)
+                        Text("\(model.snapshot.workspace_profile?.name ?? "This app") · \(project.scopeLabel)").font(.caption).foregroundStyle(.secondary)
+                        Text("Latest request: \(project.statusLabel)").font(.caption).foregroundStyle(.secondary)
                     }
                     Spacer()
                     if !project.files.isEmpty {
@@ -797,36 +848,7 @@ struct ModSmithScreen: View {
     }
 
     private func turnView(_ turn: ModSmithTurn) -> some View {
-        VStack(alignment: .leading, spacing: 9) {
-            HStack {
-                Text(turn.role == "user" ? "You" : turn.role == "system" ? "Revision history" : turn.role == "activity" ? "Activity" : "ModSmith")
-                    .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                if turn.status == "active" { Label("Ready", systemImage: "checkmark.circle.fill").font(.caption).foregroundStyle(.green) }
-            }
-            Text(turn.displayText).font(.system(size: 13)).textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
-            if let notes = turn.notes, !notes.isEmpty {
-                DisclosureGroup("Details and limitations") {
-                    Text(notes).fixedSize(horizontal: false, vertical: true)
-                        .textSelection(.enabled)
-                }
-                .font(.callout).foregroundStyle(.secondary)
-            }
-            if let checks = turn.checks, turn.status != "failed", turn.status != "interrupted" {
-                if checks.isEmpty {
-                    Text("No verification reported.").font(.caption).foregroundStyle(.secondary)
-                } else {
-                    DisclosureGroup("Verification details") {
-                        ForEach(Array(checks.enumerated()), id: \.offset) { _, check in
-                            Text(check).font(.caption).foregroundStyle(.secondary)
-                        }
-                    }.font(.caption).foregroundStyle(.secondary)
-                }
-            }
-        }
-        .padding(14).frame(maxWidth: .infinity, alignment: .leading)
-        .background(turn.role == "user" ? Color.accentColor.opacity(0.07) : Color(nsColor: .controlBackgroundColor),
-                    in: RoundedRectangle(cornerRadius: 12))
+        ModSmithTurnCard(turn: turn)
     }
 
     @ViewBuilder private var activeBuild: some View {

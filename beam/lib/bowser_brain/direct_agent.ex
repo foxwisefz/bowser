@@ -50,7 +50,7 @@ defmodule BowserBrain.DirectAgent do
     Process.put(:direct_agent_phase, "finish")
     progress.("Summarizing the changes made…")
     with {:ok, output} <- completion(route, input, [],
-      "The run stopped because #{reason}. Make no more tool calls. Return the required JSON envelope, preserving all proposed files. Describe actual changes and checks only. If unfinished, name the specific remaining behavior and blocker in the summary and notes; explain the stated stopping reason. Do not call this a provider outage or mark unverified behavior complete.") do
+      "The run stopped because #{reason}. Make no more tool calls. Return the required JSON envelope, preserving all proposed files. Describe actual changes and checks only. In one or two short summary sentences, say what works and what remains unfinished or untested. Explain an allowance or time limit as stopping before the remaining work was finished; keep request counts and internal budget terminology out of the owner-facing summary. Do not ask for owner input merely because this run ended. Keep concrete limitations in notes and observed checks in checks. Do not call this a provider outage or mark unverified behavior complete.") do
       if Enum.any?(output, &(&1["type"] == "function_call")),
         do: {:error, :step_limit}, else: {:ok, verified_or_partial(text(output), Process.get(:modsmith_run))}
     end

@@ -11,6 +11,21 @@ public struct ModSmithTurn: Decodable, Identifiable {
         text.replacingOccurrences(of: "NEEDS THE RESIDENT AGENT:", with: "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
+    public var outcomeLabel: String? {
+        guard role == "assistant" else { return nil }
+        switch status {
+        case "active": return "Completed and checked"
+        case "partial": return "Not finished"
+        case "needs_help": return "Action needed"
+        case "failed": return "Couldn’t complete"
+        case "interrupted": return "Stopped"
+        case "ready": return "Not checked yet"
+        default: return nil
+        }
+    }
+    public var reportedChecks: [String] {
+        (checks ?? []).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+    }
 }
 
 public struct ModSmithChoice: Decodable, Identifiable {
