@@ -28,7 +28,10 @@ shells without the capability receive the existing `chrome.open_tab` operation.
 
 `hello.resources` and `resource_snapshot` expose protocol version 1, native launch
 session ID, next command sequence, topology revision, and windows with stable IDs,
-profile IDs, ordered tab IDs and active tab. No cookie or document data is included.
+profile IDs, ordered tab IDs, active tab, and recent focus order. No cookie or document data is included.
+Closing the active tab returns to the most recently focused surviving tab, with
+strip order as a fallback when no focus history remains. An explicit successor
+and visible split panes take precedence. Closing a background tab preserves focus.
 
 `resource_command` contains `version`, `session`, `sequence`, and `command`.
 The command names its observed `revision`, `window`, `profile`, `tab`, and `action`.

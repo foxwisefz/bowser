@@ -20,7 +20,14 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     private(set) var tabs: [EngineView] = []
     /// The focused tab; other panes may also be mounted. Closing the last tab closes the window.
     private(set) var activeTab: EngineView!
-    private weak var lastFocusedTab: EngineView?
+    private var focusHistory: [UInt64] = []
+    var focusedTabIDs: [UInt64] {
+        let live = Set(tabs.map(\.webviewId))
+        return focusHistory.filter { live.contains($0) }
+    }
+    private var lastFocusedTab: EngineView? {
+        focusedTabIDs.lazy.compactMap { id in self.tabs.first { $0.webviewId == id && $0 !== self.activeTab } }.first
+    }
     var pendingTabLesson: UInt64?
     var pendingTabLessonPoint = NSPoint.zero
     private(set) var pageFindBar: PageFindBar?
@@ -430,8 +437,9 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
                 if let lesson { TabShortcutLesson.show(lesson, in: window, from: pendingTabLessonPoint) }
             }
             pendingTabLesson = nil
-            lastFocusedTab = previous
         }
+        focusHistory = focusedTabIDs.filter { $0 != view.webviewId }
+        focusHistory.insert(view.webviewId, at: 0)
         if let layout = websiteLayout, !layout.ids.contains(view.webviewId) {
             detachWebsiteLayout()
             activeTab = nil
@@ -662,10 +670,12 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         }
         guard let index = tabs.firstIndex(where: { $0 === view }) else { return }
         let wasActive = activeTab === view
+        let recent = lastFocusedTab
         let wasPane = websiteLayout?.ids.contains(view.webviewId) == true
         let remainingTree = wasPane ? (try? WebsiteLayoutNode.parse(websiteLayout!.tree))?.removing(view.webviewId) : nil
         if wasPane { detachWebsiteLayout() }
         tabs.remove(at: index)
+        focusHistory.removeAll { $0 == view.webviewId }
         view.removeFromSuperview()
         view.tearDown()
 
@@ -673,7 +683,10 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
             window?.close()
             return
         }
-        if let preferred, wasActive { activeTab = tabs.first(where: { $0.webviewId == preferred }) }
+        if wasActive {
+            if let preferred { activeTab = tabs.first(where: { $0.webviewId == preferred }) }
+            else if !wasPane { activeTab = recent }
+        }
         if let remainingTree {
             // The remaining IDs still belong to this window. Recompose without
             // reloading their pages, retaining dragged sizes from the snapshot.

@@ -79,10 +79,12 @@ defmodule BowserBrain.ResourceController do
       "close" ->
         rest = List.delete(order, tab)
         panes = List.delete(Map.get(window, "panes", []), tab)
+        recent = Enum.find(Map.get(window, "focus_history", []), &(&1 in rest))
         next = cond do
           active != tab -> active
           intent["selecting"] in rest -> intent["selecting"]
           panes != [] -> hd(panes)
+          recent != nil -> recent
           rest == [] -> nil
           true -> Enum.at(rest, min(Enum.find_index(order, &(&1 == tab)), length(rest) - 1))
         end

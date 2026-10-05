@@ -45,4 +45,12 @@ defmodule BowserBrain.ResourceControllerTest do
     assert %{active: 3} = Controller.tab_command(Map.put(close, "selecting", 99), window())
     assert %{active: 3} = Controller.tab_command(Map.put(close, "selecting", 2), window())
   end
+  test "closing uses live focus history before strip neighbors" do
+    focused = Map.put(window(), "focus_history", [2, 99, 1, 3])
+    assert %{active: 1} = Controller.tab_command(%{"action" => "close", "tab" => 2}, focused)
+    assert %{active: 2} = Controller.tab_command(%{"action" => "close", "tab" => 1}, focused)
+    assert %{active: 3} = Controller.tab_command(%{"action" => "close", "tab" => 2, "selecting" => 3}, focused)
+    assert %{active: 3} = Controller.tab_command(%{"action" => "close", "tab" => 2}, Map.put(focused, "panes", [2, 3]))
+    assert %{active: 3} = Controller.tab_command(%{"action" => "close", "tab" => 2}, Map.put(focused, "focus_history", [2, 99]))
+  end
 end

@@ -62,7 +62,8 @@ import Foundation
     func snapshot() -> [String: Any] {
         let windows: [[String: Any]] = BrowserWindowController.all.map { host in
             ["id": host.resourceID, "profile": host.profile.id,
-             "tabs": host.tabs.map(\.webviewId), "panes": host.websiteLayout?.ids ?? [], "active": host.activeTab?.webviewId ?? 0]
+             "tabs": host.tabs.map(\.webviewId), "panes": host.websiteLayout?.ids ?? [], "active": host.activeTab?.webviewId ?? 0,
+             "focus_history": host.focusedTabIDs]
         }
         let data = (try? JSONSerialization.data(withJSONObject: ["windows":windows, "downloads":NativeDownloads.shared.snapshot], options: [.sortedKeys])) ?? Data()
         let revision = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
