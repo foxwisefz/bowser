@@ -172,7 +172,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                     guard !event.isARepeat else { return nil }
                     if CommandBar.shared.handShortcutToPage(event, for: controller) { return nil }
                 }
-                CommandBar.shared.show(for: controller)
+                CommandBar.shared.show(for: controller, showCurrentURL: key == "l")
             }
             return nil
         case "f":

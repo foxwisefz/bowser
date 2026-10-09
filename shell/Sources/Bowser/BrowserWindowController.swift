@@ -712,8 +712,9 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
             guard let self, let view, self.activeTab === view else { return }
             self.applyTitle(title)
         }
-        view.onURLChange = { [weak self, weak view] _ in
+        view.onURLChange = { [weak self, weak view] url in
             guard let self, self.activeTab === view else { return }
+            self.titleLabel.toolTip = url.isEmpty ? self.titleLabel.stringValue : url
             self.refreshToolbarFavicon()
             self.syncModButtons()
         }
@@ -848,7 +849,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         let shown = title.isEmpty ? "Bowser" : title
         window?.title = profile.icon.map { "\($0) \(shown)" } ?? shown
         titleLabel.stringValue = title.isEmpty ? (activeTab?.currentURLString.flatMap(URL.init(string:))?.host ?? "New tab") : title
-        titleLabel.toolTip = titleLabel.stringValue
+        titleLabel.toolTip = activeTab?.currentURLString ?? titleLabel.stringValue
     }
 
     private func applyThemeColor(_ pageColor: NSColor?) {

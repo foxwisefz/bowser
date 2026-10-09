@@ -73,6 +73,7 @@ they are not required for this source-build workflow.
 A browser window appears. `⌘K` opens the command bar: type a URL, or a
 `:command`. Useful ones out of the box: `:settings`, `:panels`, `:do`.
 Press `⌘K` again while Bowser’s command bar is open to send `⌘K` to the webpage and open its own command menu, when supported.
+Use `⌘L` to view the current URL, selected for copying or editing, or `⌘⇧C` to copy it directly. Hover over the page title to see the URL.
 
 `⌘F` find in page (`Return`/`⇧Return` or `⌘G`/`⇧⌘G` for matches; `Esc` closes),
 `⌘T` new tab, `⌘⇧[`/`⌘⇧]` cycle tabs, `⌃Tab` last focused tab, `⌘R` reload, `⌘0/+/-` zoom.

@@ -5,6 +5,34 @@ import BowserSurfaceKit
 @testable import Bowser
 
 final class CommandBarTests: XCTestCase {
+  @MainActor func testLocationShortcutSelectsCurrentURLAndSearchStartsEmpty() throws {
+    let controller = BrowserWindowController(profile: .defaultProfile)
+    defer { CommandBar.shared.hide(); controller.window?.close() }
+    let app = AppDelegate()
+    func press(_ key: String, code: UInt16) throws -> NSTextView {
+      let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero,
+        modifierFlags: .command, timestamp: 0, windowNumber: controller.window!.windowNumber,
+        context: nil, characters: key, charactersIgnoringModifiers: key,
+        isARepeat: false, keyCode: code))
+      XCTAssertNil(app.handleShortcut(event))
+      let panel = try XCTUnwrap(NSApp.windows.first {
+        $0 is NSPanel && $0.isVisible && ($0 as? BrowserOwnedPanel)?.browserOwner === controller
+      })
+      return try XCTUnwrap(panel.firstResponder as? NSTextView)
+    }
+    let url = "https://example.test/document?name=a%20b&download=1#section"
+    try XCTUnwrap(controller.activeTab).restore(urlString: url)
+    let editor = try press("l", code: 37)
+    XCTAssertEqual(editor.string, url)
+    XCTAssertEqual(editor.selectedRange(), NSRange(location: 0, length: (url as NSString).length))
+    CommandBar.shared.hide()
+    XCTAssertEqual(try press("k", code: 40).string, "")
+    CommandBar.shared.hide()
+    let next = controller.openTab()
+    next.restore(urlString: "https://other.test/new-path")
+    XCTAssertEqual(try press("l", code: 37).string, "https://other.test/new-path")
+  }
+
   @MainActor func testDefaultResultsContainSwitchableTabsFromOnlyThisProfile() {
     let tabs = [
       CommandBar.TabCandidate(

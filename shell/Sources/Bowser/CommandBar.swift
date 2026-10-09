@@ -14,14 +14,14 @@ import BowserSurfaceKit
     private var panel: CommandBarPanel?
     private weak var target: BrowserWindowController?
     private var targetURL = ""
-    func show(for controller: BrowserWindowController) {
+    func show(for controller: BrowserWindowController, showCurrentURL: Bool = false) {
         guard SiteAppConfiguration.current == nil else { return }
         target = controller
         let panel = ensurePanel()
         panel.browserOwner = controller
         targetURL = controller.activeTab?.currentURLString ?? ""
         state.modScope.reset(url: targetURL, faviconPath: controller.activeTab?.faviconPath)
-        state.query = ""; state.selected = 0
+        state.query = showCurrentURL ? targetURL : ""; state.selected = 0
         state.profile = controller.profile.id; state.active = controller.activeTab?.webviewId
         state.placeholder = "Search the web, enter a URL, or find a tab"
         state.refresh()
