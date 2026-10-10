@@ -129,6 +129,7 @@ public struct ModSmithSnapshot: Decodable {
     public var running_project: String?
     public var accepted: String?
     public var error: String?
+    public var notice: String?
     public var progress: [String] = []
     public var stage = "Inspecting page"
     public var unrepresentedMods: [ModSmithExisting] {

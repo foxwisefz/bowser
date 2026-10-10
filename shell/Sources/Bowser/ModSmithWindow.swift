@@ -114,7 +114,12 @@ final class ModSmithModel: ObservableObject, ModSmithPresentation {
             message["project"] = snapshot.running_project
         }
         if action == "open", let targetWebview { message["webview"] = targetWebview }
-        if let path { message["path"] = path }
+        if let path { message[action == "copy" ? "destination" : "path"] = path }
+        if action == "copy_existing" {
+            message.removeValue(forKey: "project")
+            message["path"] = id
+            message["destination"] = path
+        }
         if action == "delete", let id = id ?? snapshot.selected { deletingProjects.insert(id) }
         send(message)
     }

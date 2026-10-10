@@ -3,6 +3,12 @@
 ModSmith's workflow applies to every generated mod. A reported website or mod
 is a reproduction case, not a reason to add a special action to the product.
 
+The mod menu offers **Copy to profile** for installed browser mods. Choose a
+destination profile to create an independent copy of its current code and assets.
+The copy starts turned off, with fresh Store namespaces and no conversation,
+undo history, runtime state, website data, or saved mod data copied. Enable it
+from Mods in the destination profile. The original remains unchanged.
+
 The result envelope uses `active` only for verified requested behavior.
 `needs_help` includes a structured next step:
 

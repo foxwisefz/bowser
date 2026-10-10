@@ -278,7 +278,7 @@ defmodule BowserBrain.ModWorkshop do
 
   def handle_info({:browser_event, %{"event" => "modsmith"} = event}, state) do
     state = if event["action"] == "open" && is_integer(event["webview"]), do: %{state | active: event["webview"]}, else: state
-    state = action(state, event) |> Map.put(:error_client, client(event))
+    state = action(Map.put(state, :notice, nil), event) |> Map.put(:error_client, client(event))
     publish(state, client(event), event["action"] == "open", if(event["action"] == "open", do: "overview"))
     {:noreply, state}
   rescue
@@ -710,13 +710,23 @@ defmodule BowserBrain.ModWorkshop do
       action == "open" ->
         %{state | error: nil}
 
-      action in ["toggle_existing", "delete_existing"] and state.run == nil ->
+      action in ["toggle_existing", "delete_existing", "copy_existing"] and state.run == nil ->
         next = edit_existing(state, event)
         if next.error do
           next
         else
-          action(next, event |> Map.put("action", if(action == "toggle_existing", do: "toggle", else: "delete")) |> Map.put("project", selected(next, client)))
+          action(next, event |> Map.put("action", String.replace_suffix(action, "_existing", "")) |> Map.put("project", selected(next, client)))
         end
+
+      action == "copy" and valid and client == "main" and state.run == nil ->
+        {copy, files} = BowserBrain.ModCopy.prepare(project, event["destination"])
+        BowserBrain.ModCopy.install(files, fn ->
+          state |> put_project(copy) |> Map.put(:error, nil)
+            |> Map.put(:notice, "Copied to #{profile_identity(event["destination"])["name"]}. The copy starts off with fresh data.")
+        end)
+
+      action in ["copy", "copy_existing"] ->
+        %{state | error: "Stop the current build and select an installed mod in this profile before copying."}
 
       action == "edit_existing" ->
         edit_existing(state, event)
@@ -752,7 +762,7 @@ defmodule BowserBrain.ModWorkshop do
         state |> Map.put(:pending_audit, nil) |> finish(nil, :cancelled)
 
       action == "enable_and_test" and valid and state.run == nil ->
-        files = live_paths(project)
+        files = runnable_paths(project)
         if files != [] and Enum.all?(files, &String.ends_with?(&1, ".off")) do
           enabled = revision_action(state, project, "toggle")
           if enabled.error do
@@ -1405,6 +1415,8 @@ defmodule BowserBrain.ModWorkshop do
     |> Enum.filter(&(ModRevision.read(&1) != nil))
   end
 
+  defp runnable_paths(project), do: Enum.reject(live_paths(project), &String.starts_with?(&1, "assets/"))
+
   defp delete_project(state, project) do
     canonical = &String.replace_suffix(&1, ".off", "")
     identity = fn p ->
@@ -1501,7 +1513,7 @@ defmodule BowserBrain.ModWorkshop do
   end
 
   defp revision_action(state, p, "toggle") do
-    files = live_paths(p)
+    files = runnable_paths(p)
     enabled = Enum.any?(files, &(not String.ends_with?(&1, ".off")))
     files = Enum.filter(files, &(String.ends_with?(&1, ".off") != enabled))
     revision = ModRevision.new_revision(if(enabled, do: "Disable mod", else: "Enable mod")) |> Map.put("usage_before", p["usage"])
@@ -1573,6 +1585,7 @@ defmodule BowserBrain.ModWorkshop do
       running_project: if(state.run && (get_in(state.run.app || %{}, ["id"]) || "main") == client, do: state.run.project),
       accepted: state.accepted,
       error: if(Map.get(state, :error_client, "main") == client, do: state.error),
+      notice: if(Map.get(state, :error_client, "main") == client, do: Map.get(state, :notice)),
       progress:
         if(state.run && (get_in(state.run.app || %{}, ["id"]) || "main") == client,
           do: state.progress,
@@ -1592,7 +1605,7 @@ defmodule BowserBrain.ModWorkshop do
           |> Map.put("turns", Enum.map(p["turns"], &ModSmithOutcome.visible_turn/1))
           |> Map.put("favicon", if(p["scope"] != "browser", do: BowserBrain.ModIcon.cached(p["url"], Map.get(p, "profile", "default"))))
           |> Map.put("files", files)
-          |> Map.put("enabled", Enum.any?(files, &(not String.ends_with?(&1, ".off"))))
+          |> Map.put("enabled", Enum.any?(runnable_paths(p), &(not String.ends_with?(&1, ".off"))))
           |> Map.put("can_undo", revision != nil)
           |> Map.put("undo_label", revision && ModSmithOutcome.revision_label(revision))
         end)

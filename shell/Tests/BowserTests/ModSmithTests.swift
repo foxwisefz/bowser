@@ -5,6 +5,20 @@ import BowserSurfaceKit
 @testable import Bowser
 
 final class ModSmithTests: XCTestCase {
+    @MainActor func testCopyTargetsDestinationWithoutSwitchingSourceProfile() {
+        let model = ModSmithModel()
+        model.connected = { true }
+        var sent: [String: Any] = [:]
+        model.send = { sent = $0 }
+        model.action("copy", project: "source", path: "work")
+        XCTAssertEqual(sent["project"] as? String, "source")
+        XCTAssertEqual(sent["destination"] as? String, "work")
+        model.action("copy_existing", project: "mods/reader.ex", path: "work")
+        XCTAssertNil(sent["project"])
+        XCTAssertEqual(sent["path"] as? String, "mods/reader.ex")
+        XCTAssertEqual(sent["destination"] as? String, "work")
+    }
+
     private func resultTurn(status: String?, checks: [String]? = nil, role: String = "assistant") throws -> ModSmithTurn {
         var json: [String: Any] = ["id": "result", "role": role,
             "text": "The sidebar layout is updated. Scrolling still needs a fix.",

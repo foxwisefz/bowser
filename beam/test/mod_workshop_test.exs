@@ -57,6 +57,97 @@ defmodule BowserBrain.ModWorkshopTest do
     {:ok, root: root}
   end
 
+  test "copy gives code a new profile and storage without copying history or data", %{root: root} do
+    profiles_path = Application.get_env(:bowser_brain, :profiles_path)
+    Application.put_env(:bowser_brain, :profiles_path, Path.join(root, "profiles.json"))
+    on_exit(fn -> Application.put_env(:bowser_brain, :profiles_path, profiles_path) end)
+    File.write!(Path.join(root, "profiles.json"), JSON.encode!([%{"id" => "work", "name" => "Work"}]))
+    source = """
+    defmodule CopyStorageFixture do
+      alias BowserBrain.Store
+      alias BowserBrain.Store, as: Saved
+      def own, do: Store.get(__MODULE__, "value")
+      def custom, do: Saved.get("copy-fixture-custom", "value")
+      def save, do: Store.put(__MODULE__, "value", "copy")
+    end
+    """
+    ModRevision.write("mods/copy_fixture.ex.off", source)
+    BowserBrain.Store.put(CopyStorageFixture, "value", "original")
+    BowserBrain.Store.put("copy-fixture-custom", "value", "private")
+    on_exit(fn ->
+      BowserBrain.Store.clear(CopyStorageFixture)
+      BowserBrain.Store.clear("copy-fixture-custom")
+    end)
+    state = event("edit_existing", %{"path" => "mods/copy_fixture.ex.off"})
+    [original] = state.data["projects"]
+    state = event("copy", %{"project" => original["id"], "destination" => "work"})
+    assert state.error == nil
+    assert state.notice =~ "Work"
+    [copy] = Enum.filter(state.data["projects"], &(&1["profile"] == "work"))
+    assert copy["id"] != original["id"]
+    assert copy["turns"] == [] and copy["revisions"] == [] and copy["session"] == nil
+    [owned] = copy["owned_files"]
+    path = ModRevision.actual_path(owned)
+    assert String.ends_with?(path, ".ex.off")
+    assert BowserBrain.ModScope.file_profile(ModRevision.absolute(path)) == "work"
+    [{module, _}] = Code.compile_file(ModRevision.absolute(path))
+    on_exit(fn -> BowserBrain.Store.clear(module); :code.purge(module); :code.delete(module) end)
+    assert module.own() == nil
+    assert module.custom() == nil
+    assert module.save() == :ok
+    assert module.own() == "copy"
+    assert BowserBrain.Store.get(CopyStorageFixture, "value") == "original"
+    assert ModRevision.read("mods/copy_fixture.ex.off") == source
+    assert length(event("copy", %{"project" => original["id"], "destination" => "work"}).data["projects"]) == 3
+    invalid = event("copy", %{"project" => original["id"], "destination" => "missing"})
+    assert invalid.error =~ "existing"
+    assert length(invalid.data["projects"]) == 3
+  end
+
+  test "copy rewrites companion code and assets and rolls back failed installs", %{root: root} do
+    previous = Application.get_env(:bowser_brain, :profiles_path)
+    Application.put_env(:bowser_brain, :profiles_path, Path.join(root, "profiles.json"))
+    on_exit(fn -> Application.put_env(:bowser_brain, :profiles_path, previous) end)
+    File.write!(Path.join(root, "profiles.json"), JSON.encode!([%{"id" => "work", "name" => "Work"}]))
+    project = ModWorkshop.new_project("Reader", "site", "https://example.com", nil)
+    asset = "assets/#{project["id"]}/icon.svg"
+    project = Map.put(project, "owned_files", ["mods/main.ex", "mods/helper.ex", asset, "sites/example.com/style.css"])
+    ModRevision.write("mods/main.ex", "defmodule CopyMainFixture do\n def helper, do: CopyHelperFixture\n def icon, do: #{inspect(asset)}\nend")
+    ModRevision.write("mods/helper.ex", "defmodule CopyHelperFixture do\n def value, do: 1\nend")
+    ModRevision.write(asset, "<svg/>")
+    ModRevision.write("sites/example.com/style.css", "body { color: red; }")
+    {copy, files} = BowserBrain.ModCopy.prepare(project, "work")
+    main = Enum.find_value(files, fn {path, source} -> if String.starts_with?(path, "mods/main_"), do: source end)
+    assert main =~ "CopyHelperFixture"
+    refute main =~ "do: CopyHelperFixture"
+    assert main =~ "assets/#{copy["id"]}/"
+    assert Enum.any?(files, fn {path, source} -> String.ends_with?(path, ".css.off") and source =~ "bowser-profile: work" end)
+    assert_raise RuntimeError, "save failed", fn ->
+      BowserBrain.ModCopy.install(files, fn -> raise "save failed" end)
+    end
+    assert Enum.all?(files, fn {path, _} -> ModRevision.read(path) == nil end)
+    assert ModRevision.read(asset) == "<svg/>"
+    ModRevision.write("mods/helper.ex", "# bowser-profile: another\ndefmodule CopyHelperFixture do end")
+    assert_raise RuntimeError, ~r/another profile/, fn -> BowserBrain.ModCopy.prepare(project, "work") end
+  end
+
+  test "assets stay available and do not make disabled copies appear enabled" do
+    project = ModWorkshop.new_project("Asset mod", "site", "https://example.com", nil)
+    asset = "assets/#{project["id"]}/icon.svg"
+    project = Map.put(project, "owned_files", ["sites/example.com/asset_mod.css", asset])
+    ModRevision.write("sites/example.com/asset_mod.css.off", "body {color: red}")
+    ModRevision.write(asset, "<svg/>")
+    state = :sys.replace_state(ModWorkshop, fn state -> put_in(state, [:data, "projects"], [project]) end)
+    assert [%{"enabled" => false}] = ModWorkshop.snapshot(state, "main").projects
+    enabled = event("toggle", %{"project" => project["id"]})
+    assert enabled.error == nil
+    assert [%{"enabled" => true}] = ModWorkshop.snapshot(enabled, "main").projects
+    assert ModRevision.read(asset) == "<svg/>"
+    disabled = event("toggle", %{"project" => project["id"]})
+    assert [%{"enabled" => false}] = ModWorkshop.snapshot(disabled, "main").projects
+    assert ModRevision.read(asset) == "<svg/>"
+  end
+
   test "delete removes active and disabled files, project history and all selections", %{root: root} do
     File.mkdir_p!(Path.join(root, "mods"))
     File.write!(Path.join(root, "mods/reader.ex.off"), "# Reader")

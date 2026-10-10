@@ -601,7 +601,16 @@ struct ModSmithScreen: View {
                                 }.buttonStyle(.plain)
                                 Toggle(mod.enabled ? "On" : "Off", isOn: Binding(get: { mod.enabled }, set: { if $0 != mod.enabled { model.action("toggle_existing", path: mod.path) } }))
                                     .toggleStyle(.switch).fixedSize().disabled(model.snapshot.busy)
-                                Menu { Button("Delete mod…", role: .destructive) { deletingPath = mod.path } } label: { Image(systemName: "ellipsis") }
+                                Menu {
+                                    if !model.isSiteApp {
+                                        Menu("Copy to profile") {
+                                            ForEach(profileServices.profiles.filter { $0.id != model.snapshot.workspace_profile?.id }, id: \.id) { profile in
+                                                Button(profile.name) { model.action("copy_existing", project: mod.path, path: profile.id) }
+                                            }
+                                        }
+                                    }
+                                    Button("Delete mod…", role: .destructive) { deletingPath = mod.path }
+                                } label: { Image(systemName: "ellipsis") }
                                     .menuStyle(.borderlessButton).menuIndicator(.hidden).frame(width: 24).disabled(model.snapshot.busy)
                             }
                             HStack(spacing: 18) {
@@ -619,6 +628,7 @@ struct ModSmithScreen: View {
                 }.frame(maxWidth: .infinity, alignment: .leading)
             }
             if let error = model.snapshot.error ?? model.connectionError { Text(error).foregroundStyle(.red) }
+            if let notice = model.snapshot.notice { Text(notice).foregroundStyle(.secondary) }
             if model.snapshot.canStop { activeBuild }
         }.padding(28).background(Color(nsColor: .windowBackgroundColor))
     }
@@ -637,6 +647,13 @@ struct ModSmithScreen: View {
     }
     private func projectMenu(_ project: ModSmithProject) -> some View {
         Menu {
+            if !model.isSiteApp {
+                Menu("Copy to profile") {
+                    ForEach(profileServices.profiles.filter { $0.id != model.snapshot.workspace_profile?.id }, id: \.id) { profile in
+                        Button(profile.name) { model.action("copy", project: project.id, path: profile.id) }
+                    }
+                }.disabled(project.files.isEmpty)
+            }
             if project.canUndo {
                 Button("Undo last change") { model.action("undo", project: project.id) }
                     .help("Restores mod files. Website actions and saved data stay as they are.")
@@ -879,6 +896,7 @@ struct ModSmithScreen: View {
             if let error = model.connectionError ?? model.snapshot.error {
                 Text(error).font(.caption).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
             }
+            if let notice = model.snapshot.notice { Text(notice).foregroundStyle(.secondary) }
             TextField(model.project == nil ? "Describe what you want to change…" : "What should we change next?", text: Binding(get: { model.draft }, set: { model.draft = $0 }), axis: .vertical)
                 .textFieldStyle(.plain).lineLimit(3...6).focused($composerFocused)
                 .padding(13).background(.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 12))
