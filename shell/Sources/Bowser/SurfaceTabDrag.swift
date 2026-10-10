@@ -85,18 +85,26 @@ final class TabAppDragView: NSView, NSDraggingSource, SurfaceTabDragSource, NSMe
         defer { down = nil; endInteraction() }
         if dragged && closeGesture {
             let point = window?.convertPoint(toScreen: event.locationInWindow) ?? NSEvent.mouseLocation
+            updateReorder(at: point)
+            let preview = TabDragPreview.shared
+            let destination = cancelled ? nil : preview.target
+            let after = preview.after
             let remove = Self.shouldRemove(closing: true, operation: [], cancelled: cancelled,
                 mouseButtons: 0, exportFailed: false, point: point, dock: dragFrame)
             let id = draggedID
             finishDrag()
-            if remove, let id, SurfaceServices.shared.closeTab(id) {
+            if let id, let destination, isAuthorized() {
+                _ = SurfaceServices.shared.moveTab(id, destination, after)
+            } else if remove, let id, SurfaceServices.shared.closeTab(id) {
                 TabDustEffect.show(at: point)
             }
         } else if !dragged, down != nil, bounds.contains(convert(event.locationInWindow, from: nil)) { select() }
     }
     override func mouseDragged(with event: NSEvent) {
         if dragged && closeGesture {
-            updateCloseCue(at: window?.convertPoint(toScreen: event.locationInWindow) ?? NSEvent.mouseLocation)
+            let point = window?.convertPoint(toScreen: event.locationInWindow) ?? NSEvent.mouseLocation
+            updateReorder(at: point)
+            updateCloseCue(at: point)
             return
         }
         guard !dragged, let down,
@@ -108,7 +116,7 @@ final class TabAppDragView: NSView, NSDraggingSource, SurfaceTabDragSource, NSMe
         TabDragPreview.shared.source = webviewID
         dragFrame = window?.frame
         cancelled = false
-        // Ordinary drags remove tabs; Option opts into exporting a saved app.
+        // Ordinary drags reorder inside the dock and close outside it.
         closeGesture = !event.modifierFlags.contains(.option)
         escapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             if event.keyCode == 53 { self?.cancelOperation(nil) }
@@ -121,6 +129,7 @@ final class TabAppDragView: NSView, NSDraggingSource, SurfaceTabDragSource, NSMe
             // Keep this entirely in AppKit mouse tracking: no drag pasteboard,
             // file promise, URL or drop operation is offered to another app.
             SurfaceServices.shared.edgeDragging(true)
+            updateReorder(at: window?.convertPoint(toScreen: event.locationInWindow) ?? NSEvent.mouseLocation)
             updateCloseCue(at: window?.convertPoint(toScreen: event.locationInWindow) ?? NSEvent.mouseLocation)
             return
         }
@@ -148,7 +157,32 @@ final class TabAppDragView: NSView, NSDraggingSource, SurfaceTabDragSource, NSMe
 
     override func cancelOperation(_ sender: Any?) {
         cancelled = true
+        TabDragPreview.shared.target = nil
         closeCue?.orderOut(nil)
+    }
+
+    private func updateReorder(at point: NSPoint) {
+        let preview = TabDragPreview.shared
+        guard !cancelled, isAuthorized(), let id = draggedID, let window,
+              let root = window.contentView else { preview.target = nil; return }
+        let location = window.convertPoint(fromScreen: point)
+        func target(in view: NSView) -> TabAppDragView? {
+            guard !view.isHidden else { return nil }
+            if let row = view as? TabAppDragView, row !== self,
+               row.visibleRect.contains(row.convert(location, from: nil)),
+               row.isAuthorized(), SurfaceServices.shared.canMoveTab(id, row.webviewID) {
+                return row
+            }
+            for child in view.subviews {
+                if let row = target(in: child) { return row }
+            }
+            return nil
+        }
+        guard let row = target(in: root) else { preview.target = nil; return }
+        if preview.target != row.webviewID {
+            preview.after = row.convert(location, from: nil).y < row.bounds.midY
+            preview.target = row.webviewID
+        }
     }
 
     private func finishDrag() {

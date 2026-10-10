@@ -4,6 +4,42 @@ import IconRendering
 @testable import Bowser
 
 final class TabAppDragTests: XCTestCase {
+    @MainActor func testOrdinaryDragReordersBothWaysAndEscapeCancels() throws {
+        SurfaceHostServices.configure()
+        let host = BrowserWindowController(profile: .defaultProfile)
+        let first = try XCTUnwrap(host.activeTab)
+        let second = host.openTab(activate: false)
+        let panel = NSPanel(contentRect: NSRect(x: 100, y: 100, width: 48, height: 200),
+            styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.isReleasedWhenClosed = false
+        let root = NSView(frame: NSRect(x: 0, y: 0, width: 48, height: 200))
+        panel.contentView = root
+        let source = TabAppDragView(frame: NSRect(x: 0, y: 140, width: 48, height: 40))
+        let target = TabAppDragView(frame: NSRect(x: 0, y: 60, width: 48, height: 40))
+        source.webviewID = first.webviewId; target.webviewID = second.webviewId
+        root.addSubview(source); root.addSubview(target)
+        defer { panel.close(); host.window?.close() }
+        func drag(to y: CGFloat, cancel: Bool = false) throws {
+            func event(_ type: NSEvent.EventType, _ y: CGFloat) throws -> NSEvent {
+                try XCTUnwrap(NSEvent.mouseEvent(with: type, location: NSPoint(x: 24, y: y),
+                    modifierFlags: [], timestamp: 0, windowNumber: panel.windowNumber,
+                    context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+            }
+            source.mouseDown(with: try event(.leftMouseDown, 160))
+            source.mouseDragged(with: try event(.leftMouseDragged, y))
+            XCTAssertEqual(TabDragPreview.shared.target, second.webviewId)
+            if cancel { source.cancelOperation(nil) }
+            source.mouseUp(with: try event(.leftMouseUp, y))
+            XCTAssertNil(TabDragPreview.shared.source)
+        }
+        try drag(to: 65)
+        XCTAssertEqual(host.tabs.map(\.webviewId), [second.webviewId, first.webviewId])
+        try drag(to: 95, cancel: true)
+        XCTAssertEqual(host.tabs.map(\.webviewId), [second.webviewId, first.webviewId])
+        try drag(to: 95)
+        XCTAssertEqual(host.tabs.map(\.webviewId), [first.webviewId, second.webviewId])
+    }
+
     @MainActor func testContextMenuClosesOnlyTargetAndRejectsRetiredRenderer() throws {
         SurfaceHostServices.configure()
         let host = BrowserWindowController(profile: .defaultProfile)
