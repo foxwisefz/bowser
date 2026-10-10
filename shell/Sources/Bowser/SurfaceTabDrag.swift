@@ -205,29 +205,37 @@ final class TabAppDragView: NSView, NSDraggingSource, SurfaceTabDragSource, NSMe
         guard !cancelled else { return }
         let ready = Self.shouldRemove(closing: true, operation: [], cancelled: false,
             mouseButtons: 0, exportFailed: false, point: point, dock: dragFrame)
-        let panel = closeCue ?? NSPanel(contentRect: NSRect(x: 0, y: 0, width: 220, height: 52),
+        let panel = closeCue ?? NSPanel(contentRect: NSRect(x: 0, y: 0, width: 170, height: 36),
             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         if closeCue == nil {
             panel.isReleasedWhenClosed = false
             panel.isOpaque = false
             panel.backgroundColor = .clear
+            panel.hasShadow = false
             panel.ignoresMouseEvents = true
             panel.level = .popUpMenu
             panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
             closeCue = panel
         }
         panel.contentView = NSHostingView(rootView:
-            HStack(spacing: 10) {
+            HStack(spacing: 7) {
                 if let closeIcon {
                     Image(nsImage: closeIcon).resizable().scaledToFit()
-                        .frame(width: 32, height: 32)
+                        .frame(width: 24, height: 24)
+                        .opacity(ready ? 0.65 : 1)
                         .accessibilityHidden(true)
                 }
-                Text(ready ? "Release to close" : "Drag out to close")
-                    .font(.system(size: 13, weight: .semibold))
+                if ready {
+                    Label("Release to close", systemImage: "xmark")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.primary)
+                        .padding(.horizontal, 9).padding(.vertical, 6)
+                        .background(.ultraThinMaterial, in: Capsule())
+                }
+                Spacer(minLength: 0)
             }
-            .padding(10).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 9)))
-        panel.setFrameOrigin(NSPoint(x: point.x + 18, y: point.y - 62))
+            .padding(4))
+        panel.setFrameOrigin(NSPoint(x: point.x + 14, y: point.y - 44))
         panel.orderFrontRegardless()
     }
 
