@@ -102,6 +102,7 @@ final class TabAppDragView: NSView, NSDraggingSource, SurfaceTabDragSource, NSMe
     }
     override func mouseDragged(with event: NSEvent) {
         if dragged && closeGesture {
+            _ = autoscroll(with: event)
             let point = window?.convertPoint(toScreen: event.locationInWindow) ?? NSEvent.mouseLocation
             updateReorder(at: point)
             updateCloseCue(at: point)
@@ -165,24 +166,25 @@ final class TabAppDragView: NSView, NSDraggingSource, SurfaceTabDragSource, NSMe
         let preview = TabDragPreview.shared
         guard !cancelled, isAuthorized(), let id = draggedID, let window,
               let root = window.contentView else { preview.target = nil; return }
-        let location = window.convertPoint(fromScreen: point)
-        func target(in view: NSView) -> TabAppDragView? {
-            guard !view.isHidden else { return nil }
+        guard window.frame.insetBy(dx: -16, dy: 0).contains(point) else {
+            preview.target = nil; return
+        }
+        func rows(in view: NSView) -> [(TabAppDragView, NSRect)] {
+            guard !view.isHidden else { return [] }
             if let row = view as? TabAppDragView, row !== self,
-               row.visibleRect.contains(row.convert(location, from: nil)),
-               row.isAuthorized(), SurfaceServices.shared.canMoveTab(id, row.webviewID) {
-                return row
+               !row.bounds.intersection(row.visibleRect).isEmpty, row.isAuthorized(),
+               SurfaceServices.shared.canMoveTab(id, row.webviewID) {
+                return [(row, window.convertToScreen(row.convert(row.bounds.intersection(row.visibleRect), to: nil)))]
             }
-            for child in view.subviews {
-                if let row = target(in: child) { return row }
-            }
-            return nil
+            return view.subviews.flatMap { rows(in: $0) }
         }
-        guard let row = target(in: root) else { preview.target = nil; return }
-        if preview.target != row.webviewID {
-            preview.after = row.convert(location, from: nil).y < row.bounds.midY
-            preview.target = row.webviewID
-        }
+        guard let (row, frame) = rows(in: root).min(by: {
+            abs($0.1.midY - point.y) < abs($1.1.midY - point.y)
+        }) else { preview.target = nil; return }
+        // Stable rows let the pointer cross a midpoint in either direction,
+        // including the space between icons, without chasing an animated gap.
+        preview.after = point.y < frame.midY
+        preview.target = row.webviewID
     }
 
     private func finishDrag() {
@@ -205,7 +207,6 @@ final class TabAppDragView: NSView, NSDraggingSource, SurfaceTabDragSource, NSMe
         guard !cancelled else { return }
         let ready = Self.shouldRemove(closing: true, operation: [], cancelled: false,
             mouseButtons: 0, exportFailed: false, point: point, dock: dragFrame)
-        guard ready else { closeCue?.orderOut(nil); return }
         let panel = closeCue ?? NSPanel(contentRect: NSRect(x: 0, y: 0, width: 170, height: 36),
             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         if closeCue == nil {
@@ -222,7 +223,7 @@ final class TabAppDragView: NSView, NSDraggingSource, SurfaceTabDragSource, NSMe
             HStack(spacing: 7) {
                 if let closeIcon {
                     Image(nsImage: closeIcon).resizable().scaledToFit()
-                        .frame(width: 24, height: 24)
+                        .frame(width: ready ? 24 : 32, height: ready ? 24 : 32)
                         .opacity(ready ? 0.65 : 1)
                         .accessibilityHidden(true)
                 }
@@ -233,10 +234,15 @@ final class TabAppDragView: NSView, NSDraggingSource, SurfaceTabDragSource, NSMe
                         .padding(.horizontal, 9).padding(.vertical, 6)
                         .background(.ultraThinMaterial, in: Capsule())
                 }
-                Spacer(minLength: 0)
+                if ready { Spacer(minLength: 0) }
             }
             .padding(4))
-        panel.setFrameOrigin(NSPoint(x: point.x + 14, y: point.y - 44))
+        if ready {
+            panel.setFrame(NSRect(x: point.x + 14, y: point.y - 44, width: 170, height: 36), display: true)
+        } else {
+            let x = dragFrame?.midX ?? point.x
+            panel.setFrame(NSRect(x: x - 20, y: point.y - 20, width: 40, height: 40), display: true)
+        }
         panel.orderFrontRegardless()
     }
 

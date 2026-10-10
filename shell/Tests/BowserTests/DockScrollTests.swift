@@ -4,7 +4,7 @@ import XCTest
 @testable import Bowser
 
 @MainActor final class DockScrollTests: XCTestCase {
-    func testReorderGapMovesNeighborsAndRendersInsideDock() async throws {
+    func testReorderMarkerKeepsDropGeometryStable() async throws {
         _ = NSApplication.shared
         let items: [[String: Any]] = (1...5).map { index -> [String: Any] in
             let symbol = index == 1 ? "envelope.fill" : "globe"
@@ -28,12 +28,62 @@ import XCTest
         try await Task.sleep(for: .milliseconds(400))
         hosting.layoutSubtreeIfNeeded()
         let expanded = try XCTUnwrap(rows(hosting).first { $0.webviewID == 3 })
-        XCTAssertEqual(expanded.frame.height, height + 40, accuracy: 1)
+        XCTAssertEqual(expanded.frame.height, height, accuracy: 1)
         if let path = ProcessInfo.processInfo.environment["BOWSER_DOCK_REORDER_RENDER"] {
             let bitmap = try XCTUnwrap(hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds))
             hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
             try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: URL(fileURLWithPath: path))
         }
+    }
+
+    func testContinuousDragThroughRenderedDockTracksBothSidesAndDropsAtEnd() async throws {
+        SurfaceHostServices.configure()
+        let browser = BrowserWindowController(profile: .defaultProfile)
+        for _ in 0..<4 { _ = browser.openTab(activate: false) }
+        let tabs = browser.tabs
+        let items: [[String: Any]] = tabs.map { ["id": String($0.webviewId), "symbol": "globe"] }
+        let node: [String: Any] = ["t": "magnify_strip", "items": items, "size": 32.0, "spacing": 8.0]
+        let hosting = NSHostingView(rootView: SurfaceTreeView(surfaceId: "edge_dock", node: node, cursor: CursorModel()))
+        let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 64, height: 500), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = hosting; window.orderFront(nil)
+        defer { TabDragPreview.shared.finish(); window.close(); browser.window?.close() }
+        func rows(_ view: NSView) -> [TabAppDragView] {
+            if let row = view as? TabAppDragView { return [row] }
+            return view.subviews.flatMap { rows($0) }
+        }
+        try await Task.sleep(for: .milliseconds(300))
+        let views = rows(hosting)
+        let source = try XCTUnwrap(views.first { $0.webviewID == tabs[0].webviewId })
+        let target = try XCTUnwrap(views.first { $0.webviewID == tabs[2].webviewId })
+        let frame = target.convert(target.bounds, to: nil)
+        func send(_ type: NSEvent.EventType, _ point: NSPoint) throws {
+            let event = try XCTUnwrap(NSEvent.mouseEvent(with: type, location: point, modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                context: nil, eventNumber: 1, clickCount: 1, pressure: 1))
+            switch type {
+            case .leftMouseDown: source.mouseDown(with: event)
+            case .leftMouseUp: source.mouseUp(with: event)
+            default: source.mouseDragged(with: event)
+            }
+        }
+        try send(.leftMouseDown, source.convert(NSPoint(x: 16, y: 16), to: nil))
+        for offset: CGFloat in [8, -8, 8, -8] {
+            let point = NSPoint(x: frame.midX, y: frame.midY + offset)
+            try send(.leftMouseDragged, point)
+            try await Task.sleep(for: .milliseconds(200))
+            XCTAssertEqual(TabDragPreview.shared.target, tabs[2].webviewId)
+            XCTAssertEqual(TabDragPreview.shared.after, offset < 0)
+            XCTAssertEqual(target.convert(target.bounds, to: nil).midY, frame.midY, accuracy: 1)
+        }
+        let last = try XCTUnwrap(views.first { $0.webviewID == tabs[4].webviewId })
+        let lastFrame = last.convert(last.bounds, to: nil)
+        let end = NSPoint(x: lastFrame.midX, y: lastFrame.minY - 4)
+        try send(.leftMouseDragged, end)
+        XCTAssertEqual(TabDragPreview.shared.target, tabs[4].webviewId)
+        XCTAssertTrue(TabDragPreview.shared.after)
+        try send(.leftMouseUp, end)
+        XCTAssertEqual(browser.tabs.map(\.webviewId), Array(tabs.dropFirst()).map(\.webviewId) + [tabs[0].webviewId])
     }
 
     func testOverflowHasScrollableContentAndCanReachLastTab() async throws {
