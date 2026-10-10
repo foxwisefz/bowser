@@ -602,7 +602,7 @@ struct ModSmithScreen: View {
                                 Toggle(mod.enabled ? "On" : "Off", isOn: Binding(get: { mod.enabled }, set: { if $0 != mod.enabled { model.action("toggle_existing", path: mod.path) } }))
                                     .toggleStyle(.switch).fixedSize().disabled(model.snapshot.busy)
                                 Menu {
-                                    if !model.isSiteApp {
+                                    if !model.isSiteApp && profileServices.profiles.count > 1 {
                                         Menu("Copy to profile") {
                                             ForEach(profileServices.profiles.filter { $0.id != model.snapshot.workspace_profile?.id }, id: \.id) { profile in
                                                 Button(profile.name) { model.action("copy_existing", project: mod.path, path: profile.id) }
@@ -647,7 +647,7 @@ struct ModSmithScreen: View {
     }
     private func projectMenu(_ project: ModSmithProject) -> some View {
         Menu {
-            if !model.isSiteApp {
+            if !model.isSiteApp && profileServices.profiles.count > 1 {
                 Menu("Copy to profile") {
                     ForEach(profileServices.profiles.filter { $0.id != model.snapshot.workspace_profile?.id }, id: \.id) { profile in
                         Button(profile.name) { model.action("copy", project: project.id, path: profile.id) }
