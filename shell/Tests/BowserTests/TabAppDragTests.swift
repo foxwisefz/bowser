@@ -57,24 +57,6 @@ final class TabAppDragTests: XCTestCase {
         view.closeFromMenu()
         XCTAssertFalse(host.tabs.contains { $0 === target })
     }
-    @MainActor func testTrashRequiresRealVisibleTabDragAndPreservesOtherTabs() {
-        SurfaceHostServices.configure()
-        let host = BrowserWindowController(profile: .defaultProfile)
-        defer { TabDragPreview.shared.finish(); host.window?.close() }
-        let target = host.openTab(activate: false)
-        let trash = TabTrashView()
-        trash.allowedIDs = [target.webviewId]
-        XCTAssertNil(trash.accepts(source: NSObject()))
-        XCTAssertFalse(trash.closeDraggedTab(target.webviewId))
-        TabDragPreview.shared.source = target.webviewId
-        trash.isAuthorized = { false }
-        XCTAssertFalse(trash.closeDraggedTab(target.webviewId))
-        trash.isAuthorized = { true }
-        XCTAssertFalse(trash.closeDraggedTab(host.activeTab!.webviewId))
-        XCTAssertTrue(trash.closeDraggedTab(target.webviewId))
-        XCTAssertFalse(host.tabs.contains { $0 === target })
-        XCTAssertFalse(host.tabs.isEmpty)
-    }
     @MainActor func testNormalDragClosesWithoutPublishingPasteboardAndEscapeCancels() throws {
         SurfaceHostServices.configure()
         let host = BrowserWindowController(profile: .defaultProfile)

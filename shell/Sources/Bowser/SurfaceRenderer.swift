@@ -603,12 +603,6 @@ struct MagnifyStripView: View {
                 }
                 .offset(y: viewportTop)
             }
-            .overlay(alignment: .bottom) {
-                if surfaceId == "edge_dock", dragPreview.source != nil {
-                    SurfaceTrashTarget(ids: Set(identifiedItems.compactMap { UInt64($0.id) }))
-                        .frame(width: 44, height: 44).padding(.bottom, 12)
-                }
-            }
             .environment(\.colorScheme, surfaceId == "edge_dock" ? .dark : colorScheme)
         }
         .onChange(of: cursor.point) { _, point in
@@ -1010,17 +1004,6 @@ private struct SurfaceDragTarget: NSViewRepresentable {
     func makeNSView(context: Context) -> TabAppDragView { TabAppDragView() }
     func updateNSView(_ view: TabAppDragView, context: Context) {
         view.webviewID = webviewID; view.select = select
-        view.isAuthorized = { owner.isEmpty || SurfaceRenderContext.contexts[owner]?.generation == generation }
-    }
-}
-
-private struct SurfaceTrashTarget: NSViewRepresentable {
-    let ids: Set<UInt64>
-    @Environment(\.surfaceRenderOwner) private var owner
-    @Environment(\.surfaceRenderGeneration) private var generation
-    func makeNSView(context: Context) -> TabTrashView { TabTrashView() }
-    func updateNSView(_ view: TabTrashView, context: Context) {
-        view.allowedIDs = ids
         view.isAuthorized = { owner.isEmpty || SurfaceRenderContext.contexts[owner]?.generation == generation }
     }
 }
