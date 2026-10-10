@@ -564,6 +564,14 @@ struct MagnifyStripView: View {
                             .opacity(surfaceId == "edge_dock" && UInt64(entry.id) == dragPreview.source && dragPreview.source != nil ? 0.25 : 1)
                             .padding(.top, surfaceId == "edge_dock" ? dragPreview.gap(for: UInt64(entry.id) ?? 0, after: false, size: baseSize + spacing) : 0)
                             .padding(.bottom, surfaceId == "edge_dock" ? dragPreview.gap(for: UInt64(entry.id) ?? 0, after: true, size: baseSize + spacing) : 0)
+                            .overlay(alignment: dragPreview.after ? .bottom : .top) {
+                                if surfaceId == "edge_dock", UInt64(entry.id) == dragPreview.target,
+                                   let source = items.first(where: { UInt64($0["id"] as? String ?? "") == dragPreview.source }) {
+                                    icon(for: source, opacity: 0.85)
+                                        .frame(width: baseSize, height: baseSize)
+                                        .allowsHitTesting(false)
+                                }
+                            }
                             .animation(.easeOut(duration: 0.16), value: dragPreview.target)
                             .overlay {
                                 if surfaceId == "edge_dock", let id = item["id"] as? String,
@@ -575,7 +583,7 @@ struct MagnifyStripView: View {
                             .accessibilityValue(active ? "Active tab" : "")
                         }
                         .offset(y: row.offset)
-                        .frame(height: baseSize)
+                        .frame(height: baseSize + (surfaceId == "edge_dock" && UInt64(entry.id) == dragPreview.target ? baseSize + spacing : 0))
                         .id(entry.id)
                     }
                     }
@@ -590,7 +598,7 @@ struct MagnifyStripView: View {
                   .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, offset in
                       scrollOffset = offset
                   }
-                  .frame(height: overflowing ? viewportHeight : contentHeight + lensPad * 2)
+                  .frame(height: overflowing ? viewportHeight : contentHeight + lensPad * 2 + (surfaceId == "edge_dock" && dragPreview.target != nil ? baseSize + spacing : 0))
                   .onAppear { if overflowing, let activeId { proxy.scrollTo(activeId) } }
                   .onChange(of: activeId) { _, newValue in
                       if let newValue {

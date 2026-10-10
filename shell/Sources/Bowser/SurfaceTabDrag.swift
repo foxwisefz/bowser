@@ -205,6 +205,7 @@ final class TabAppDragView: NSView, NSDraggingSource, SurfaceTabDragSource, NSMe
         guard !cancelled else { return }
         let ready = Self.shouldRemove(closing: true, operation: [], cancelled: false,
             mouseButtons: 0, exportFailed: false, point: point, dock: dragFrame)
+        guard ready else { closeCue?.orderOut(nil); return }
         let panel = closeCue ?? NSPanel(contentRect: NSRect(x: 0, y: 0, width: 170, height: 36),
             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         if closeCue == nil {

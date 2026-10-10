@@ -4,6 +4,38 @@ import XCTest
 @testable import Bowser
 
 @MainActor final class DockScrollTests: XCTestCase {
+    func testReorderGapMovesNeighborsAndRendersInsideDock() async throws {
+        _ = NSApplication.shared
+        let items: [[String: Any]] = (1...5).map { index -> [String: Any] in
+            let symbol = index == 1 ? "envelope.fill" : "globe"
+            return ["id": String(index), "symbol": symbol, "active": index == 3]
+        }
+        let node: [String: Any] = ["t": "magnify_strip", "items": items, "size": 32.0, "spacing": 8.0]
+        let hosting = NSHostingView(rootView: SurfaceTreeView(surfaceId: "edge_dock", node: node, cursor: CursorModel()))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 64, height: 500), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.contentView = hosting; window.orderFront(nil)
+        defer { TabDragPreview.shared.finish(); window.orderOut(nil) }
+        func rows(_ view: NSView) -> [TabAppDragView] {
+            if let row = view as? TabAppDragView { return [row] }
+            return view.subviews.flatMap { rows($0) }
+        }
+        try await Task.sleep(for: .milliseconds(300))
+        let before = try XCTUnwrap(rows(hosting).first { $0.webviewID == 3 })
+        let height = before.frame.height
+        TabDragPreview.shared.source = 1
+        TabDragPreview.shared.after = false
+        TabDragPreview.shared.target = 3
+        try await Task.sleep(for: .milliseconds(400))
+        hosting.layoutSubtreeIfNeeded()
+        let expanded = try XCTUnwrap(rows(hosting).first { $0.webviewID == 3 })
+        XCTAssertEqual(expanded.frame.height, height + 40, accuracy: 1)
+        if let path = ProcessInfo.processInfo.environment["BOWSER_DOCK_REORDER_RENDER"] {
+            let bitmap = try XCTUnwrap(hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds))
+            hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
+            try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: URL(fileURLWithPath: path))
+        }
+    }
+
     func testOverflowHasScrollableContentAndCanReachLastTab() async throws {
         _ = NSApplication.shared
         let cursor = CursorModel()
