@@ -186,6 +186,10 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
 
     override func layout() {
         super.layout()
+        // Element fullscreen reparents the web view into WebKit's own window.
+        // Only size it while this container owns it; otherwise a background
+        // layout pass overwrites the fullscreen viewport with the inline size.
+        guard webView.superview === self else { return }
         webView.frame = bounds
     }
 
