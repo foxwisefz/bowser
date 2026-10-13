@@ -254,26 +254,11 @@ final class TabAppDragView: NSView, NSDraggingSource, SurfaceTabDragSource, NSMe
             panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
             closeCue = panel
         }
-        panel.contentView = NSHostingView(rootView:
-            HStack(spacing: 7) {
-                if let closeIcon {
-                    Image(nsImage: closeIcon).resizable().scaledToFit()
-                        .frame(width: ready ? 24 : 32, height: ready ? 24 : 32)
-                        .opacity(ready ? 0.65 : 1)
-                        .accessibilityHidden(true)
-                }
-                if ready {
-                    Label("Release to close", systemImage: "xmark")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(.primary)
-                        .padding(.horizontal, 9).padding(.vertical, 6)
-                        .background(.ultraThinMaterial, in: Capsule())
-                }
-                if ready { Spacer(minLength: 0) }
-            }
-            .padding(4))
+        panel.contentView = NSHostingView(rootView: TabDragCue(icon: closeIcon, closing: ready))
         if ready {
-            panel.setFrame(NSRect(x: point.x + 14, y: point.y - 44, width: 170, height: 36), display: true)
+            // The icon stays under the pointer; the label floats above it,
+            // like the macOS Dock's removal cue.
+            panel.setFrame(NSRect(x: point.x - 60, y: point.y - 24, width: 120, height: 84), display: true)
         } else {
             let x = dragFrame?.midX ?? point.x
             panel.setFrame(NSRect(x: x - 20, y: point.y - 20, width: 40, height: 40), display: true)
@@ -312,3 +297,31 @@ final class TabAppDragView: NSView, NSDraggingSource, SurfaceTabDragSource, NSMe
     }
 }
 
+
+/// A Dock-style caption above the dragged tab, with room for its soft shadow.
+struct TabDragCue: View {
+    let icon: NSImage?
+    let closing: Bool
+
+    var body: some View {
+        VStack(spacing: 10) {
+            if closing {
+                Text("Close tab")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.primary)
+                    .fixedSize()
+                    .padding(.horizontal, 13)
+                    .padding(.vertical, 5)
+                    .background(.regularMaterial, in: Capsule())
+                    .overlay(Capsule().strokeBorder(.white.opacity(0.45), lineWidth: 0.5))
+                    .shadow(color: .black.opacity(0.16), radius: 4, y: 2)
+            }
+            if let icon {
+                Image(nsImage: icon).resizable().scaledToFit()
+                    .frame(width: 32, height: 32)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityHidden(true)
+    }
+}
