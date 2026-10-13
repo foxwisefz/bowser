@@ -19,9 +19,9 @@ final class TabAppDragTests: XCTestCase {
         source.webviewID = first.webviewId; target.webviewID = second.webviewId
         root.addSubview(source); root.addSubview(target)
         defer { panel.close(); host.window?.close() }
-        func drag(to y: CGFloat, cancel: Bool = false) throws {
+        func drag(to y: CGFloat, x: CGFloat = 24, cancel: Bool = false) throws {
             func event(_ type: NSEvent.EventType, _ y: CGFloat) throws -> NSEvent {
-                try XCTUnwrap(NSEvent.mouseEvent(with: type, location: NSPoint(x: 24, y: y),
+                try XCTUnwrap(NSEvent.mouseEvent(with: type, location: NSPoint(x: type == .leftMouseDown ? 24 : x, y: y),
                     modifierFlags: [], timestamp: 0, windowNumber: panel.windowNumber,
                     context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
             }
@@ -36,8 +36,9 @@ final class TabAppDragTests: XCTestCase {
         XCTAssertEqual(host.tabs.map(\.webviewId), [second.webviewId, first.webviewId])
         try drag(to: 95, cancel: true)
         XCTAssertEqual(host.tabs.map(\.webviewId), [second.webviewId, first.webviewId])
-        try drag(to: 95)
-        XCTAssertEqual(host.tabs.map(\.webviewId), [first.webviewId, second.webviewId])
+        try drag(to: 95, x: 80)
+        XCTAssertEqual(host.tabs.map(\.webviewId), [first.webviewId, second.webviewId],
+            "A small sideways drift must still reorder, without a dead zone before the close threshold")
     }
 
     @MainActor func testContextMenuClosesOnlyTargetAndRejectsRetiredRenderer() throws {

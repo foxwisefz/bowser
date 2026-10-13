@@ -61,11 +61,7 @@ import XCTest
             let event = try XCTUnwrap(NSEvent.mouseEvent(with: type, location: point, modifierFlags: [],
                 timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
                 context: nil, eventNumber: 1, clickCount: 1, pressure: 1))
-            switch type {
-            case .leftMouseDown: source.mouseDown(with: event)
-            case .leftMouseUp: source.mouseUp(with: event)
-            default: source.mouseDragged(with: event)
-            }
+            window.sendEvent(event)
         }
         try send(.leftMouseDown, source.convert(NSPoint(x: 16, y: 16), to: nil))
         for offset: CGFloat in [8, -8, 8, -8] {
@@ -84,6 +80,53 @@ import XCTest
         XCTAssertTrue(TabDragPreview.shared.after)
         try send(.leftMouseUp, end)
         XCTAssertEqual(browser.tabs.map(\.webviewId), Array(tabs.dropFirst()).map(\.webviewId) + [tabs[0].webviewId])
+    }
+
+    func testHoldingDragAtScrollEdgeContinuesScrolling() async throws {
+        let services = SurfaceServices.shared
+        let snapshot = services.tabSnapshot
+        let canMove = services.canMoveTab
+        let move = services.moveTab
+        let edge = services.edgeDragging
+        services.tabSnapshot = { _ in SurfaceTabSnapshot(icon: nil, canExport: false) }
+        services.canMoveTab = { $0 != $1 }
+        services.moveTab = { _, _, _ in true }
+        services.edgeDragging = { _ in }
+        defer {
+            services.tabSnapshot = snapshot; services.canMoveTab = canMove
+            services.moveTab = move; services.edgeDragging = edge
+        }
+        let items: [[String: Any]] = (1...60).map { ["id": String($0), "symbol": "globe"] }
+        let node: [String: Any] = ["t": "magnify_strip", "items": items, "size": 32.0, "spacing": 8.0]
+        let hosting = NSHostingView(rootView: SurfaceTreeView(surfaceId: "edge_dock", node: node, cursor: CursorModel()))
+        let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 48, height: 500), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = hosting; window.orderFront(nil)
+        defer { TabDragPreview.shared.finish(); window.close() }
+        func find<T: NSView>(_ view: NSView, _ type: T.Type) -> T? {
+            (view as? T) ?? view.subviews.compactMap { find($0, type) }.first
+        }
+        try await Task.sleep(for: .milliseconds(300))
+        let source = try XCTUnwrap(find(hosting, TabAppDragView.self))
+        let scroll = try XCTUnwrap(find(hosting, NSScrollView.self))
+        let frame = scroll.convert(scroll.bounds, to: nil)
+        func send(_ type: NSEvent.EventType, _ point: NSPoint) throws {
+            window.sendEvent(try XCTUnwrap(NSEvent.mouseEvent(with: type, location: point, modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                context: nil, eventNumber: 1, clickCount: 1, pressure: 1)))
+        }
+        try send(.leftMouseDown, source.convert(NSPoint(x: 16, y: 16), to: nil))
+        let edgePoint = NSPoint(x: frame.midX, y: frame.minY + 4)
+        try send(.leftMouseDragged, edgePoint)
+        let initial = scroll.contentView.bounds.minY
+        try await Task.sleep(for: .milliseconds(500))
+        XCTAssertGreaterThan(scroll.contentView.bounds.minY, initial + 40,
+            "Holding at the edge must reveal more tabs without further mouse movement")
+        source.cancelOperation(nil)
+        try send(.leftMouseUp, edgePoint)
+        let stopped = scroll.contentView.bounds.minY
+        try await Task.sleep(for: .milliseconds(150))
+        XCTAssertEqual(scroll.contentView.bounds.minY, stopped, accuracy: 1)
     }
 
     func testOverflowHasScrollableContentAndCanReachLastTab() async throws {

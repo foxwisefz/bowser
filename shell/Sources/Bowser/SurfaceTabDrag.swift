@@ -42,6 +42,8 @@ final class TabAppDragView: NSView, NSDraggingSource, SurfaceTabDragSource, NSMe
     private var closeCue: NSPanel?
     private var closeIcon: NSImage?
     private var escapeMonitor: Any?
+    private var scrollTimer: Timer?
+    private var dragPoint: NSPoint?
 
     /// A failed/cancelled drag is not automatically a request to close a tab.
     static func shouldRemove(closing: Bool, operation: NSDragOperation, cancelled: Bool, mouseButtons: Int,
@@ -102,8 +104,8 @@ final class TabAppDragView: NSView, NSDraggingSource, SurfaceTabDragSource, NSMe
     }
     override func mouseDragged(with event: NSEvent) {
         if dragged && closeGesture {
-            _ = autoscroll(with: event)
             let point = window?.convertPoint(toScreen: event.locationInWindow) ?? NSEvent.mouseLocation
+            dragPoint = point
             updateReorder(at: point)
             updateCloseCue(at: point)
             return
@@ -130,8 +132,15 @@ final class TabAppDragView: NSView, NSDraggingSource, SurfaceTabDragSource, NSMe
             // Keep this entirely in AppKit mouse tracking: no drag pasteboard,
             // file promise, URL or drop operation is offered to another app.
             SurfaceServices.shared.edgeDragging(true)
-            updateReorder(at: window?.convertPoint(toScreen: event.locationInWindow) ?? NSEvent.mouseLocation)
-            updateCloseCue(at: window?.convertPoint(toScreen: event.locationInWindow) ?? NSEvent.mouseLocation)
+            let point = window?.convertPoint(toScreen: event.locationInWindow) ?? NSEvent.mouseLocation
+            dragPoint = point
+            updateReorder(at: point)
+            updateCloseCue(at: point)
+            let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated { self?.scrollDuringDrag() }
+            }
+            scrollTimer = timer
+            RunLoop.main.add(timer, forMode: .common)
             return
         }
         let pasteboard = NSPasteboardItem()
@@ -158,6 +167,7 @@ final class TabAppDragView: NSView, NSDraggingSource, SurfaceTabDragSource, NSMe
 
     override func cancelOperation(_ sender: Any?) {
         cancelled = true
+        scrollTimer?.invalidate(); scrollTimer = nil
         TabDragPreview.shared.target = nil
         closeCue?.orderOut(nil)
     }
@@ -166,7 +176,7 @@ final class TabAppDragView: NSView, NSDraggingSource, SurfaceTabDragSource, NSMe
         let preview = TabDragPreview.shared
         guard !cancelled, isAuthorized(), let id = draggedID, let window,
               let root = window.contentView else { preview.target = nil; return }
-        guard window.frame.insetBy(dx: -16, dy: 0).contains(point) else {
+        guard window.frame.insetBy(dx: -64, dy: -32).contains(point) else {
             preview.target = nil; return
         }
         func rows(in view: NSView) -> [(TabAppDragView, NSRect)] {
@@ -187,7 +197,32 @@ final class TabAppDragView: NSView, NSDraggingSource, SurfaceTabDragSource, NSMe
         preview.target = row.webviewID
     }
 
+    private func scrollDuringDrag() {
+        guard !cancelled, isAuthorized(), let point = dragPoint, let window,
+              window.frame.insetBy(dx: -64, dy: -32).contains(point),
+              let scroll = enclosingScrollView, let document = scroll.documentView else { return }
+        let clip = scroll.contentView
+        let bounds = clip.bounds
+        guard document.bounds.height > bounds.height else { return }
+        let local = clip.convert(window.convertPoint(fromScreen: point), from: nil)
+        let edge: CGFloat = 28
+        let step: CGFloat
+        if local.y < bounds.minY + edge {
+            step = -min(10, max(2, (bounds.minY + edge - local.y) / 3))
+        } else if local.y > bounds.maxY - edge {
+            step = min(10, max(2, (local.y - bounds.maxY + edge) / 3))
+        } else { return }
+        let y = min(max(document.bounds.minY, bounds.minY + step), document.bounds.maxY - bounds.height)
+        guard y != bounds.minY else { return }
+        clip.scroll(to: NSPoint(x: bounds.minX, y: y))
+        scroll.reflectScrolledClipView(clip)
+        scroll.layoutSubtreeIfNeeded()
+        updateReorder(at: point)
+    }
+
     private func finishDrag() {
+        scrollTimer?.invalidate(); scrollTimer = nil
+        dragPoint = nil
         if let escapeMonitor { NSEvent.removeMonitor(escapeMonitor) }
         escapeMonitor = nil
         endInteraction()
