@@ -4,11 +4,10 @@ import XCTest
 @testable import Bowser
 
 @MainActor final class DockScrollTests: XCTestCase {
-    func testReorderMarkerKeepsDropGeometryStable() async throws {
+    func testReorderOpensFullIconSlotWithoutMovingHitTargets() async throws {
         _ = NSApplication.shared
         let items: [[String: Any]] = (1...5).map { index -> [String: Any] in
-            let symbol = index == 1 ? "envelope.fill" : "globe"
-            return ["id": String(index), "symbol": symbol, "active": index == 3]
+            return ["id": String(index), "symbol": "square.fill"]
         }
         let node: [String: Any] = ["t": "magnify_strip", "items": items, "size": 32.0, "spacing": 8.0]
         let hosting = NSHostingView(rootView: SurfaceTreeView(surfaceId: "edge_dock", node: node, cursor: CursorModel()))
@@ -21,17 +20,29 @@ import XCTest
         }
         try await Task.sleep(for: .milliseconds(300))
         let before = try XCTUnwrap(rows(hosting).first { $0.webviewID == 3 })
-        let height = before.frame.height
+        let originalFrame = before.convert(before.bounds, to: nil)
+        let slotFrames = rows(hosting).sorted { $0.webviewID < $1.webviewID }.map { $0.convert($0.bounds, to: nil) }
         TabDragPreview.shared.source = 1
-        TabDragPreview.shared.after = false
+        TabDragPreview.shared.after = true
         TabDragPreview.shared.target = 3
         try await Task.sleep(for: .milliseconds(400))
         hosting.layoutSubtreeIfNeeded()
         let expanded = try XCTUnwrap(rows(hosting).first { $0.webviewID == 3 })
-        XCTAssertEqual(expanded.frame.height, height, accuracy: 1)
+        XCTAssertEqual(expanded.convert(expanded.bounds, to: nil), originalFrame)
+        let bitmap = try XCTUnwrap(hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds))
+        hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
+        let scale = CGFloat(bitmap.pixelsHigh) / hosting.bounds.height
+        for (index, frame) in slotFrames.enumerated() {
+            let y = Int((hosting.bounds.height - frame.midY) * scale)
+            let color = try XCTUnwrap(bitmap.colorAt(x: bitmap.pixelsWide / 2, y: y)?.usingColorSpace(.deviceRGB))
+            let brightness = max(color.redComponent, color.greenComponent, color.blueComponent) * color.alphaComponent
+            if index == 2 {
+                XCTAssertLessThan(brightness, 0.1, "Destination must be an empty icon slot")
+            } else {
+                XCTAssertGreaterThan(brightness, 0.5, "Other slots, including the former source, must contain an icon")
+            }
+        }
         if let path = ProcessInfo.processInfo.environment["BOWSER_DOCK_REORDER_RENDER"] {
-            let bitmap = try XCTUnwrap(hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds))
-            hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
             try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: URL(fileURLWithPath: path))
         }
     }
@@ -69,7 +80,7 @@ import XCTest
             try send(.leftMouseDragged, point)
             try await Task.sleep(for: .milliseconds(200))
             XCTAssertEqual(TabDragPreview.shared.target, tabs[2].webviewId)
-            XCTAssertEqual(TabDragPreview.shared.after, offset < 0)
+            XCTAssertTrue(TabDragPreview.shared.after, "The open slot must not flip when hovering inside it")
             XCTAssertEqual(target.convert(target.bounds, to: nil).midY, frame.midY, accuracy: 1)
         }
         let last = try XCTUnwrap(views.first { $0.webviewID == tabs[4].webviewId })

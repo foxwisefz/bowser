@@ -181,9 +181,9 @@ final class TabAppDragView: NSView, NSDraggingSource, SurfaceTabDragSource, NSMe
         }
         func rows(in view: NSView) -> [(TabAppDragView, NSRect)] {
             guard !view.isHidden else { return [] }
-            if let row = view as? TabAppDragView, row !== self,
+            if let row = view as? TabAppDragView,
                !row.bounds.intersection(row.visibleRect).isEmpty, row.isAuthorized(),
-               SurfaceServices.shared.canMoveTab(id, row.webviewID) {
+               (row === self || SurfaceServices.shared.canMoveTab(id, row.webviewID)) {
                 return [(row, window.convertToScreen(row.convert(row.bounds.intersection(row.visibleRect), to: nil)))]
             }
             return view.subviews.flatMap { rows(in: $0) }
@@ -191,9 +191,11 @@ final class TabAppDragView: NSView, NSDraggingSource, SurfaceTabDragSource, NSMe
         guard let (row, frame) = rows(in: root).min(by: {
             abs($0.1.midY - point.y) < abs($1.1.midY - point.y)
         }) else { preview.target = nil; return }
-        // Stable rows let the pointer cross a midpoint in either direction,
-        // including the space between icons, without chasing an animated gap.
-        preview.after = point.y < frame.midY
+        guard row !== self else { preview.target = nil; return }
+        // The vacancy takes the nearest original slot, so it stays under the
+        // dragged icon. Artwork slides independently of these hit rectangles.
+        let sourceFrame = window.convertToScreen(convert(bounds, to: nil))
+        preview.after = sourceFrame.midY > frame.midY
         preview.target = row.webviewID
     }
 

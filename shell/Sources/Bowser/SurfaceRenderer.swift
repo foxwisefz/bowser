@@ -447,6 +447,20 @@ struct MagnifyStripView: View {
     private var spacing: CGFloat { max(0, CGFloat(node["spacing"] as? Double ?? 8)) }
     private let topPad: CGFloat = 12
 
+    // Move artwork between fixed slots. Keeping the native drag targets in
+    // place prevents the opening gap from changing the target under the mouse.
+    private func dragOffset(for index: Int) -> CGFloat {
+        guard surfaceId == "edge_dock", let source = dragPreview.source,
+              let target = dragPreview.target,
+              let from = items.firstIndex(where: { $0["id"] as? String == String(source) }),
+              let anchor = items.firstIndex(where: { $0["id"] as? String == String(target) }),
+              index != from else { return 0 }
+        let destination = anchor + (dragPreview.after ? 1 : 0) - (from < anchor ? 1 : 0)
+        let compacted = index - (index > from ? 1 : 0)
+        let position = compacted + (compacted >= destination ? 1 : 0)
+        return CGFloat(position - index) * (baseSize + spacing)
+    }
+
     /// Vertical origin of the icon block: centered in the view, clamping
     /// back to top-aligned when the strip overflows (bowser-browser-2c8).
     /// The SAME value feeds layout and the magnification row centers so
@@ -561,15 +575,9 @@ struct MagnifyStripView: View {
                                 .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
-                            .opacity(surfaceId == "edge_dock" && UInt64(entry.id) == dragPreview.source && dragPreview.source != nil ? 0.25 : 1)
-                            .overlay(alignment: dragPreview.after ? .bottom : .top) {
-                                if surfaceId == "edge_dock", UInt64(entry.id) == dragPreview.target {
-                                    Capsule().fill(Color.accentColor)
-                                        .frame(width: min(baseSize + 8, geo.size.width - 8), height: 2)
-                                        .offset(y: dragPreview.after ? spacing / 2 : -spacing / 2)
-                                        .allowsHitTesting(false)
-                                }
-                            }
+                            .opacity(surfaceId == "edge_dock" && UInt64(entry.id) == dragPreview.source && dragPreview.source != nil ? 0 : 1)
+                            .offset(y: dragOffset(for: index))
+                            .animation(motionDisabled ? nil : .easeOut(duration: 0.16), value: dragOffset(for: index))
                             .overlay {
                                 if surfaceId == "edge_dock", let id = item["id"] as? String,
                                    let webviewID = UInt64(id) {

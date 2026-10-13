@@ -25,7 +25,7 @@ final class TabAppDragTests: XCTestCase {
                     modifierFlags: [], timestamp: 0, windowNumber: panel.windowNumber,
                     context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
             }
-            source.mouseDown(with: try event(.leftMouseDown, 160))
+            source.mouseDown(with: try event(.leftMouseDown, source.frame.midY))
             source.mouseDragged(with: try event(.leftMouseDragged, y))
             XCTAssertEqual(TabDragPreview.shared.target, second.webviewId)
             if cancel { source.cancelOperation(nil) }
@@ -34,9 +34,11 @@ final class TabAppDragTests: XCTestCase {
         }
         try drag(to: 65)
         XCTAssertEqual(host.tabs.map(\.webviewId), [second.webviewId, first.webviewId])
-        try drag(to: 95, cancel: true)
+        source.frame.origin.y = 60
+        target.frame.origin.y = 140
+        try drag(to: 155, cancel: true)
         XCTAssertEqual(host.tabs.map(\.webviewId), [second.webviewId, first.webviewId])
-        try drag(to: 95, x: 80)
+        try drag(to: 155, x: 80)
         XCTAssertEqual(host.tabs.map(\.webviewId), [first.webviewId, second.webviewId],
             "A small sideways drift must still reorder, without a dead zone before the close threshold")
     }
