@@ -4,6 +4,43 @@ import XCTest
 @testable import Bowser
 
 @MainActor final class DockScrollTests: XCTestCase {
+    func testNotchFitsVisibleIconsInsteadOfHiddenLensPadding() async throws {
+        let cursor = CursorModel()
+        let node: [String: Any] = ["t": "magnify_strip", "items": (1...5).map {
+            ["id": String($0), "symbol": "square.fill"]
+        }, "size": 32.0, "spacing": 8.0, "magnify": 1.4, "chrome": "notch"]
+        let hosting = NSHostingView(rootView: SurfaceTreeView(surfaceId: "edge_dock", node: node, cursor: cursor))
+        let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 48, height: 500), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.isOpaque = false; window.backgroundColor = .clear
+        window.contentView = hosting; window.orderFront(nil)
+        defer { window.close() }
+        for (index, focus) in [CGFloat?.none, 154, 250, 346].enumerated() {
+            cursor.point = focus.map { CGPoint(x: 24, y: $0) }
+            try await Task.sleep(for: .milliseconds(400))
+            hosting.layoutSubtreeIfNeeded()
+            let bitmap = try XCTUnwrap(hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds))
+            hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
+            let scale = CGFloat(bitmap.pixelsHigh) / hosting.bounds.height
+            var background: [Int] = [], icons: [Int] = []
+            for y in 0..<bitmap.pixelsHigh {
+                let color = try XCTUnwrap(bitmap.colorAt(x: bitmap.pixelsWide / 2, y: y)?.usingColorSpace(.deviceRGB))
+                if color.alphaComponent > 0.9 {
+                    background.append(y)
+                    if max(color.redComponent, color.greenComponent, color.blueComponent) > 0.4 { icons.append(y) }
+                }
+            }
+            let top = CGFloat(try XCTUnwrap(icons.first) - XCTUnwrap(background.first)) / scale
+            let bottom = CGFloat(try XCTUnwrap(background.last) - XCTUnwrap(icons.last)) / scale
+            XCTAssertGreaterThan(top, 8); XCTAssertLessThan(top, 22)
+            XCTAssertGreaterThan(bottom, 8); XCTAssertLessThan(bottom, 22)
+            if let directory = ProcessInfo.processInfo.environment["BOWSER_SURFACE_RENDER"] {
+                try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+                    .write(to: URL(fileURLWithPath: directory).appendingPathComponent("dock-ends-\(index).png"))
+            }
+        }
+    }
+
     func testReorderOpensFullIconSlotWithoutMovingHitTargets() async throws {
         _ = NSApplication.shared
         let items: [[String: Any]] = (1...5).map { index -> [String: Any] in

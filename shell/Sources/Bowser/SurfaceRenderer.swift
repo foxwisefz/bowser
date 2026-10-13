@@ -493,11 +493,24 @@ struct MagnifyStripView: View {
             let contentHeight = max(0, CGFloat(items.count) * (baseSize + spacing) - spacing)
             ZStack(alignment: .topLeading) {
                 if notch, !items.isEmpty {
-                    DockNotchShape()
-                        .fill(SurfaceServices.color(hex: node["background"] as? String).map { Color(nsColor: $0) } ?? .black)
-                        .frame(width: geo.size.width, height: (overflowing ? viewportHeight : contentHeight + lensPad * 2) + (headerOutside ? 0 : headerHeight) + footerHeight + 64)
-                        .offset(y: viewportTop - (headerOutside ? 0 : headerHeight) - 32)
-                        .allowsHitTesting(false)
+                    AnimatedStripLens(lens: lens) { animatedLens in
+                        // Scroll padding reserves room for magnification; it
+                        // must not appear as empty space inside the notch.
+                        let first = animatedLens.map(top - scrollOffset)
+                        let last = animatedLens.map(top + contentHeight - scrollOffset)
+                        let visibleTop = overflowing ? max(viewportTop, first) : first
+                        let visibleBottom = overflowing ? min(viewportTop + viewportHeight, last) : last
+                        let chromeTop = header != nil && !headerOutside ? viewportTop - headerHeight : visibleTop
+                        let chromeBottom = footer != nil
+                            ? (overflowing ? viewportTop + viewportHeight : top + contentHeight + lensPad) + footerHeight
+                            : visibleBottom
+                        DockNotchShape()
+                            .fill(SurfaceServices.color(hex: node["background"] as? String).map { Color(nsColor: $0) } ?? .black)
+                            .frame(width: geo.size.width, height: max(0, chromeBottom - chromeTop) + 64)
+                            .offset(y: chromeTop - 32)
+                            .allowsHitTesting(false)
+                    }
+                    .animation(motionDisabled ? nil : .interactiveSpring(response: 0.18, dampingFraction: 1), value: cursor.point)
                 }
                 if let header, !items.isEmpty {
                     Group {
