@@ -195,6 +195,8 @@ identity, generation-count and mapped-byte limits.
 Unloaded tabs reuse the startup snapshot capture for a per-tab preview. A tab switch schedules one capture after 400 ms; switching again cancels the pending capture. There is no periodic capture during browsing, and tabs using the camera or microphone are excluded. Captures are limited to 1280 points wide; compressed previews use at most 512 KB per tab and 16 MB total, evicting oldest entries. Only displayed overlays decode an image. Selecting a sleeping tab shows its matching URL preview synchronously while interaction state reloads. Completion, failure, explicit navigation, unmounting, a click, or an eight-second timeout removes the overlay. Closed tabs release cached previews; cache entries are not persisted.
 
 
+Media recovery listens to playback and metadata events. During playback, changed state is saved at most once per second, with a final save on pause, seek, hiding or leaving the page. Idle pages have no media polling timer. A fresh snapshot from another browser process can restore a single matching player with a stable HTTP(S) or file source and a finite duration; camera/MediaStream sources, live streams, blob URLs and ambiguous players are excluded. Recovery waits at most 20 seconds for metadata events, stops on user scrolling or keyboard input, and requires an explicit click to re-enter fullscreen. Core recovery has no site-specific DOM or scroll handling.
+
 ## Capture mode
 
 View → Capture Mode (⇧⌘H) temporarily hides the native toolbar, window buttons

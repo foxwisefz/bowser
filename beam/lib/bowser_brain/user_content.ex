@@ -45,16 +45,9 @@ defmodule BowserBrain.UserContent do
       saveTimer = setTimeout(save, 200);
       if (checkpointTimer === null) checkpointTimer = setTimeout(save, 1000);
     }
-    // Scroll restore is a CAMPAIGN, not a shot: virtualized/slow pages
-    // (x.com, YT Music) are not tall enough at load, scrollTo clamps to ~0
-    // and the position was lost — and the save loop then overwrote the
-    // stored y with the clamped value (bowser-browser-l8r). And on
-    // infinite-scroll sites waiting is not enough: content only grows when
-    // something presses toward the bottom, so the campaign WALKS the loader
-    // back to depth (bowser-browser-uuy) — DOM save/reinject was rejected:
-    // serialized HTML without its JS heap is a corpse. The target lives in
-    // this closure so mid-restore saves cannot corrupt it; a stall (no
-    // growth for 4s) or the owner scrolling ends the campaign.
+    // Retry briefly while a slow or virtualized page grows. Keep the target
+    // in this closure so saves of an intermediate position cannot replace it.
+    // Stop when the page stops growing or the user takes over scrolling.
     function restoreScroll() {
       var data = null;
       try { data = JSON.parse(localStorage.getItem(KEY) || "null"); } catch (e) {}
@@ -69,8 +62,6 @@ defmodule BowserBrain.UserContent do
       window.addEventListener("keydown", cancel, { once: true });
       (function attempt() {
         if (cancelled || Date.now() > deadline) return;
-        // Semantic media recovery owns the scroll anchor for a saved X tweet.
-        if (window.__bowserMediaRestoring) return;
         var se = document.scrollingElement || document.documentElement;
         if (se.scrollHeight !== lastH) { lastH = se.scrollHeight; lastGrowthAt = Date.now(); }
         var maxY = se.scrollHeight - window.innerHeight;
