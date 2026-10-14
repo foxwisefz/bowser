@@ -192,7 +192,7 @@ WebKit permission callbacks and the app's startup/recovery machinery remain host
 responsibilities. Modules remain subject to the existing signature, exact SurfaceKit
 identity, generation-count and mapped-byte limits.
 
-Unloaded tabs reuse the startup snapshot capture for a per-tab preview. Captures are limited to 1280 points wide; compressed previews use at most 512 KB per tab and 16 MB total, evicting oldest entries. Only displayed overlays decode an image. Selecting a sleeping tab shows its matching URL preview synchronously while interaction state reloads. Completion, failure, explicit navigation, unmounting, a click, or an eight-second timeout removes the overlay. Closed tabs release cached previews; cache entries are not persisted.
+Unloaded tabs reuse the startup snapshot capture for a per-tab preview. A tab switch schedules one capture after 400 ms; switching again cancels the pending capture. There is no periodic capture during browsing, and tabs using the camera or microphone are excluded. Captures are limited to 1280 points wide; compressed previews use at most 512 KB per tab and 16 MB total, evicting oldest entries. Only displayed overlays decode an image. Selecting a sleeping tab shows its matching URL preview synchronously while interaction state reloads. Completion, failure, explicit navigation, unmounting, a click, or an eight-second timeout removes the overlay. Closed tabs release cached previews; cache entries are not persisted.
 
 
 ## Capture mode

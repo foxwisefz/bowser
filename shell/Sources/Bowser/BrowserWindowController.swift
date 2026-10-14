@@ -291,21 +291,11 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         // the restored active tab paints — respawn looks like a blink.
         if isFirstWindow { installResurrectOverlay() }
 
-        // Continuous capture so the NEXT death has a fresh frame.
-        snapshotTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated {
-                guard let self, self.window?.isKeyWindow == true,
-                      self.resurrectOverlay == nil,
-                      let tab = self.activeTab else { return }
-                tab.capturePreview()
-            }
-        }
     }
 
     // MARK: - Freeze-frame resurrection
 
     private var resurrectOverlay: ResurrectOverlayView?
-    private var snapshotTimer: Timer?
 
     private func installResurrectOverlay() {
         guard let image = ResurrectFrame.loadImage() else { return }

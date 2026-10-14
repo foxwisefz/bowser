@@ -398,6 +398,7 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
     /// Reuse the startup capture; only compressed bytes remain for inactive tabs.
     func capturePreview() {
         guard pendingRestoreURL == nil, tabPreview == nil, !webView.isLoading,
+              webView.cameraCaptureState == .none, webView.microphoneCaptureState == .none,
               let url = currentURLString else { return }
         ResurrectFrame.capture(webView) { [weak self] data in
             guard let self, Self.live[self.webviewId] === self,

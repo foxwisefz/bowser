@@ -1,16 +1,14 @@
 import AppKit
 import WebKit
 
-/// The freeze-frame trick (bowser-browser-9qr): the shell continuously
-/// snapshots the active tab (every ~5s + after tab switches) to
-/// ~/.bowser/resurrect.jpg. A fresh instance shows that frame as a
+/// The shell snapshots the selected tab after a tab switch to
+/// ~/.bowser/resurrect.jpg. A fresh instance can show a recent frame as a
 /// full-window overlay from its very first paint, and crossfades to the
 /// live page once the restored active tab finishes loading — an engine
 /// death looks like a blink, not a blank window.
 ///
-/// Continuous capture (not a prepare-to-die handshake) means CRASHES get
-/// the same treatment as planned rolls: whatever frame exists is at most a
-/// few seconds stale. WKWebView.takeSnapshot is the capture path — unlike
+/// Captures are event-driven; normal browsing does not refresh the frame.
+/// The freshness check discards stale frames. WKWebView.takeSnapshot is the capture path — unlike
 /// CGWindowListCreateImage it needs no screen-recording permission and
 /// captures the out-of-process web content reliably.
 @MainActor
@@ -39,8 +37,8 @@ enum ResurrectFrame {
 
     private static var capturing = false
 
-    /// Snapshot the webview and persist it. Encode + write happen off the
-    /// main thread — this runs every few seconds and must never jank.
+    /// Snapshot the webview and persist it. TIFF extraction happens in the
+    /// completion; JPEG encoding and writing happen on a utility queue.
     static func capture(_ webView: WKWebView, onCapture: (@MainActor @Sendable (Data) -> Void)? = nil) {
         guard !capturing, webView.window != nil else { return }
         capturing = true
