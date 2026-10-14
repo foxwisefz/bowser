@@ -100,7 +100,7 @@ Bowser running; opening it from the Dock creates a window again. **Quit Bowser**
 mod processes. Backend startup failures show a retry dialog with the log path.
 
 For separate `/Applications/Bowser.app` and `/Applications/Bowser-staging.app`
-using the same live sessions and website logins, run `bin/staging update`. Staging takes a verified build-and-data backup before
+using the same live sessions and website logins, run `bin/staging update`. Staging takes a verified data backup before
 activation and offers **Update Staging from Dev…** in the app menu. See
 [staging and recovery](docs/staging.md) for backup coverage and restore commands.
 

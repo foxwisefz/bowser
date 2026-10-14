@@ -76,7 +76,13 @@ func inventory(_ root: URL) throws -> [String: String] {
         case .typeRegular:
             let file = try FileHandle(forReadingFrom: url); defer { try? file.close() }
             var hash = SHA256()
-            while let bytes = try file.read(upToCount: 1_048_576), !bytes.isEmpty { hash.update(data: bytes) }
+            // FileHandle bridges through autoreleased NSData. Release each
+            // chunk here, including when a caller has a long-lived pool.
+            while try autoreleasepool(invoking: {
+                guard let bytes = try file.read(upToCount: 1_048_576), !bytes.isEmpty else { return false }
+                hash.update(data: bytes)
+                return true
+            }) {}
             result[relative] = hash.finalize().map { String(format: "%02x", $0) }.joined()
         default: break
         }
@@ -149,7 +155,7 @@ private func snapshotEntry(_ source: URL, _ copied: URL, previous: Message?) thr
     return ["inventory": hashes, "source_fingerprints": stamps, "reused_checksums": reused]
 }
 
-@discardableResult func backup(_ manifest: Message) throws -> URL {
+@discardableResult func backup(_ manifest: Message, preserving: Set<URL> = []) throws -> URL {
     let root = try home(manifest), backups = child(root, "backups")
     try mkdir(backups)
     let name = String(Int(Date().timeIntervalSince1970)) + "-" + UUID().uuidString
@@ -169,9 +175,11 @@ private func snapshotEntry(_ source: URL, _ copied: URL, previous: Message?) thr
         entry["target"] = target.path; entry["payload"] = payload
         entries.append(entry)
     }
-    try atomicJSON(child(temporary, "snapshot.json"), ["format": 2, "installation": manifest, "entries": entries])
+    try atomicJSON(child(temporary, "snapshot.json"), ["format": 2, "created_at": Date().timeIntervalSince1970, "installation": manifest, "entries": entries])
     try FileManager.default.moveItem(at: temporary, to: destination)
     print("Verified recovery backup: \(destination.path)")
+    do { try pruneBackups(root, apply: true, preserving: preserving.union([destination]), verified: destination) }
+    catch { fputs("Backup retention failed: \(error)\n", stderr) }
     return destination
 }
 
@@ -211,9 +219,9 @@ func restoreBackup(_ snapshot: URL) throws {
         guard try allowed(target), try inventory(child(snapshot, payload)) == hashes else { throw RuntimeFailure("Backup verification failed: \(path)") }
         restored.append((target, child(snapshot, payload)))
     }
-    // Keep a new recovery point before rewinding. Backups are never pruned
-    // automatically, including the original production build.
-    try backup(manifest)
+    // Keep a new recovery point before rewinding. The selected snapshot must
+    // survive retention until all of its payload has been restored.
+    try backup(manifest, preserving: [snapshot.resolvingSymlinksInPath()])
     var swaps: [(URL, URL, Bool)] = []
     do {
         for target in Set(current + restored.map(\.0)).sorted(by: { $0.path < $1.path }) {
