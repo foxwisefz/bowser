@@ -30,9 +30,20 @@ defmodule BowserBrain.UserContent do
     try { discardFields(localStorage); } catch (e) {}
     try { discardFields(sessionStorage); } catch (e) {}
     var MAX_AGE_MS = 6 * 60 * 60 * 1000;
+    var saveTimer = null, checkpointTimer = null;
     function save() {
+      clearTimeout(saveTimer);
+      clearTimeout(checkpointTimer);
+      saveTimer = checkpointTimer = null;
       var data = { y: Math.max(0, window.scrollY), at: Date.now() };
       try { localStorage.setItem(KEY, JSON.stringify(data)); } catch (e) {}
+    }
+    function scheduleSave() {
+      // Keep synchronous storage and serialization out of the scroll handler.
+      // Save after a pause, with a bounded checkpoint for a long gesture.
+      clearTimeout(saveTimer);
+      saveTimer = setTimeout(save, 200);
+      if (checkpointTimer === null) checkpointTimer = setTimeout(save, 1000);
     }
     // Scroll restore is a CAMPAIGN, not a shot: virtualized/slow pages
     // (x.com, YT Music) are not tall enough at load, scrollTo clamps to ~0
@@ -79,8 +90,11 @@ defmodule BowserBrain.UserContent do
     }
     function boot() {
       restoreScroll();
-      window.addEventListener("scroll", save, { passive: true });
+      window.addEventListener("scroll", scheduleSave, { passive: true });
       window.addEventListener("pagehide", save);
+      document.addEventListener("visibilitychange", function () {
+        if (document.visibilityState === "hidden") save();
+      });
     }
     if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot);
     else boot();
