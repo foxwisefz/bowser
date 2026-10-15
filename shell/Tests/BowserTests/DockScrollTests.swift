@@ -223,6 +223,83 @@ import XCTest
 }
 
 @MainActor final class DockLensInteractionTests: XCTestCase {
+    func testEndTabsStayAnchoredAndClickableWhenPointerLeavesTowardHeaderOrFooter() async throws {
+        _ = NSApplication.shared
+        for count in [5, 30] {
+            let cursor = CursorModel()
+            var selected: String?
+            let node: [String: Any] = ["items": (1...count).map { ["id": String($0), "symbol": "square.fill"] },
+                "size": 32.0, "spacing": 8.0, "magnify": 1.4, "chrome": "notch",
+                "header": ["t": "text", "text": "Profile"], "header_height": 52.0, "header_outside": true,
+                "footer": ["t": "text", "text": "Footer"], "footer_height": 40.0]
+            let hosting = NSHostingView(rootView: MagnifyStripView(surfaceId: "edge_dock", node: node,
+                emit: { _, value in selected = value as? String }).environmentObject(cursor))
+            let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 48, height: 500),
+                                  styleMask: [.borderless], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = hosting; window.orderFront(nil)
+            defer { window.close() }
+            func rows(_ view: NSView) -> [TabAppDragView] {
+                if let row = view as? TabAppDragView { return [row] }
+                return view.subviews.flatMap { rows($0) }
+            }
+            func frame(_ id: UInt64) throws -> NSRect {
+                let row = try XCTUnwrap(rows(hosting).first { $0.webviewID == id })
+                return row.convert(row.bounds, to: nil)
+            }
+            func findScroll(_ view: NSView) -> NSScrollView? {
+                if let scroll = view as? NSScrollView { return scroll }
+                return view.subviews.compactMap { findScroll($0) }.first
+            }
+            func capture(_ name: String) throws {
+                guard let directory = ProcessInfo.processInfo.environment["BOWSER_SURFACE_RENDER"] else { return }
+                let bitmap = try XCTUnwrap(hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds))
+                hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
+                try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+                    .write(to: URL(fileURLWithPath: directory).appendingPathComponent("dock-edge-\(count)-\(name).png"))
+            }
+            try await Task.sleep(for: .milliseconds(250))
+            for (id, direction) in [(UInt64(1), CGFloat(-1)), (UInt64(count), CGFloat(1))] {
+                cursor.point = nil
+                if count == 30, direction > 0 {
+                    let scroll = try XCTUnwrap(findScroll(hosting))
+                    let document = try XCTUnwrap(scroll.documentView)
+                    scroll.contentView.scroll(to: NSPoint(x: 0, y: document.bounds.height - scroll.contentView.bounds.height))
+                    scroll.reflectScrolledClipView(scroll.contentView)
+                }
+                try await Task.sleep(for: .milliseconds(250))
+                let resting = try frame(id)
+                try capture("\(id)-resting")
+                let center = 500 - resting.midY
+                cursor.point = CGPoint(x: 24, y: center + direction * 14)
+                try await Task.sleep(for: .milliseconds(400))
+                let enlarged = try frame(id)
+                XCTAssertEqual(enlarged.midY, resting.midY, accuracy: 1,
+                    "The end tab must not retreat from the pointer")
+                // Its enlarged outer edge must remain a real click target.
+                let outerEdge = center + direction * (enlarged.height / 2 - 2)
+                cursor.point = CGPoint(x: 24, y: outerEdge)
+                try await Task.sleep(for: .milliseconds(250))
+                try capture("\(id)-hover")
+                selected = nil
+                for type: NSEvent.EventType in [.leftMouseDown, .leftMouseUp] {
+                    window.sendEvent(try XCTUnwrap(NSEvent.mouseEvent(with: type,
+                        location: NSPoint(x: 24, y: 500 - outerEdge), modifierFlags: [],
+                        timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                        context: nil, eventNumber: 1, clickCount: 1, pressure: 1)))
+                }
+                XCTAssertEqual(selected, String(id))
+                cursor.point = CGPoint(x: 24, y: center + direction * 48)
+                try await Task.sleep(for: .milliseconds(400))
+                let outside = try frame(id)
+                XCTAssertEqual(outside.midY, resting.midY, accuracy: 1,
+                    "Header/footer hover must not push the tab strip away")
+                XCTAssertEqual(outside.height, resting.height, accuracy: 1)
+                try capture("\(id)-outside")
+            }
+        }
+    }
+
     func testDisplacedTabReceivesClickAndRendersLens() async throws {
         _ = NSApplication.shared
         let cursor = CursorModel()

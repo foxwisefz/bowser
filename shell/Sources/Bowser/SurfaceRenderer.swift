@@ -378,6 +378,21 @@ struct StripLens {
         let upper = map(center + size / 2)
         return ((upper - lower) / size, (upper + lower) / 2 - center)
     }
+
+    /// Keep the outer half of each end icon anchored. Hovering the surrounding
+    /// padding must not push the entire strip away from the pointer.
+    func bounded(to content: ClosedRange<CGFloat>, itemSize: CGFloat, viewport: ClosedRange<CGFloat>) -> StripLens {
+        var lens = self
+        let firstCenter = content.lowerBound + itemSize / 2
+        let lastCenter = max(firstCenter, content.upperBound - itemSize / 2)
+        lens.focus = min(lastCenter, max(firstCenter, focus))
+        // Use the expanded bounds so the enlarged outer edges remain clickable,
+        // but exclude clipped rows and the header/footer's reserved space.
+        let top = max(viewport.lowerBound, lens.map(content.lowerBound))
+        let bottom = min(viewport.upperBound, lens.map(content.upperBound))
+        if content.lowerBound == content.upperBound || focus < top || focus > bottom { lens.strength = 0 }
+        return lens
+    }
 }
 
 /// One animation drives the entire strip, including the active tab. Per-row
@@ -475,14 +490,14 @@ struct MagnifyStripView: View {
     var body: some View {
         GeometryReader { geo in
             let motionDisabled = reduceDockMotion || systemReduceMotion
-            let lens = StripLens(
+            let unboundedLens = StripLens(
                 focus: cursor.point?.y ?? lastLensY,
                 strength: cursor.point != nil && !motionDisabled && !(surfaceId == "edge_dock" && dragPreview.source != nil) ? 1 : 0,
                 radius: (baseSize + spacing) * 2.5, magnification: magnify
             )
             // Reserve the maximum displacement, so hovering never changes the
             // scroll range, recenters the list, or covers header/footer controls.
-            let lensPad = lens.reach + 8
+            let lensPad = unboundedLens.reach + 8
             let top = Self.centeredTop(
                 viewHeight: geo.size.height, count: items.count,
                 size: baseSize, spacing: spacing, minPad: topPad + lensPad, headerHeight: headerHeight, footerHeight: footerHeight
@@ -491,6 +506,9 @@ struct MagnifyStripView: View {
             let viewportTop = top - lensPad
             let viewportHeight = max(0, geo.size.height - viewportTop - footerHeight - topPad)
             let contentHeight = max(0, CGFloat(items.count) * (baseSize + spacing) - spacing)
+            let lens = unboundedLens.bounded(
+                to: (top - scrollOffset)...(top + contentHeight - scrollOffset), itemSize: baseSize,
+                viewport: viewportTop...(overflowing ? viewportTop + viewportHeight : top + contentHeight + lensPad))
             ZStack(alignment: .topLeading) {
                 if notch, !items.isEmpty {
                     AnimatedStripLens(lens: lens) { animatedLens in
