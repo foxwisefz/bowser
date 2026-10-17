@@ -99,6 +99,7 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
     private let pageRelay = PageRelay()
     fileprivate var didWarmMediaRecovery = false
     private var urlObservation: NSKeyValueObservation?
+    private var appearanceObservation: NSKeyValueObservation?
     private var mediaObservations: [NSKeyValueObservation] = []
     private var titleObservation: NSKeyValueObservation?
     private var loadingCover: PageLoadingView?
@@ -253,6 +254,12 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
         // Full Safari impersonation: WKWebView's default UA lacks the
         // "Version/x Safari/x" suffix and sites like YouTube Music sniff it.
         webView.customUserAgent = SafariUserAgent.current
+        // Chrome follows the page's theme color, but web content must follow
+        // the application appearance. Otherwise moving into WebKit's fullscreen
+        // window changes prefers-color-scheme and can tear down a site's player.
+        appearanceObservation = NSApplication.shared.observe(\.effectiveAppearance, options: [.initial, .new]) { [weak webView] application, _ in
+            MainActor.assumeIsolated { webView?.appearance = application.effectiveAppearance }
+        }
         webView.frame = bounds
         addSubview(webView)
         hasRenderedContent = false
@@ -686,6 +693,7 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
             "op": "event", "event": "webview_closed", "webview": webviewId,
         ])
         urlObservation = nil
+        appearanceObservation = nil
         titleObservation = nil
         mediaObservations = []
         let controller = webView.configuration.userContentController
