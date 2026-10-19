@@ -289,9 +289,9 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
                 if let self { BrowserWindowController.host(of: self.webviewId)?.refreshToolbarLoading() }
             }
         }, webView.observe(\.cameraCaptureState) { [weak self] _, _ in
-            Task { @MainActor in if let self { BrowserWindowController.host(of: self.webviewId)?.syncModButtons() } }
+            Task { @MainActor in if let self { BrowserWindowController.host(of: self.webviewId)?.syncModButtons() }; HistoryController.shared.refresh() }
         }, webView.observe(\.microphoneCaptureState) { [weak self] _, _ in
-            Task { @MainActor in if let self { BrowserWindowController.host(of: self.webviewId)?.syncModButtons() } }
+            Task { @MainActor in if let self { BrowserWindowController.host(of: self.webviewId)?.syncModButtons() }; HistoryController.shared.refresh() }
         }]
         titleObservation = webView.observe(\.title) { [weak self] view, _ in
             MainActor.assumeIsolated {
@@ -652,6 +652,7 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
     /// the right tab.
     private func registerRelay() {
         let controller = webView.configuration.userContentController
+        HistoryController.shared.attach(self)
         for world in [WKContentWorld.page, ModScript.isolatedWorld] {
             controller.removeScriptMessageHandler(forName: "bowserScriptFault", contentWorld: world)
             controller.add(pageRelay, contentWorld: world, name: "bowserScriptFault")
@@ -993,6 +994,7 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
     }
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        HistoryController.shared.navigationChanged(self)
         uncommittedPopup = false
         downloadPopupOpener = nil
         downloadableResource = pendingDownloadableResource

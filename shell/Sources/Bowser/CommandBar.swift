@@ -14,6 +14,8 @@ import BowserSurfaceKit
     private var panel: CommandBarPanel?
     private weak var target: BrowserWindowController?
     private var targetURL = ""
+    private var historyQuery = ""
+    private var historyTask: Task<Void, Never>?
     func show(for controller: BrowserWindowController, showCurrentURL: Bool = false) {
         guard SiteAppConfiguration.current == nil else { return }
         target = controller
@@ -23,7 +25,8 @@ import BowserSurfaceKit
         state.modScope.reset(url: targetURL, faviconPath: controller.activeTab?.faviconPath)
         state.query = showCurrentURL ? targetURL : ""; state.selected = 0
         state.profile = controller.profile.id; state.active = controller.activeTab?.webviewId
-        state.placeholder = "Search the web, enter a URL, or find a tab"
+        historyQuery = ""; state.historyResults = []; historyTask?.cancel()
+        state.placeholder = "Search the web, your history, or open tabs"
         state.refresh()
         guard let window = controller.window else { return }
         let size = panel.frame.size
@@ -52,7 +55,7 @@ import BowserSurfaceKit
         return true
     }
 
-    func hide() { state.modScope.freeze(); panel?.orderOut(nil) }
+    func hide() { historyTask?.cancel(); state.modScope.freeze(); panel?.orderOut(nil) }
     func receiveScope(id: String, choice: String) {
         state.modScope.receive(id: id, choice: choice)
     }
@@ -65,6 +68,7 @@ import BowserSurfaceKit
         panel.onDismiss = { [weak self] in self?.hide() }
         state.dismiss = { [weak self] in self?.hide() }
         state.choose = { [weak self] in self?.choose($0) }
+        state.searchHistory = { [weak self] query in self?.searchHistory(query) }
         state.command = { [weak self] text in
             let modCommand = text == "do" || text == "do+" || text.hasPrefix("do ") || text.hasPrefix("do+ ")
             if text.hasPrefix("new-mod ") || modCommand {
@@ -103,6 +107,11 @@ import BowserSurfaceKit
     }
   func choose(_ result: Result) {
     guard let target else { return hide() }
+    if let history = result.history {
+      hide()
+      (NSApp.delegate as? AppDelegate)?.openTab(url: history.url, activate: true, profile: target.profile.id)
+      return
+    }
     if let tab = result.tab {
       guard let controller = BrowserWindowController.host(of: tab.id),
         controller.profile.id == target.profile.id
@@ -120,6 +129,20 @@ import BowserSurfaceKit
         profile: target.profile.id)
     }
   }
+
+    private func searchHistory(_ query: String) {
+        let key = state.profile + "\n" + query
+        guard historyQuery != key else { return }
+        historyQuery = key; state.historyResults = []; historyTask?.cancel()
+        guard query.count >= 2, !query.hasPrefix(":"), !query.hasPrefix("http") else { return }
+        let profile = state.profile
+        historyTask = Task {
+            do { try await Task.sleep(for: .milliseconds(300)) } catch { return }
+            let found = await HistoryController.shared.search(profile: profile, query: query)
+            guard !Task.isCancelled, self.historyQuery == key, self.state.profile == profile else { return }
+            state.historyResults = found; state.refresh()
+        }
+    }
 
 }
 private final class CommandBarPanel: NSPanel, BrowserOwnedPanel {

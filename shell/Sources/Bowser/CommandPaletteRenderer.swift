@@ -198,7 +198,7 @@ import BowserSurfaceKit
         refresh()
     }
     private func refresh() {
-        field.stringValue = model.query
+        if field.stringValue != model.query { field.stringValue = model.query }
         field.placeholderString = model.placeholder
         updateMode()
     }
@@ -263,7 +263,13 @@ import BowserSurfaceKit
 
 
     private func refreshResults() {
+        if modPrompt == nil && !field.stringValue.hasPrefix(":") { model.searchHistory(field.stringValue) }
         results = modPrompt != nil ? [] : PaletteSuggestions.results(query: field.stringValue, tabs: model.tabs(), profile: model.profile, active: model.active, commands: model.commands())
+        if modPrompt == nil && !field.stringValue.hasPrefix(":") {
+            let openURLs = Set(results.compactMap { $0.tab?.url })
+            let history = model.historyResults.filter { !openURLs.contains($0.url) }.prefix(3).map { Result(history: $0, query: field.stringValue) }
+            results.insert(contentsOf: history, at: results.firstIndex(where: { $0.tab == nil }) ?? results.endIndex)
+        }
         model.results = results
         table.reloadData()
         if !results.isEmpty { table.selectRowIndexes(IndexSet(integer: min(model.selected, results.count - 1)), byExtendingSelection: false) }
@@ -313,12 +319,12 @@ import BowserSurfaceKit
     let cell = NSTableCellView()
     let command = result.tab == nil && result.query.hasPrefix(":") ? String(result.query.dropFirst()) : nil
     let navigating = result.query.contains("://") || (result.query.contains(".") && !result.query.contains(" ")) || result.query.hasPrefix("/")
-    let label = command.flatMap { model.commands()[$0] } ?? (result.tab != nil ? result.title : navigating ? "Go to \(result.query)" : "Search \(SearchEngine.selected().title) for “\(result.query)”")
+    let label = result.history?.title ?? command.flatMap { model.commands()[$0] } ?? (result.tab != nil ? result.title : navigating ? "Go to \(result.query)" : "Search \(SearchEngine.selected().title) for “\(result.query)”")
     let title = NSTextField(labelWithString: label)
     title.font = .systemFont(ofSize: 13, weight: .medium)
     title.lineBreakMode = .byTruncatingTail
-    let detail = NSTextField(labelWithString: command.map { ":" + $0 } ?? (result.tab?.url ?? "Open in a new tab"))
-    let badge = NSTextField(labelWithString: command != nil ? "Action" : result.tab != nil ? "Open tab" : navigating ? "Website" : "Search")
+    let detail = NSTextField(labelWithString: result.history.map { "\(URL(string: $0.url)?.host ?? $0.url) · \($0.snippet)" } ?? command.map { ":" + $0 } ?? (result.tab?.url ?? "Open in a new tab"))
+    let badge = NSTextField(labelWithString: result.history != nil ? "History" : command != nil ? "Action" : result.tab != nil ? "Open tab" : navigating ? "Website" : "Search")
     badge.font = .systemFont(ofSize: 10, weight: .medium)
     badge.textColor = .secondaryLabelColor
     badge.setContentCompressionResistancePriority(.required, for: .horizontal)
@@ -328,7 +334,7 @@ import BowserSurfaceKit
     detail.lineBreakMode = .byTruncatingMiddle
     let icon = NSImageView()
     icon.image =
-      result.tab?.favicon.flatMap { NSImage(contentsOfFile: $0) }
+      result.history?.image.flatMap { NSImage(data: $0) } ?? result.tab?.favicon.flatMap { NSImage(contentsOfFile: $0) }
       ?? NSImage(
         systemSymbolName: command != nil ? "command" : result.tab == nil ? (navigating ? "arrow.up.right" : "magnifyingglass") : "globe",
         accessibilityDescription: nil)

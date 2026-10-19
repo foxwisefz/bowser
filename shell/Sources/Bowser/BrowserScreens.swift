@@ -937,6 +937,8 @@ struct SettingsScreen: View {
         Group {
             if model.selected == "websites" {
                 PermissionsScreen(context: model.permissionsContext)
+            } else if model.selected == "history" {
+                HistoryScreen(context: model.historyContext)
             } else if model.selected == "profiles" {
                 ProfilesScreen(context: model.profilesContext)
             } else if let section = model.sections.first(where: { $0.id == model.selected }) {
@@ -958,6 +960,85 @@ struct SettingsScreen: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+private struct HistoryScreen: View {
+    @ObservedObject var context: BrowserScreenContext
+    private var model: any HistoryPresentation { context.model as! any HistoryPresentation }
+    @State private var confirmClear = false
+    @State private var captureExpanded = false
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text("Find something you remember").font(.title2.weight(.semibold))
+                Spacer()
+                Picker("Profile", selection: Binding(get: { model.selectedProfile }, set: { model.selectedProfile = $0 })) {
+                    ForEach(model.profiles) { Text($0.name).tag($0.id) }
+                }.labelsHidden().frame(maxWidth: 160)
+            }
+            TextField("An orange website, a post, a picture…", text: Binding(get: { model.query }, set: { model.query = $0 }))
+                .textFieldStyle(.roundedBorder).font(.title3)
+            HStack {
+                if model.isSearching || model.isDownloading { ProgressView().controlSize(.small) }
+                Text(model.status).font(.callout).foregroundStyle(.secondary)
+            }
+            DisclosureGroup("Capture and storage", isExpanded: $captureExpanded) {
+                VStack(alignment: .leading, spacing: 10) {
+                    Toggle("Remember pages I visit in this profile", isOn: Binding(get: { model.enabled }, set: { model.enabled = $0 }))
+                    Text("Stores visible text, page colors, and selected pictures on this Mac. Enabling downloads a 388 MB model once. Private windows and editable fields are excluded.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Toggle("Include pictures", isOn: Binding(get: { model.includeImages }, set: { model.includeImages = $0 }))
+                    HStack {
+                        Picker("Keep history", selection: Binding(get: { model.retentionDays }, set: { model.retentionDays = $0 })) {
+                            Text("30 days").tag(30); Text("90 days").tag(90); Text("1 year").tag(365)
+                        }.frame(maxWidth: 240)
+                        if !model.modelReady && !model.isDownloading { Button("Download search model") { model.downloadModel() } }
+                        Spacer()
+                        Button("Clear this profile’s history…", role: .destructive) { confirmClear = true }
+                    }
+                    HStack(alignment: .top) {
+                        Text("Exclude websites").frame(width: 125, alignment: .leading)
+                        TextField("example.com, mail.example.org", text: Binding(get: { model.excludedSites }, set: { model.excludedSites = $0 }), axis: .vertical)
+                            .textFieldStyle(.roundedBorder).lineLimit(1...3)
+                        Button("Save") { model.saveExclusions() }
+                    }
+                    Text("Excluding a site also removes its saved history. \(model.storageText)").font(.caption).foregroundStyle(.secondary)
+                }.padding(.top, 10)
+            }
+            Divider()
+            if model.results.isEmpty {
+                ContentUnavailableView(model.enabled ? "No matching history yet" : "History search is off", systemImage: "clock.arrow.circlepath",
+                    description: Text(model.enabled ? "Pages become searchable as you browse. Try another description or browse a few pages." : "Open Capture and storage above to enable it for this profile."))
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(model.results) { item in
+                            HStack(alignment: .top, spacing: 12) {
+                                Button { model.open(item) } label: {
+                                    HStack(alignment: .top, spacing: 12) {
+                                        if let data = item.image, let image = NSImage(data: data) {
+                                            Image(nsImage: image).resizable().scaledToFit().frame(width: 72, height: 56).clipShape(RoundedRectangle(cornerRadius: 6))
+                                        } else { Image(systemName: "globe").font(.title2).foregroundStyle(.secondary).frame(width: 72, height: 56) }
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text(item.title.isEmpty ? item.url : item.title).font(.headline).lineLimit(1)
+                                            Text(item.snippet).font(.callout).foregroundStyle(.secondary).lineLimit(2)
+                                            Text("\(URL(string: item.url)?.host ?? item.url) · \(item.seen.formatted(date: .abbreviated, time: .shortened))").font(.caption).foregroundStyle(.tertiary)
+                                        }.frame(maxWidth: .infinity, alignment: .leading)
+                                    }.contentShape(Rectangle())
+                                }.buttonStyle(.plain)
+                                Button { model.delete(item) } label: { Image(systemName: "xmark") }.buttonStyle(.borderless).help("Remove from history")
+                            }.padding(.vertical, 12)
+                            Divider()
+                        }
+                    }
+                }
+            }
+        }.padding(28).onAppear { captureExpanded = !model.enabled; model.search() }
+        .alert("Clear this profile’s history?", isPresented: $confirmClear) {
+            Button("Clear History", role: .destructive) { model.clear() }
+            Button("Cancel", role: .cancel) {}
+        } message: { Text("Saved text, pictures, and search data for this profile will be removed.") }
     }
 }
 

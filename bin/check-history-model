@@ -1,0 +1,59 @@
+#!/usr/bin/env python3
+"""Developer-only real model regression. No personal history is read or written."""
+import base64
+import hashlib
+import json
+import pathlib
+import resource
+import struct
+import subprocess
+import sys
+import tempfile
+import time
+import zlib
+
+if len(sys.argv) != 3:
+    raise SystemExit("usage: bin/check-history-model PATH_TO_WORKER PATH_TO_MODEL")
+worker, model = map(pathlib.Path, sys.argv[1:])
+with model.open("rb") as stream:
+    assert hashlib.file_digest(stream, "sha256").hexdigest() == "92dcbea108899e5d6e30d919b0744f90d9967e80c67a4ab5503ac16d54f62eb0"
+
+def png(rgb):
+    def chunk(kind, data):
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xffffffff)
+    pixels = (b"\0" + bytes(rgb) * 160) * 160
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", 160, 160, 8, 2, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(pixels)) + chunk(b"IEND", b"")
+
+with tempfile.TemporaryDirectory(prefix="bowser-history-model-") as directory:
+    process = subprocess.Popen([str(worker.resolve()), directory, str(model.resolve())], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    def send(operation, profile="fixture", **values):
+        started = time.monotonic()
+        process.stdin.write(json.dumps(dict(operation=operation, profile=profile, days=90, **values)) + "\n")
+        process.stdin.flush()
+        response = json.loads(process.stdout.readline())
+        assert not response.get("error"), response
+        print(f"{operation}: {time.monotonic()-started:.3f}s")
+        return response
+    try:
+        for i, rgb in enumerate([(240, 25, 25), (25, 200, 25), (25, 25, 240)]):
+            send("capture", record=dict(url=f"https://fixture.test/{i}", title="A picture", text="A picture", appearance="", seen=time.time()-978307200, image=base64.b64encode(png(rgb)).decode()))
+            send("index")
+        for i, color in enumerate(["red", "green", "blue"]):
+            result = send("search", query=f"a {color} square")
+            assert result["hits"][0]["record"]["url"] == f"https://fixture.test/{i}", (color, result)
+        send("capture", record=dict(url="https://fixture.test/network", title="Network services", text="Security and performance for your applications.", appearance="White background; orange accents.", seen=time.time()-978307200))
+        send("index")
+        assert send("search", query="that orange website")["hits"][0]["record"]["url"].endswith("/network")
+        assert send("search", profile="other", query="orange")["hits"] == []
+        send("delete")
+        assert send("search", query="red square")["hits"] == []
+    finally:
+        process.stdin.close()
+        try:
+            process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+    assert process.returncode == 0
+print("PASS: real text/image retrieval, profile isolation and deletion")
+print("Worker peak RSS:", resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss, "bytes")

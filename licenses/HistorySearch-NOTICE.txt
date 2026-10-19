@@ -1,0 +1,9 @@
+Bowser history search uses LiteRT-LM v0.18.0 from Google AI Edge.
+Copyright 2026 The ODML Authors. Licensed under Apache License 2.0.
+The full license is included in LiteRT-LM.txt.
+https://github.com/google-ai-edge/LiteRT-LM/tree/v0.18.0
+
+The separately downloaded EmbeddingGemma 2 model is published by Google
+DeepMind under Apache License 2.0.
+https://huggingface.co/google/embeddinggemma-2
+https://huggingface.co/litert-community/embeddinggemma-2-text-vision-440m-litert-lm

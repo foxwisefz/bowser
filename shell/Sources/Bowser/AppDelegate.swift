@@ -539,6 +539,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         ])
     }
 
+    @objc func openHistory(_ sender: Any?) {
+        HistoryController.shared.selectedProfile = currentController?.profile.id ?? "default"
+        SettingsWindow.shared.show(select: "history")
+    }
+
     @objc func openWelcome(_ sender: Any?) {
         if admissionRequired { showAdmission() }
     }

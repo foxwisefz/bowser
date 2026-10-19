@@ -126,6 +126,8 @@ import BowserSurfaceKit
         if context.siteHost == nil {
             goMenu.addItem(withTitle: "Command Bar", action: NSSelectorFromString("focusOmnibarAction:"), keyEquivalent: "k")
             goMenu.addItem(withTitle: "Open Location", action: NSSelectorFromString("focusOmnibarAction:"), keyEquivalent: "l")
+            let history = goMenu.addItem(withTitle: "Search History…", action: NSSelectorFromString("openHistory:"), keyEquivalent: "y")
+            history.target = context.target
         }
         let copyURLItem = goMenu.addItem(
             withTitle: "Copy URL", action: NSSelectorFromString("copyCurrentURL:"), keyEquivalent: "c"
@@ -244,7 +246,7 @@ import BowserSurfaceKit
     static func settingsItem(_ section: SettingsSection, _ target: NSObject) -> NSToolbarItem {
         let item = NSToolbarItem(itemIdentifier: NSToolbarItem.Identifier(section.id))
         item.label = section.title; item.paletteLabel = section.title
-        let symbol = ["websites": "globe", "settings": "gearshape", "profiles": "person.crop.rectangle", "mods": "puzzlepiece.extension"][section.id] ?? "slider.horizontal.3"
+        let symbol = ["websites": "globe", "settings": "gearshape", "profiles": "person.crop.rectangle", "mods": "puzzlepiece.extension", "history": "clock.arrow.circlepath"][section.id] ?? "slider.horizontal.3"
         item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: section.title)
         item.target = target; item.action = NSSelectorFromString("selectToolbarSection:")
         return item

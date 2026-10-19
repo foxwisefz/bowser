@@ -152,10 +152,17 @@ if [ "$BRAIN_ONLY" = 0 ]; then
   "$REPO/bin/build-native-surfaces" "$STAGE/Bowser.app/Contents/Resources/SurfaceRenderer.bundle"
   mkdir -p "$STAGE/Bowser.app/Contents/Frameworks"
   cp -f "$REPO/shell/.build/$CONF/libBowserSurfaceKit.dylib" "$STAGE/Bowser.app/Contents/Frameworks/"
+  # The model runs in its own native helper. Ship only our supported arm64 slice.
+  mkdir -p "$STAGE/Bowser.app/Contents/Helpers"
+  cp -f "$REPO/shell/.build/$CONF/BowserHistoryWorker" "$STAGE/Bowser.app/Contents/Helpers/"
+  cp -Rf "$REPO/licenses" "$STAGE/Bowser.app/Contents/Resources/Licenses"
+  lipo "$REPO/shell/.build/$CONF/libCLiteRTLM_mac.dylib" -thin arm64 -output "$STAGE/Bowser.app/Contents/Frameworks/libCLiteRTLM_mac.dylib"
   native_sign=(--force --sign "$BOWSER_SIGN_IDENTITY")
   if [ "$BOWSER_SIGN_IDENTITY" != - ]; then native_sign+=(--options runtime); fi
   if [ -n "${BOWSER_SIGN_KEYCHAIN:-}" ]; then native_sign+=(--keychain "$BOWSER_SIGN_KEYCHAIN"); fi
   codesign "${native_sign[@]}" "$STAGE/Bowser.app/Contents/Frameworks/libBowserSurfaceKit.dylib"
+  codesign "${native_sign[@]}" "$STAGE/Bowser.app/Contents/Frameworks/libCLiteRTLM_mac.dylib"
+  codesign "${native_sign[@]}" "$STAGE/Bowser.app/Contents/Helpers/BowserHistoryWorker"
   codesign "${native_sign[@]}" --entitlements "$REPO/bin/shell-entitlements.plist" "$STAGE/Bowser.app"
   codesign --verify --deep --strict "$STAGE/Bowser.app"
   # Assemble inside the unpublished generation.

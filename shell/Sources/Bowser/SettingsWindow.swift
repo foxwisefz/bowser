@@ -13,8 +13,9 @@ final class SettingsWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         lazy var permissionsContext = BrowserScreenContext(kind: "permissions", model: PermissionSettingsModel.shared)
         lazy var profilesContext = BrowserScreenContext(kind: "profiles", model: ProfileSettingsModel.shared)
         lazy var defaultContext = BrowserScreenContext(kind: "default-browser", model: DefaultBrowserSettingsModel.shared)
+        lazy var historyContext = BrowserScreenContext(kind: "history", model: HistoryController.shared)
 
-        @Published var sections: [Section] = [Section(id: "websites", title: "Websites", order: 30, tree: [:])]
+        @Published var sections: [Section] = [Section(id: "websites", title: "Websites", order: 30, tree: [:]), Section(id: "history", title: "History", order: 35, tree: [:])]
         @Published var selected: String?
         /// Bumped on every tree update so the detail re-renders (trees are
         /// [String: Any], not Equatable).
@@ -59,6 +60,7 @@ final class SettingsWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         }
         PermissionSettingsModel.shared.start()
         DefaultBrowserSettingsModel.shared.refresh()
+        if id == "history" { HistoryController.shared.search() }
         if window == nil {
             let w = NSWindow(
                 contentRect: NSRect(x: 0, y: 0, width: 820, height: 560),

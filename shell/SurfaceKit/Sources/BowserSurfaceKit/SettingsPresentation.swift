@@ -76,6 +76,7 @@ public struct SettingsSection: Identifiable, Equatable {
     var permissionsContext: BrowserScreenContext { get }
     var profilesContext: BrowserScreenContext { get }
     var defaultContext: BrowserScreenContext { get }
+    var historyContext: BrowserScreenContext { get }
 }
 
 /// Shared by the settings renderer and host navigation policy.
