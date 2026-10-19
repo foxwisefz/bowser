@@ -21,6 +21,8 @@ public final class HistoryStore {
           id TEXT NOT NULL UNIQUE, url TEXT NOT NULL, title TEXT NOT NULL, text TEXT NOT NULL,
           appearance TEXT NOT NULL, seen REAL NOT NULL, image BLOB, embedding BLOB, image_embedding BLOB, model TEXT);
         CREATE INDEX IF NOT EXISTS recent ON records(seen);
+        CREATE TABLE IF NOT EXISTS capacity_cleanup (
+          id INTEGER PRIMARY KEY CHECK(id=1), removed INTEGER NOT NULL, last_removed REAL NOT NULL);
         CREATE VIRTUAL TABLE IF NOT EXISTS words USING fts5(title, text, appearance, url, content='records', content_rowid='rowid');
         CREATE TRIGGER IF NOT EXISTS records_ai AFTER INSERT ON records BEGIN
           INSERT INTO words(rowid,title,text,appearance,url) VALUES(new.rowid,new.title,new.text,new.appearance,new.url); END;
@@ -49,6 +51,17 @@ public final class HistoryStore {
         return Data(bytes: ptr, count: Int(sqlite3_column_bytes(stmt, index)))
     }
     private func step(_ stmt: OpaquePointer) throws { guard sqlite3_step(stmt) == SQLITE_DONE else { throw Failure.database } }
+    private func transaction(_ work: () throws -> Void) throws {
+        try execute("BEGIN IMMEDIATE")
+        do { try work(); try execute("COMMIT") }
+        catch { try? execute("ROLLBACK"); throw error }
+    }
+    private func recordCleanup(_ removed: Int, now: Date) throws {
+        guard removed > 0 else { return }
+        let stmt = try statement("INSERT INTO capacity_cleanup(id,removed,last_removed) VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET removed=removed+excluded.removed,last_removed=excluded.last_removed")
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int64(stmt, 1, Int64(removed)); sqlite3_bind_double(stmt, 2, now.timeIntervalSince1970); try step(stmt)
+    }
 
     public func ingest(_ raw: HistoryRecord) throws {
         guard let record = raw.validated() else { throw Failure.invalidRecord }
@@ -61,24 +74,43 @@ public final class HistoryStore {
     }
     public func prune(days: Int, now: Date = Date(), budget: Int64 = HistoryStore.budget, limit: Int = HistoryStore.recordLimit) throws {
         let expiration = now.addingTimeInterval(-Double(max(1, min(days, 365))) * 86400).timeIntervalSince1970
-        let stmt = try statement("DELETE FROM records WHERE seen < ? OR rowid IN (SELECT rowid FROM records ORDER BY seen DESC LIMIT -1 OFFSET ?)")
-        defer { sqlite3_finalize(stmt) }
-        sqlite3_bind_double(stmt, 1, expiration); sqlite3_bind_int(stmt, 2, Int32(max(1, limit))); try step(stmt)
+        try transaction {
+            let expired = try statement("DELETE FROM records WHERE seen < ?")
+            defer { sqlite3_finalize(expired) }
+            sqlite3_bind_double(expired, 1, expiration); try step(expired)
+            // Expiration is a retention policy, not evidence that capacity was reached.
+            let overflow = try statement("DELETE FROM records WHERE rowid IN (SELECT rowid FROM records ORDER BY seen DESC LIMIT -1 OFFSET ?)")
+            defer { sqlite3_finalize(overflow) }
+            sqlite3_bind_int(overflow, 1, Int32(max(1, limit))); try step(overflow)
+            try recordCleanup(Int(sqlite3_changes(db)), now: now)
+        }
         // Include the FTS index and SQLite overhead in the physical cap; keep headroom
         // below max_page_count for the rollback journal and the next bounded insert.
         while try stats().bytes > budget, try stats().records > 0 {
-            let before = sqlite3_total_changes(db)
-            try execute("DELETE FROM records WHERE rowid IN (SELECT rowid FROM records ORDER BY seen LIMIT 128)")
-            try execute("INSERT INTO words(words) VALUES('optimize')")
-            if sqlite3_total_changes(db) == before { break }
+            var removed = 0
+            try transaction {
+                try execute("DELETE FROM records WHERE rowid IN (SELECT rowid FROM records ORDER BY seen LIMIT 128)")
+                removed = Int(sqlite3_changes(db))
+                try execute("INSERT INTO words(words) VALUES('optimize')")
+                try recordCleanup(removed, now: now)
+            }
+            // Commit each batch so auto-vacuum can shrink the file before measuring it.
+            if removed == 0 { break }
         }
     }
     public func stats() throws -> HistoryStats {
         let stmt = try statement("SELECT COUNT(*), SUM(CASE WHEN model IS NULL OR model != ? THEN 1 ELSE 0 END) FROM records")
         defer { sqlite3_finalize(stmt) }; bind(HistoryModel.version, 1, stmt)
         guard sqlite3_step(stmt) == SQLITE_ROW else { throw Failure.database }
-        let bytes = (try? path.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? 0
-        return HistoryStats(records: Int(sqlite3_column_int(stmt, 0)), bytes: bytes, pending: Int(sqlite3_column_int(stmt, 1)))
+        let cleanup = try statement("SELECT removed,last_removed FROM capacity_cleanup WHERE id=1")
+        defer { sqlite3_finalize(cleanup) }
+        let cleanupStep = sqlite3_step(cleanup)
+        guard cleanupStep == SQLITE_ROW || cleanupStep == SQLITE_DONE else { throw Failure.database }
+        let notice = cleanupStep == SQLITE_ROW ? HistoryCapacityCleanup(removedCount: Int(sqlite3_column_int64(cleanup, 0)), lastRemovedAt: Date(timeIntervalSince1970: sqlite3_column_double(cleanup, 1))) : nil
+        // URL.resourceValues caches file sizes on this long-lived URL. Read fresh
+        // attributes after each write/auto-vacuum so the cap uses current usage.
+        let bytes = (try FileManager.default.attributesOfItem(atPath: path.path)[.size] as? NSNumber)?.int64Value ?? 0
+        return HistoryStats(records: Int(sqlite3_column_int(stmt, 0)), bytes: bytes, pending: Int(sqlite3_column_int(stmt, 1)), capacityCleanup: notice)
     }
     public func nextUnindexed() throws -> HistoryRecord? {
         let stmt = try statement("SELECT url,title,text,appearance,seen,image FROM records WHERE model IS NULL OR model != ? ORDER BY seen DESC LIMIT 1")
@@ -115,10 +147,13 @@ public final class HistoryStore {
             for key in keys { try delete(key: key) }
             return
         }
-        let stmt = try statement(key == nil ? "DELETE FROM records" : "DELETE FROM records WHERE id=?")
-        defer { sqlite3_finalize(stmt) }
-        if let key { bind(key, 1, stmt) }; try step(stmt)
-        try execute("INSERT INTO words(words) VALUES('optimize')")
+        try transaction {
+            let stmt = try statement(key == nil ? "DELETE FROM records" : "DELETE FROM records WHERE id=?")
+            defer { sqlite3_finalize(stmt) }
+            if let key { bind(key, 1, stmt) }; try step(stmt)
+            if key == nil { try execute("DELETE FROM capacity_cleanup") }
+            try execute("INSERT INTO words(words) VALUES('optimize')")
+        }
     }
     public func search(_ query: String, embedding: [Float]?, limit: Int = 20) throws -> [HistoryHit] {
         let query = String(query.prefix(512)).trimmingCharacters(in: .whitespacesAndNewlines)

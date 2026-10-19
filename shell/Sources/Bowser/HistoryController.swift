@@ -30,17 +30,19 @@ private struct HistoryPreferences: Codable {
     private var pending: [(String, HistoryRecord)] = []
     private var processing = false
     private var indexCounts: [String: Int] = [:]
+    private var profileStats: [String: HistoryStats] = [:]
     private var suppressedPage: String?
     private var lastWork = Date.distantPast
     private var queryTask: Task<Void, Never>?
     private var revision = 0
-    @Published var selectedProfile = "default" { didSet { excludedSites = settings.exclusions.joined(separator: "\n"); search() } }
+    @Published var selectedProfile = "default" { didSet { excludedSites = settings.exclusions.joined(separator: "\n"); presentStats(); search() } }
     @Published var excludedSites = ""
     @Published var query = "" { didSet { search() } }
     @Published private(set) var results: [HistorySearchItem] = []
     @Published private(set) var isSearching = false
     @Published private(set) var status = "Enable history search to remember pages you visit."
     @Published private(set) var storageText = "Up to 128 MB and 10,000 items per profile."
+    @Published private(set) var storageWarning: String?
     private var settings: HistoryPreferences { preferences[selectedProfile] ?? HistoryPreferences() }
     var profiles: [ProfileDisplay] {
         Profile.all.map { ProfileDisplay(id: $0.id, name: $0.name, draft: ProfileDraft(name: $0.name, character: $0.avatar, tint: $0.tint, icon: $0.icon)) }
@@ -204,8 +206,23 @@ private struct HistoryPreferences: Codable {
     private func updateStats(_ stats: HistoryStats?, profile: String) {
         guard let stats else { return }
         indexCounts[profile] = stats.pending
+        profileStats[profile] = stats
         guard selectedProfile == profile else { return }
-        storageText = "\(stats.records) items · \(ByteCountFormatter.string(fromByteCount: stats.bytes, countStyle: .file)) of 128 MB · \(stats.pending) awaiting semantic indexing"
+        presentStats()
+    }
+    private func presentStats() {
+        guard let stats = profileStats[selectedProfile] else {
+            storageText = "Up to 128 MB and 10,000 items per profile."; storageWarning = nil; return
+        }
+        storageText = "\(stats.records.formatted()) items · \(ByteCountFormatter.string(fromByteCount: stats.bytes, countStyle: .memory)) of 128 MB · \(stats.pending) awaiting semantic indexing"
+        switch stats.capacityState {
+        case .normal: storageWarning = nil
+        case .nearLimit:
+            storageWarning = "History is nearing its limit. The oldest items will be removed automatically at 128 MB or 10,000 items."
+        case .trimmed(let cleanup):
+            let count = cleanup.removedCount.formatted(), noun = cleanup.removedCount == 1 ? "item" : "items"
+            storageWarning = "History reached its limit. \(count) older \(noun) removed in total to stay within 128 MB and 10,000 items. Last removal: \(cleanup.lastRemovedAt.formatted(date: .abbreviated, time: .shortened))."
+        }
     }
     static func item(_ hit: HistoryHit) -> HistorySearchItem {
         HistorySearchItem(id: hit.id, url: hit.record.url, title: hit.record.title,
@@ -253,7 +270,7 @@ private struct HistoryPreferences: Codable {
         for host in rules { mutate(HistoryRequest("exclude", profile: selectedProfile, key: host)) }
     }
     private func mutate(_ request: HistoryRequest) {
-        Task { do { let response = try await worker.send(request); if let error = response.error { status = error }; search() }
+        Task { do { let response = try await worker.send(request); updateStats(response.stats, profile: request.profile); if let error = response.error { status = error }; search() }
             catch { status = "History could not be updated. Try again." } }
     }
 }

@@ -52,6 +52,62 @@ final class HistoryStoreTests: XCTestCase {
         try store.prune(days: 90, now: now, limit: 3)
         XCTAssertEqual(try store.stats().records, 3)
         XCTAssertEqual(try store.search("Old", embedding: nil).count, 0)
+        XCTAssertEqual(try store.stats().capacityCleanup?.removedCount, 2)
+    }
+    func testCapacityWarningsStartAtNinetyPercentOfEitherLimit() throws {
+        XCTAssertEqual(HistoryStats(records: 8_999, bytes: HistoryStore.budget * 9 / 10 - 1, pending: 0).capacityState, .normal)
+        XCTAssertEqual(HistoryStats(records: 9_000, bytes: 0, pending: 0).capacityState, .nearLimit)
+        XCTAssertEqual(HistoryStats(records: 0, bytes: HistoryStore.budget * 9 / 10, pending: 0).capacityState, .nearLimit)
+        let cleanup = HistoryCapacityCleanup(removedCount: 128, lastRemovedAt: Date())
+        let stats = HistoryStats(records: 0, bytes: 0, pending: 0, capacityCleanup: cleanup)
+        let decoded = try JSONDecoder().decode(HistoryStats.self, from: JSONEncoder().encode(stats))
+        XCTAssertEqual(decoded.capacityState, .trimmed(cleanup))
+    }
+    func testCapacityCleanupPersistsIsolatedFromOtherProfilesAndResetsOnClear() throws {
+        let now = Date()
+        let store = try HistoryStore(directory: root, profile: "work")
+        for i in 0..<5 { try store.ingest(record("Post \(i)", seen: now.addingTimeInterval(Double(i)))) }
+        try store.prune(days: 90, now: now, limit: 3)
+        let cleanup = HistoryCapacityCleanup(removedCount: 2, lastRemovedAt: now)
+        XCTAssertEqual(try store.stats().capacityState, .trimmed(cleanup))
+        let reopened = try HistoryStore(directory: root, profile: "work")
+        XCTAssertEqual(try reopened.stats().capacityCleanup, cleanup)
+        try reopened.prune(days: 90, now: now.addingTimeInterval(1), limit: 3)
+        XCTAssertEqual(try reopened.stats().capacityCleanup, cleanup)
+        let personal = try HistoryStore(directory: root, profile: "personal")
+        XCTAssertNil(try personal.stats().capacityCleanup)
+        try reopened.ingest(record("Another post", seen: now.addingTimeInterval(5)))
+        try reopened.prune(days: 90, now: now.addingTimeInterval(6), limit: 3)
+        XCTAssertEqual(try reopened.stats().capacityCleanup, HistoryCapacityCleanup(removedCount: 3, lastRemovedAt: now.addingTimeInterval(6)))
+        try reopened.delete()
+        XCTAssertNil(try reopened.stats().capacityCleanup)
+        XCTAssertEqual(try reopened.stats().capacityState, .normal)
+    }
+    func testRetentionExpiryDoesNotClaimCapacityWasReached() throws {
+        let store = try HistoryStore(directory: root, profile: "work")
+        try store.ingest(record("Expired", seen: Date().addingTimeInterval(-91 * 86400)))
+        try store.prune(days: 90)
+        XCTAssertEqual(try store.stats().records, 0)
+        XCTAssertNil(try store.stats().capacityCleanup)
+    }
+    func testStorageBudgetCleanupCountsOnlyRemovedRecordsAndShrinksBetweenBatches() throws {
+        let store = try HistoryStore(directory: root, profile: "work")
+        let now = Date()
+        let initialBytes = try store.stats().bytes
+        for i in 0..<160 {
+            var page = record("Picture \(i)", seen: now.addingTimeInterval(Double(i)))
+            page.image = Data(repeating: UInt8(i), count: 8_192)
+            try store.ingest(page)
+        }
+        let budget: Int64 = 512 * 1024
+        XCTAssertGreaterThan(try store.stats().bytes, initialBytes)
+        XCTAssertGreaterThan(try store.stats().bytes, budget)
+        try store.prune(days: 90, now: now, budget: budget)
+        let stats = try store.stats()
+        XCTAssertLessThanOrEqual(stats.bytes, budget)
+        XCTAssertEqual(stats.records, 32)
+        XCTAssertEqual(stats.capacityCleanup?.removedCount, 128)
+        XCTAssertEqual(try store.search("Picture 159", embedding: nil).first?.record.text, "Picture 159")
     }
     func testSemanticAndImageVectorsParticipateWithoutKeywords() throws {
         let store = try HistoryStore(directory: root, profile: "default")

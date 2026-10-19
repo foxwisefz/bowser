@@ -38,6 +38,13 @@ removes its text, picture and embeddings. Site exclusions also delete existing
 records for the host and its subdomains. Disabling capture preserves existing
 history so it can still be searched or cleared.
 
+History shows a warning at 90% of either the storage or item limit. When either
+limit removes older items, a notice above the capture controls records how many
+items have been removed and the most recent removal time. The notice stays with
+that profile across restarts, even after cleanup brings usage below the limit;
+clearing all of the profile's history resets it. Retention expiry is explained
+beside the capture toggle and does not trigger a capacity warning.
+
 The local ranker combines SQLite FTS5 with normalized 512-dimensional text/image
 vectors, then groups results by destination URL. Model identity is stored with
 each vector; vectors from another version are never compared. The collector

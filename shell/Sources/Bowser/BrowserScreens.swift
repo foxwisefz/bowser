@@ -983,11 +983,21 @@ private struct HistoryScreen: View {
                 if model.isSearching || model.isDownloading { ProgressView().controlSize(.small) }
                 Text(model.status).font(.callout).foregroundStyle(.secondary)
             }
+            if let warning = model.storageWarning {
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                    Text(warning).font(.callout).fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 0)
+                    Button("Manage") { captureExpanded = true }
+                }.padding(12).background(.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
+            }
             DisclosureGroup("Capture and storage", isExpanded: $captureExpanded) {
                 VStack(alignment: .leading, spacing: 10) {
                     Toggle("Remember pages I visit in this profile", isOn: Binding(get: { model.enabled }, set: { model.enabled = $0 }))
                     Text("Stores visible text, page colors, and selected pictures on this Mac. Enabling downloads a 388 MB model once. Private windows and editable fields are excluded.")
                         .font(.caption).foregroundStyle(.secondary)
+                    Text("Older items are permanently deleted automatically after \(model.retentionDays) days, or when this profile exceeds 128 MB or 10,000 saved items—whichever comes first.")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     Toggle("Include pictures", isOn: Binding(get: { model.includeImages }, set: { model.includeImages = $0 }))
                     HStack {
                         Picker("Keep history", selection: Binding(get: { model.retentionDays }, set: { model.retentionDays = $0 })) {

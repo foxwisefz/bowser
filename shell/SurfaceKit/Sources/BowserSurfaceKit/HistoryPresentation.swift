@@ -22,6 +22,7 @@ public struct HistorySearchItem: Equatable, Identifiable, Sendable {
     var results: [HistorySearchItem] { get }
     var status: String { get }
     var storageText: String { get }
+    var storageWarning: String? { get }
     var isSearching: Bool { get }
     var isDownloading: Bool { get }
     var modelReady: Bool { get }

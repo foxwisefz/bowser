@@ -43,11 +43,26 @@ public struct HistoryHit: Codable, Sendable, Equatable, Identifiable {
     public var score: Double
     public init(id: String, record: HistoryRecord, score: Double) { self.id = id; self.record = record; self.score = score }
 }
+public struct HistoryCapacityCleanup: Codable, Equatable, Sendable {
+    public var removedCount: Int
+    public var lastRemovedAt: Date
+    public init(removedCount: Int, lastRemovedAt: Date) { self.removedCount = removedCount; self.lastRemovedAt = lastRemovedAt }
+}
+public enum HistoryCapacityState: Equatable, Sendable {
+    case normal, nearLimit, trimmed(HistoryCapacityCleanup)
+}
 public struct HistoryStats: Codable, Sendable {
     public var records: Int
     public var bytes: Int64
     public var pending: Int
-    public init(records: Int, bytes: Int64, pending: Int) { self.records = records; self.bytes = bytes; self.pending = pending }
+    public var capacityCleanup: HistoryCapacityCleanup?
+    public init(records: Int, bytes: Int64, pending: Int, capacityCleanup: HistoryCapacityCleanup? = nil) {
+        self.records = records; self.bytes = bytes; self.pending = pending; self.capacityCleanup = capacityCleanup
+    }
+    public var capacityState: HistoryCapacityState {
+        if let capacityCleanup, capacityCleanup.removedCount > 0 { return .trimmed(capacityCleanup) }
+        return bytes >= HistoryStore.budget * 9 / 10 || records >= HistoryStore.recordLimit * 9 / 10 ? .nearLimit : .normal
+    }
 }
 public struct HistoryRequest: Codable, Sendable {
     public var operation: String
