@@ -16,9 +16,13 @@ control = records("provider-control.jsonl")
 assert any(r["event"] == "control_reply" and r["details"]["ok"] for r in control)
 provider = records("provider.jsonl")
 assert any(r["event"] == "control_request" for r in provider)
-reached_provider = any(r["event"] == "provider_request" for r in provider)
+reached_provider = any(
+    r["event"] == "provider_request"
+    and r["details"].get("executable") == "com.apple.WebKit.Networking"
+    for r in provider
+)
 
-# UUID-based test service only; never collect unrelated website/app logs.
+# Only this test's service name and time range, never general website/app logs.
 predicate = f'eventMessage CONTAINS "{service}"'
 with (out / "provider-connection.log").open("w") as log:
     subprocess.run(

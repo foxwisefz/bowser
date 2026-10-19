@@ -10,11 +10,15 @@ notification-click dispatch after tab closure on the development machine.
 Standard subscription creation still fails without a push daemon; the full
 integration gate remains open.
 
-The 2026-10-19 custom-provider probe reached the provider from a signed control
-client, but system WebKit's network sandbox rejected its Mach-service lookup.
+System WebKit's network sandbox rejects arbitrary provider Mach-service names.
+The 2026-10-20 comparison probe **does reach our signed helper** through WebKit's
+explicitly allowlisted test-daemon name, using the installed private protocol
+version 5. This unblocks an isolated native subscription-adapter prototype;
+the helper currently records admission only and does not implement subscriptions.
 See the [admission evidence and reproduction](web-push-proof.md#custom-provider-admission).
-Production relay implementation is blocked on resolving this engine integration
-or choosing a different engine distribution; a relay alone cannot fix it.
+Production implementation still depends on completing the native integration
+proof and deciding whether a shared testing hook is an acceptable dependency.
+A relay alone does not resolve either requirement.
 
 ## Architecture
 

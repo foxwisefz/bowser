@@ -1,5 +1,6 @@
 #import <Foundation/Foundation.h>
 #import <xpc/xpc.h>
+#import <libproc.h>
 
 // Admission probe only. It deliberately implements no subscription service.
 static void record(NSString *event, NSDictionary *details) {
@@ -33,8 +34,12 @@ int main(int argc, char **argv) {
                 xpc_connection_set_event_handler(peer, ^(xpc_object_t request) {
                     if (xpc_get_type(request) != XPC_TYPE_DICTIONARY) return;
                     BOOL ping = xpc_dictionary_get_bool(request, "bowser-probe-control");
+                    char path[PROC_PIDPATHINFO_MAXSIZE] = {0};
+                    pid_t pid = xpc_connection_get_pid(peer);
+                    proc_pidpath(pid, path, sizeof(path));
                     record(ping ? @"control_request" : @"provider_request",
-                           @{@"pid":@(xpc_connection_get_pid(peer)),
+                           @{@"pid":@(pid),
+                             @"executable":[@(path) lastPathComponent],
                              @"protocolVersion":@(xpc_dictionary_get_uint64(request, "protocol version"))});
                     if (ping) {
                         xpc_object_t reply = xpc_dictionary_create_reply(request);

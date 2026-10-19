@@ -5,10 +5,11 @@ repo="$(cd "$(dirname "$0")/.." && pwd -P)"
 out="$(mktemp -d /tmp/bowser-push-proof.XXXXXXXX)"
 identity="${BOWSER_SIGN_IDENTITY:?Set BOWSER_SIGN_IDENTITY to a normal Developer ID identity}"
 provider_check="${BOWSER_PUSH_PROVIDER_CHECK:-0}"
-case "$provider_check" in 0|1) ;; *) echo 'BOWSER_PUSH_PROVIDER_CHECK must be 0 or 1' >&2; exit 2 ;; esac
+case "$provider_check" in 0|1|webkit-test) ;; *) echo 'BOWSER_PUSH_PROVIDER_CHECK must be 0, 1 or webkit-test' >&2; exit 2 ;; esac
 app="$out/BowserPushProbe.app"
 server_pid=""
 provider_service=""
+provider_label=""
 provider_registered=0
 cleanup() {
   if [ -n "$server_pid" ]; then
@@ -16,7 +17,7 @@ cleanup() {
     wait "$server_pid" 2>/dev/null || true
   fi
   if [ "$provider_registered" = 1 ]; then
-    launchctl bootout "gui/$(id -u)/$provider_service"
+    launchctl bootout "gui/$(id -u)/$provider_label"
     printf '%s\n' 'Temporary provider removed.' > "$out/provider-cleanup.txt"
   fi
 }
@@ -37,18 +38,25 @@ PLIST
 codesign --force --options runtime --sign "$identity" "$app"
 codesign --verify --strict "$app"
 codesign -d --entitlements - "$app" > "$out/signing.txt" 2>&1
-if [ "$provider_check" = 1 ]; then
+if [ "$provider_check" != 0 ]; then
   clang -fobjc-arc -fmodules -framework Foundation \
     "$repo/tests/web-push-probe/Provider.m" -o "$out/Provider"
   codesign --force --options runtime --sign "$identity" "$out/Provider"
   codesign --verify --strict "$out/Provider"
-  provider_service="com.foxwiseai.bowser.pushprobe.$(uuidgen)"
+  provider_label="com.foxwiseai.bowser.pushprobe.$(uuidgen)"
+  provider_service="$provider_label"
+  if [ "$provider_check" = webkit-test ]; then
+    # WebKit's own explicit testing hook, never an Apple production service.
+    # Keep our launchd label unique; cleanup must only remove our own job.
+    provider_service="org.webkit.webpushtestdaemon.service"
+    python3 "$repo/tests/web-push-probe/check-test-service.py" "$out"
+  fi
   capture_start="$(date '+%Y-%m-%d %H:%M:%S')"
-  python3 - "$out" "$provider_service" <<'PY'
+  python3 - "$out" "$provider_service" "$provider_label" <<'PY'
 import pathlib, plistlib, sys
-out = pathlib.Path(sys.argv[1]); service = sys.argv[2]
+out = pathlib.Path(sys.argv[1]); service = sys.argv[2]; label = sys.argv[3]
 (out/'provider.plist').write_bytes(plistlib.dumps({
-    'Label': service, 'ProgramArguments': [str(out/'Provider'), service],
+    'Label': label, 'ProgramArguments': [str(out/'Provider'), service],
     'MachServices': {service: True}, 'ProcessType': 'Interactive',
     'StandardOutPath': str(out/'provider.jsonl'), 'StandardErrorPath': str(out/'provider.stderr'),
 }))
@@ -68,7 +76,7 @@ PROBE_ORIGIN="http://127.0.0.1:$(cat "$out/port")" CFFIXED_USER_HOME="$out/home"
 import subprocess, sys
 sys.exit(subprocess.run([sys.argv[1]], timeout=50).returncode)
 PY
-if [ "$provider_check" = 1 ]; then
+if [ "$provider_check" != 0 ]; then
   python3 "$repo/tests/web-push-probe/assess-provider.py" "$out" "$provider_service" "$capture_start"
 fi
 echo "Evidence: $out"
