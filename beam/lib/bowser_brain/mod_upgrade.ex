@@ -8,6 +8,10 @@ defmodule BowserBrain.ModUpgrade do
   @timeout 5_000
 
   def load(path) do
+    load_with_diagnostics(path).modules
+  end
+
+  def load_with_diagnostics(path) do
     root = to_string(:code.root_dir())
     boot = Path.join([root, "releases", to_string(Application.spec(:bowser_brain, :vsn)), "start_clean"])
     boot_args = if File.regular?(boot <> ".boot"), do: [~c"-boot", String.to_charlist(boot), ~c"-boot_var", ~c"RELEASE_LIB", String.to_charlist(Path.join(root, "lib"))], else: []
@@ -15,17 +19,28 @@ defmodule BowserBrain.ModUpgrade do
     {:ok, peer, _} = :peer.start_link(%{connection: :standard_io, args: args, wait_boot: @timeout, env: [{~c"ERL_CRASH_DUMP", ~c"/dev/null"}]})
     try do
       {:ok, _} = :peer.call(peer, :application, :ensure_all_started, [:elixir], @timeout)
-      candidates = :peer.call(peer, Code, :compile_file, [path], @timeout)
+      {candidates, warnings} = :peer.call(peer, __MODULE__, :compile, [path], @timeout)
       if candidates == [], do: raise("source defines no modules")
       mods = for {module, _} <- candidates,
         :peer.call(peer, :erlang, :function_exported, [module, :__bowser_mod__, 0]), do: module
       if mods == [], do: raise("source defines no mods")
       running = for module <- mods, {pid, _} <- Registry.lookup(BowserBrain.ModRegistry, module), do: {module, pid}
       transact(peer, path, candidates, running)
-      mods
+      %{modules: mods, warnings: warnings}
     after
       :peer.stop(peer)
     end
+  end
+
+  @doc false
+  def compile(path) do
+    {candidates, diagnostics} = Code.with_diagnostics([log: true], fn -> Code.compile_file(path) end)
+    warnings = for diagnostic <- diagnostics, diagnostic.severity == :warning do
+      position = diagnostic.position
+      %{message: diagnostic.message, file: diagnostic.file,
+        line: if(is_tuple(position), do: elem(position, 0), else: position)}
+    end
+    {candidates, warnings}
   end
 
   defp transact(peer, path, candidates, running) do

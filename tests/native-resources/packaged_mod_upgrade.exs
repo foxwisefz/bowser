@@ -9,3 +9,26 @@ File.write!(path, "defmodule ReleaseMigrationProbe do use BowserBrain.Mod; def s
 %{ok: true} = BowserBrain.Loader.load_now(path)
 %{value: 42, ready: true} = :sys.get_state(pid)
 IO.puts("PACKAGED_MOD_MIGRATION_PASSED")
+
+File.write!(path, """
+defmodule ReleaseTaskProbe do
+  use BowserBrain.Mod
+  def export(path, receiver) do
+    {:ok, supervisor} = Task.Supervisor.start_link()
+    Task.Supervisor.start_child(supervisor, fn ->
+      File.write!(path, JSON.encode!(%{profile: BowserBrain.ModScope.current(), owner: inspect(BowserBrain.ModScope.owner())}))
+      send(receiver, :exported)
+    end)
+    supervisor
+  end
+end
+""")
+%{ok: true, warnings: []} = BowserBrain.Loader.load_now(path)
+Process.put(:bowser_profile, "work")
+Process.put(:bowser_mod_owner, ReleaseTaskProbe)
+output = Path.join(System.fetch_env!("BOWSER_HOME"), "export.json")
+supervisor = ReleaseTaskProbe.export(output, self())
+receive do :exported -> :ok after 2_000 -> raise "export worker did not finish" end
+%{"profile" => "work", "owner" => "ReleaseTaskProbe"} = output |> File.read!() |> JSON.decode!()
+Supervisor.stop(supervisor)
+IO.puts("PACKAGED_MOD_TASK_EXPORT_PASSED")

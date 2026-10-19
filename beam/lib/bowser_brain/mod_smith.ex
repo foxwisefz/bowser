@@ -162,7 +162,17 @@ defmodule BowserBrain.ModSmith do
     Generated Elixir can use available runtime libraries and native I/O as needed
     for the requested feature, subject to the independent code security audit.
     Keep blocking work off callbacks using supervised asynchronous work with
-    timeouts, bounded concurrency, and cleanup. Do not invent unlisted Bowser APIs
+    timeouts, bounded concurrency, and cleanup. Inside `use BowserBrain.Mod`,
+    Task and Task.Supervisor preserve the calling mod's profile and ownership.
+    For example, create a mod-owned supervisor in init_mod with
+    Task.Supervisor.start_link(name: MyMod.Workers), then start work with
+    Task.Supervisor.start_child(MyMod.Workers, fn -> ... end). Handle errors and
+    report completion from that worker. No BowserBrain.TaskSupervisor is provided.
+    Task.Supervisor also supports start_link/0,1, child_spec/1, children/1,
+    terminate_child/2, async/2,3,4,5, async_nolink/2,3,4,5, start_child/2,3,4,5,
+    async_stream/3,4,5,6 and async_stream_nolink/3,4,5,6 (function and MFA forms).
+    Await async tasks or handle their reply and monitor messages; bound streams
+    with max_concurrency and timeout. Do not invent unlisted Bowser APIs
     or assume an executable/library exists without checking through supported
     tools or an audited, feature-related mod. Never use a mod to bypass a denied
     tool or security audit.

@@ -1455,6 +1455,31 @@ end
     complete(pid, [])
   end
 
+  test "draft returns deferred undefined-call warnings to the agent" do
+    event("submit", %{"text" => "Background export", "scope" => "browser"})
+    assert_receive {:runner, pid, token, _, nil, nil}, 1000
+    source = """
+    defmodule DraftWarningFixture do
+      use BowserBrain.Mod
+      def export, do: MissingExportWriter.write()
+    end
+    """
+    on_exit(fn ->
+      for {pid, _} <- Registry.lookup(BowserBrain.ModRegistry, DraftWarningFixture),
+        do: DynamicSupervisor.terminate_child(BowserBrain.ModSupervisor, pid)
+      :code.purge(DraftWarningFixture)
+      :code.delete(DraftWarningFixture)
+    end)
+    assert %{ok: true, runtime: %{warnings: warnings}} =
+      ModWorkshop.tool(token, "put_mod", %{"name" => "warning.ex", "content" => source})
+    assert Enum.any?(warnings, fn warning ->
+      warning.message =~ "MissingExportWriter.write/0" and
+        String.ends_with?(warning.file, "warning.ex") and is_integer(warning.line)
+    end)
+    assert is_binary(JSON.encode!(warnings))
+    complete(pid, [])
+  end
+
   test "SVG assets belong to the current mod and are removed by Undo" do
     event("submit", %{"text" => "AOL logo", "scope" => "browser"})
     assert_receive {:runner, pid, token, _, nil, nil}, 1000
