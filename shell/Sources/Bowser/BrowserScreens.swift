@@ -799,7 +799,7 @@ struct ModSmithScreen: View {
                                 .id("required-input")
                         }
                         if let notice = project.repairNotice, !notice.isEmpty {
-                            Label(notice, systemImage: "exclamationmark.shield")
+                            Label(notice, systemImage: "info.circle")
                                 .font(.callout).foregroundStyle(.orange)
                                 .padding(14).frame(maxWidth: .infinity, alignment: .leading)
                                 .background(Color.orange.opacity(0.06), in: RoundedRectangle(cornerRadius: 12))
@@ -823,6 +823,10 @@ struct ModSmithScreen: View {
                             Text("Describe the next change below. Your existing files will be refined in place.").foregroundStyle(.secondary)
                         }
                         ForEach(project.turns) { turn in turnView(turn).id(turn.id) }
+                        if project.canRetry {
+                            Text("Your request is saved. Try again to build the mod; you don’t need to retype it.")
+                                .font(.callout).foregroundStyle(.secondary)
+                        }
                         if project.status == "interrupted" || project.status == "restored" {
                             Text(project.summary).font(.callout).foregroundStyle(.secondary)
                         }
@@ -907,7 +911,7 @@ struct ModSmithScreen: View {
                 Spacer()
                 if let project = model.project {
                     if !model.snapshot.busy && project.canContinue && !project.canEnableAndTest && !project.needsNextStep {
-                        Button("Resume testing & fixes") { model.action("continue", project: project.id) }
+                        Button(project.recoveryLabel) { model.action(project.recoveryAction, project: project.id) }
                             .accessibilityIdentifier("modsmith-continue")
                     }
                 }

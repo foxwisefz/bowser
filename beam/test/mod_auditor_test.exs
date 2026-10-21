@@ -37,9 +37,11 @@ defmodule BowserBrain.ModAuditorTest do
       result = %{"verdict" => verdict, "sha256" => "source", "nonce" => "run",
         "reason" => "Validate the event URL host before invoking the executable"}
       assert {:error, message} = ModAuditor.verdict(JSON.encode!(result), "source", "run")
-      assert message =~ result["reason"]
+      assert message == %{"kind" => verdict, "reason" => result["reason"]}
+      assert ModAuditor.message(message) =~ result["reason"]
       assert {:error, invalid} = ModAuditor.verdict(JSON.encode!(result), "changed-source", "run")
-      refute invalid =~ result["reason"]
+      assert invalid == %{"kind" => "invalid_response", "reason" => nil}
+      refute ModAuditor.message(invalid) =~ result["reason"]
     end
   end
 end

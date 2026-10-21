@@ -293,13 +293,43 @@ final class ModSmithTests: XCTestCase {
             ]
             model.receive(["projects": [project], "selected": "filter", "busy": false, "progress": [], "stage": "Ready"])
             XCTAssertEqual(model.project?.canContinue, ["partial", "needs_help", "failed", "interrupted"].contains(status))
-            if status == "partial" { XCTAssertEqual(model.project?.statusLabel, "Draft") }
+            if status == "partial" { XCTAssertEqual(model.project?.statusLabel, "Unfinished") }
         }
         model.draft = "Keep this next idea"
         model.action("continue", project: "filter")
         XCTAssertEqual(sent["action"] as? String, "continue")
         XCTAssertEqual(sent["project"] as? String, "filter")
         XCTAssertEqual(model.draft, "Keep this next idea")
+    }
+
+    @MainActor func testFailedFirstBuildRetriesSavedRequestAndKeepsUnsentDraft() {
+        let model = ModSmithModel()
+        model.connected = { true }
+        var sent: [String: Any] = [:]
+        model.send = { sent = $0 }
+        var project: [String: Any] = [
+            "id": "video", "name": "Video controls", "scope": "browser", "url": "",
+            "status": "failed", "summary": "Service unavailable", "files": [], "turns": [],
+            "enabled": false, "can_undo": false
+        ]
+        func receive() { model.receive(["projects": [project], "selected": "video", "busy": false, "progress": [], "stage": "Ready"]) }
+        receive()
+        XCTAssertEqual(model.project?.statusLabel, "Needs attention")
+        XCTAssertEqual(model.project?.canRetry, true)
+        XCTAssertEqual(model.project?.canEnableAndTest, false)
+        model.draft = "An unsent refinement"
+        model.action(model.project!.recoveryAction, project: model.project!.id)
+        XCTAssertEqual(sent["action"] as? String, "retry")
+        XCTAssertEqual(sent["project"] as? String, "video")
+        XCTAssertEqual(model.draft, "An unsent refinement")
+        project["files"] = ["mods/video.ex"]; receive()
+        XCTAssertEqual(model.project?.canRetry, false)
+        XCTAssertEqual(model.project?.recoveryAction, "continue")
+        project["files"] = [String]()
+        project["next_step"] = ["title": "Choose a target", "detail": "Which page?", "action": "reply"]
+        receive()
+        XCTAssertEqual(model.project?.canRetry, false)
+        XCTAssertEqual(model.project?.needsNextStep, true)
     }
 
     @MainActor func testOmnibarStartsNewProjectOnceAndPreservesCapturedTarget() {
@@ -369,6 +399,14 @@ final class ModSmithTests: XCTestCase {
             if name == "failed" {
                 var failed = project
                 failed["status"] = "failed"
+                failed["files"] = [String]()
+                failed["enabled"] = false
+                failed["can_undo"] = false
+                failed["repair_notice"] = "Security review couldn’t run. The proposed code was not installed. Try again."
+                failed["turns"] = [
+                    ["id": "u", "role": "user", "text": "Make this page easier to read."],
+                    ["id": "a", "role": "assistant", "status": "failed", "text": "The AI service is unavailable. Please try again shortly."]
+                ]
                 model.receive(["projects": [failed], "selected": "reading", "busy": false, "progress": [], "stage": "Ready"])
             }
             if name == "success" {

@@ -569,6 +569,7 @@ defmodule BowserBrain.ModWorkshopTest do
     state = complete(pid, [], %{"status" => "needs_help", "next_step" => step})
     [project] = ModWorkshop.snapshot(state, "main").projects
     assert project["next_step"] == step
+    assert [%{"kind" => "unavailable"}] = project["review_failures"]
     assert project["repair_notice"] =~ "not installed"
     assert ModRevision.read("mods/workspace.ex") == nil
     persisted = JSON.decode!(File.read!(Application.get_env(:bowser_brain, :modsmith_workspace_path)))
@@ -576,6 +577,66 @@ defmodule BowserBrain.ModWorkshopTest do
     state = event("submit", %{"project" => project["id"], "text" => "The personal workspace"})
     assert hd(state.data["projects"])["next_step"] == nil
     assert hd(state.data["projects"])["repair_notice"] == nil
+    assert hd(state.data["projects"])["review_failures"] == []
+  end
+
+  test "failed first build retains audit outage and retries the saved request without installing code" do
+    Application.put_env(:bowser_brain, :modsmith_auditor, fn _ -> {:error, :unavailable} end)
+    event("submit", %{"text" => "Add a video control", "scope" => "browser"})
+    assert_receive {:runner, pid, token, _, _, _}, 1000
+    assert %{ok: false, error: message} = ModWorkshop.tool(token, "put_mod", %{
+      "name" => "video_control.ex", "content" => "defmodule VideoControlFixture do use BowserBrain.Mod end"
+    })
+    assert is_binary(message)
+    send(pid, {:result, {nil, {:error, BowserBrain.AI.message(:unavailable)}}})
+    await(fn -> :sys.get_state(ModWorkshop).run == nil end)
+    state = :sys.get_state(ModWorkshop)
+    [project] = ModWorkshop.snapshot(state, "main").projects
+    assert project["status"] == "failed"
+    assert project["files"] == []
+    refute project["can_undo"]
+    assert [%{"kind" => "unavailable", "reason" => reason}] = project["review_failures"]
+    assert reason == BowserBrain.AI.message(:unavailable)
+    assert List.last(project["turns"])["review_failures"] == project["review_failures"]
+    refute ModRevision.read("mods/video_control.ex")
+    persisted = JSON.decode!(File.read!(Application.get_env(:bowser_brain, :modsmith_workspace_path)))
+    assert hd(persisted["projects"])["review_failures"] == project["review_failures"]
+    state = event("retry", %{"project" => project["id"]})
+    assert_receive {:runner, _, _, prompt, _, _}, 1000
+    assert prompt =~ "Add a video control"
+    assert hd(hd(state.data["projects"])["revisions"])["request"] == "Add a video control"
+    assert hd(state.data["projects"])["review_failures"] == []
+  end
+
+  test "final audit rejection and invalid response preserve distinct causes and never install" do
+    for decision <- ["reject", "uncertain", "invalid_response"] do
+      Application.put_env(:bowser_brain, :modsmith_auditor, fn prompt ->
+        data = JSON.decode!(prompt)
+        {:ok, JSON.encode!(%{verdict: decision, reason: "Validate the supplied path", sha256: data["sha256"], nonce: data["nonce"]})}
+      end)
+      event("submit", %{"text" => "Add a control", "scope" => "browser"})
+      assert_receive {:runner, pid, _, _, _, _}, 1000
+      state = complete(pid, [%{"path" => "mods/review_fixture.ex", "content" => "defmodule ReviewFixture do use BowserBrain.Mod end"}])
+      [project | _] = ModWorkshop.snapshot(state, "main").projects
+      assert project["status"] == "failed"
+      assert [%{"kind" => ^decision, "reason" => reason}] = project["review_failures"]
+      assert reason == if(decision == "invalid_response", do: nil, else: "Validate the supplied path")
+      assert is_binary(project["summary"])
+      assert project["files"] == []
+      refute ModRevision.read("mods/review_fixture.ex")
+    end
+  end
+
+  test "audit provider timeouts remain distinct from unavailability" do
+    for timeout <- [:timeout, 504] do
+      Application.put_env(:bowser_brain, :modsmith_auditor, fn _ -> {:error, timeout} end)
+      event("submit", %{"text" => "Add a control", "scope" => "browser"})
+      assert_receive {:runner, pid, _, _, _, _}, 1000
+      state = complete(pid, [%{"path" => "mods/timed_out.ex", "content" => "defmodule TimedOutFixture do use BowserBrain.Mod end"}])
+      [project | _] = ModWorkshop.snapshot(state, "main").projects
+      assert project["review_failures"] == [%{"kind" => "timeout", "reason" => nil}]
+      assert project["files"] == []
+    end
   end
 
   test "retry uses the owner request and automatic instructions stay out of snapshots" do

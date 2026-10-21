@@ -377,7 +377,7 @@ defmodule BowserBrain.ModWorkshop do
     state = if same_run do
       failures = Map.get(state.run, :audit_failures, %{})
       failures = Enum.reduce(pending.keys, failures, fn {_, path, _}, failures ->
-        if result == :ok, do: Map.delete(failures, path), else: Map.put(failures, path, true)
+        if result == :ok, do: Map.delete(failures, path), else: Map.put(failures, path, elem(result, 1))
       end)
       %{state | run: Map.put(state.run, :audit_failures, failures)}
     else
@@ -392,12 +392,12 @@ defmodule BowserBrain.ModWorkshop do
           {:noreply, state} -> {:noreply, state}
         end
       {{:call, _, from}, {:error, reason}} ->
-        GenServer.reply(from, %{ok: false, error: reason})
+        GenServer.reply(from, %{ok: false, error: BowserBrain.ModAuditor.message(reason)})
         {:noreply, state}
       {{:info, message}, :ok} -> handle_info(message, state)
       {{:info, {:finished, _, session, _}}, {:error, reason}} ->
         if same_run do
-          state = finish(state, session, {:error, reason})
+          state = finish(state, session, {:error, BowserBrain.ModAuditor.message(reason)})
           publish(state)
           {:noreply, state}
         else
@@ -871,6 +871,7 @@ defmodule BowserBrain.ModWorkshop do
           |> Map.put("status", "working")
           |> Map.put("next_step", nil)
           |> Map.put("repair_notice", nil)
+          |> Map.put("review_failures", [])
           |> Map.put("revisions", [revision | p["revisions"]])
           |> Map.put(
             "turns",
@@ -879,7 +880,7 @@ defmodule BowserBrain.ModWorkshop do
 
         state = state |> put_project(p) |> select(client(event), p["id"])
         wv = if app, do: 0, else: target_webview(state, url, event["webview"])
-        run = %{previous_next_step: existing && existing["next_step"], previous_repair_notice: existing && existing["repair_notice"], documentation: event["action"] == "document", previous_status: existing && existing["status"], token: revision["id"], project: p["id"], webview: wv, profile: BowserBrain.ModScope.profile_of(wv), url: url, app: p["app"]}
+        run = %{previous_next_step: existing && existing["next_step"], previous_repair_notice: existing && existing["repair_notice"], previous_review_failures: existing && existing["review_failures"], documentation: event["action"] == "document", previous_status: existing && existing["status"], token: revision["id"], project: p["id"], webview: wv, profile: BowserBrain.ModScope.profile_of(wv), url: url, app: p["app"]}
         parent = self()
 
         {pid, ref} =
@@ -1170,7 +1171,7 @@ defmodule BowserBrain.ModWorkshop do
             end)
             send(parent, {:audit_finished, ref, result})
           end)
-          timer = Process.send_after(self(), {:audit_finished, ref, {:error, "Security audit timed out; Elixir was not installed"}}, 95_000)
+          timer = Process.send_after(self(), {:audit_finished, ref, {:error, %{"kind" => "timeout", "reason" => nil}}}, 95_000)
           pending = %{ref: ref, token: token, pid: pid, timer: timer, continuation: continuation,
             keys: Enum.map(needed, fn {path, source} -> audit_key(state, path, source) end)}
           state = state |> Map.put(:pending_audit, pending) |> Map.update!(:progress, &(&1 ++ ["Security audit reviewing generated Elixir"]))
@@ -1279,6 +1280,7 @@ defmodule BowserBrain.ModWorkshop do
     p = p |> Map.put("status", state.run.previous_status || "ready")
       |> Map.put("next_step", state.run.previous_next_step)
       |> Map.put("repair_notice", state.run.previous_repair_notice)
+      |> Map.put("review_failures", Map.get(state.run, :previous_review_failures))
       |> Map.put("revisions", tl(p["revisions"]))
       |> Map.put("usage", usage || p["usage"])
       |> Map.put("turns", p["turns"] ++ [%{"id" => ModRevision.id(), "role" => "activity",
@@ -1359,8 +1361,8 @@ defmodule BowserBrain.ModWorkshop do
     p = project(state, state.run.project)
     next_step = if fault and question == nil and result != :cancelled,
       do: ModSmithOutcome.runtime_fault_step(), else: question || ModSmithOutcome.next_step(envelope, status)
-    repair_notice = if map_size(Map.get(state.run, :audit_failures, %{})) > 0,
-      do: "A proposed change could not pass security review and was not installed. Any earlier saved changes remain."
+    review_failures = state.run |> Map.get(:audit_failures, %{}) |> Map.values() |> Enum.uniq()
+    repair_notice = BowserBrain.ModAuditor.notice(review_failures)
     [revision | rest] = p["revisions"]
     revision = revision |> Map.put("status", status) |> Map.put("summary", summary)
 
@@ -1372,7 +1374,8 @@ defmodule BowserBrain.ModWorkshop do
       "notes" => notes,
       "checks" => checks,
       "next_step" => next_step,
-      "repair_notice" => repair_notice
+      "repair_notice" => repair_notice,
+      "review_failures" => review_failures
     }
 
     p =
@@ -1384,6 +1387,7 @@ defmodule BowserBrain.ModWorkshop do
       |> Map.put("checks", checks)
       |> Map.put("next_step", next_step)
       |> Map.put("repair_notice", repair_notice)
+      |> Map.put("review_failures", review_failures)
       |> Map.put("usage", ModSmithOutcome.usage(envelope) || if(status in ["failed", "interrupted"], do: p["usage"]))
       |> Map.put("revisions", [revision | rest])
       |> Map.put("turns", p["turns"] ++ [turn])
@@ -1487,6 +1491,7 @@ defmodule BowserBrain.ModWorkshop do
             |> Map.put("summary", "Restored the files from before: #{ModSmithOutcome.revision_label(revision)}")
             |> Map.put("next_step", nil)
             |> Map.put("repair_notice", nil)
+            |> Map.put("review_failures", [])
             |> Map.put("session", nil)
             |> Map.put(
               "turns",

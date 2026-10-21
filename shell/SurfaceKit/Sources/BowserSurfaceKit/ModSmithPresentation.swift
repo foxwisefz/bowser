@@ -79,6 +79,11 @@ public struct ModSmithProject: Decodable, Identifiable {
     public var canContinue: Bool {
         ["partial", "needs_help", "failed", "interrupted"].contains(status)
     }
+    public var canRetry: Bool {
+        files.isEmpty && ["failed", "interrupted"].contains(status) && nextStep == nil
+    }
+    public var recoveryLabel: String { canRetry ? "Try again" : "Resume testing & fixes" }
+    public var recoveryAction: String { canRetry ? "retry" : "continue" }
     public var canEnableAndTest: Bool {
         status != "working" && !enabled && !files.isEmpty
     }
@@ -86,7 +91,6 @@ public struct ModSmithProject: Decodable, Identifiable {
         nextStep?.options != nil || (status == "needs_help" && !canEnableAndTest) || (canContinue && nextStep != nil)
     }
     public var statusLabel: String {
-        if files.isEmpty && status != "working" { return "Draft" }
         switch status {
         case "working": return "Building…"
         case "partial": return "Unfinished"
@@ -94,9 +98,9 @@ public struct ModSmithProject: Decodable, Identifiable {
         case "needs_help": return "Needs your input"
         case "interrupted": return "Interrupted"
         case "restored": return files.isEmpty ? "Removed" : "Restored"
-        case "ready": return "Not yet verified"
-        case "active": return "Ready"
-        default: return "Not yet verified"
+        case "ready": return files.isEmpty ? "Draft" : "Not yet verified"
+        case "active": return files.isEmpty ? "Draft" : "Ready"
+        default: return files.isEmpty ? "Draft" : "Not yet verified"
         }
     }
 }
