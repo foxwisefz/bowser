@@ -335,7 +335,7 @@ let toolCatalogJSON = #"""
   },
   {
     "name": "page_eval",
-    "description": "Evaluate JavaScript in a loaded tab and return the result. webview 0 = first tab; use list_tabs ids to target. Deferred or memory-unloaded tabs return tab_unloaded; activate the tab and wait for load_status 2 before inspecting it.",
+    "description": "Evaluate JavaScript in a loaded tab and return the result. Return plain JSON-compatible data; circular references, non-finite numbers, nesting deeper than 64 levels, or more than 100,000 values return an explicit error. Extract needed fields or request smaller batches. webview 0 = first tab; use list_tabs ids to target. Deferred or memory-unloaded tabs return tab_unloaded; activate the tab and wait for load_status 2 before inspecting it.",
     "inputSchema": {
       "type": "object",
       "properties": {

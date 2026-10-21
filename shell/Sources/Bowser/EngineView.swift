@@ -50,10 +50,7 @@ private final class PageRelay: NSObject, WKScriptMessageHandler {
             case "bowserEmit":
                 // The page->brain duplex channel: whatever the page emits,
                 // mods receive as {"event": "page", "payload": ...}.
-                BrainBridge.shared.send([
-                    "op": "event", "event": "page", "webview": id,
-                    "payload": BrainBridge.jsonify(body),
-                ])
+                BrainBridge.shared.send(BrainBridge.pageEvent(body, webview: id))
             default:
                 break
             }

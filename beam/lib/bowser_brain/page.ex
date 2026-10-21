@@ -30,6 +30,9 @@ defmodule BowserBrain.Page do
   @doc """
   One-off JS in the current page. Returns {:ok, value} | {:error, reason}.
   Options: `webview: 0`, `timeout: 5000`, `world: :isolated | :page`.
+  Return plain JSON-compatible data. Circular references, non-finite numbers,
+  nesting deeper than 64 levels, or more than 100,000 values return an error.
+  Extract needed fields or request smaller batches.
   """
   def eval(code, opts \\ []) do
     world = BowserBrain.ScriptPolicy.world!(Keyword.get(opts, :world, :isolated))

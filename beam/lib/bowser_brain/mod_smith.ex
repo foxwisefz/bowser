@@ -296,7 +296,8 @@ defmodule BowserBrain.ModSmith do
     ELIXIR AUDIT IS AUTOMATIC: Call put_mod(name, content) with your draft. Bowser runs a separate tool-free LLM audit INSIDE that tool call before writing or compiling. There is deliberately no audit tool for you to invoke and no separate reviewer to locate. The final files envelope also triggers the same gate. Do not infer that auditing is unavailable from the tool list; only report an audit failure actually returned by put_mod or the final installer. Only explicit exact-source approval permits activation; reject/uncertain/unavailable/malformed/timeout blocks it. Never claim runtime verification if audit fails. Accepted mods still have full OS privileges; this is not a sandbox.
 
     APIs: BowserBrain.Browser.navigate(url); BowserBrain.Page.eval(js, webview: 0) ->
-    {:ok,val}; Page.set_styles([css]); Page.set_scripts([js]) (engine-injected, owner-keyed);
+    {:ok,val} | {:error,reason}; Page.set_styles([css]); Page.set_scripts([js]) (engine-injected, owner-keyed);
+    Page.eval/1,2 and page_eval results must be plain JSON-compatible data. Circular references, non-finite numbers, nesting deeper than 64 levels, or more than 100,000 values return an explicit error. Extract needed fields or request smaller batches.
     Disabling/deleting a mod removes its registered scripts and styles and reloads affected pages; Store data survives.
     BowserBrain.Chrome.add_button(id, title, symbol: "sfsymbol");
     Chrome.put_toolbar("status", BowserBrain.View.hstack([
@@ -752,6 +753,7 @@ defmodule BowserBrain.ModSmith do
     it in your "hello" handler, not just in init_mod (init often runs before the
     bridge connects and casts are silently dropped). Pages can push to mods via
     window.bowser.emit(payload) in injected JS -> event "page" {payload}.
+    Emitted payloads use the same JSON conversion limits as Page.eval; invalid payloads are dropped and reported as console errors.
 
     CONTEXT:
     Current URL: #{url}

@@ -347,18 +347,15 @@ final class BrainBridge {
             let contentWorld = world == "page" ? WKContentWorld.page : ModScript.isolatedWorld
             view.webView.evaluateJavaScript(code, in: nil, in: contentWorld) { [weak self] result in
                 switch result {
-                case .success(let value):
-                    self?.send(["op": "js_result", "id": id, "webview": webviewId, "ok": true, "value": Self.jsonify(value)])
+                case .success:
+                    self?.send(Self.javaScriptReply(result, id: id, webview: webviewId))
                 case .failure(let error):
                     if error.localizedDescription.contains("unsupported type") {
                         view.webView.callAsyncJavaScript("return (\(code));", arguments: [:], in: nil, in: contentWorld) { result in
-                            switch result {
-                            case .success(let value): self?.send(["op": "js_result", "id": id, "webview": webviewId, "ok": true, "value": Self.jsonify(value)])
-                            case .failure(let error): self?.send(["op": "js_result", "id": id, "webview": webviewId, "ok": false, "value": error.localizedDescription])
-                            }
+                            self?.send(Self.javaScriptReply(result, id: id, webview: webviewId))
                         }
                     } else {
-                        self?.send(["op": "js_result", "id": id, "webview": webviewId, "ok": false, "value": error.localizedDescription])
+                        self?.send(Self.javaScriptReply(result, id: id, webview: webviewId))
                     }
                 }
             }
@@ -539,14 +536,25 @@ final class BrainBridge {
         }
     }
 
-    nonisolated static func jsonify(_ value: Any?) -> Any {
-        switch value {
-        case nil: return NSNull()
-        case let v as NSNumber: return v
-        case let v as String: return v
-        case let v as [Any]: return v.map { jsonify($0) }
-        case let v as [String: Any]: return v.mapValues { jsonify($0) }
-        default: return String(describing: value!)
+    nonisolated static func javaScriptReply(_ result: Result<Any, Error>, id: Int, webview: UInt64) -> [String: Any] {
+        var reply: [String: Any] = ["op": "js_result", "id": id, "webview": webview]
+        do {
+            reply["value"] = try JavaScriptResult.convert(result.get())
+            reply["ok"] = true
+        } catch {
+            reply["value"] = error.localizedDescription
+            reply["ok"] = false
+        }
+        return reply
+    }
+
+    nonisolated static func pageEvent(_ value: Any, webview: UInt64) -> [String: Any] {
+        do {
+            return ["op": "event", "event": "page", "webview": webview,
+                    "payload": try JavaScriptResult.convert(value)]
+        } catch {
+            return ["op": "event", "event": "console", "webview": webview,
+                    "level": "error", "message": "Dropped page event: \(error.localizedDescription)"]
         }
     }
 }
