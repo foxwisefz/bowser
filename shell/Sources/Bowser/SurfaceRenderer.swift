@@ -429,6 +429,7 @@ struct MagnifyStripView: View {
 
     @State private var scrollOffset: CGFloat = 0
     @State private var lastLensY: CGFloat = 0
+    @State private var closingSelection: StripSelection?
     @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
     @ObservedObject private var dragPreview = TabDragPreview.shared
     // Slots are ordinary live surface trees; the strip only reserves geometry.
@@ -453,6 +454,14 @@ struct MagnifyStripView: View {
 
     private var activeId: String? {
         items.first(where: { ($0["active"] as? Bool) == true })?["id"] as? String
+    }
+    private struct StripSelection: Equatable {
+        let ids: [String]
+        let activeId: String?
+        let profileId: String?
+    }
+    private var selection: StripSelection {
+        StripSelection(ids: identifiedItems.map(\.id), activeId: activeId, profileId: node["profile_id"] as? String)
     }
     private var baseSize: CGFloat { CGFloat(node["size"] as? Double ?? 28) }
     // Clamped: it's a scale MULTIPLIER (2.0 = double size), and a mod
@@ -636,10 +645,21 @@ struct MagnifyStripView: View {
                   }
                   .frame(height: overflowing ? viewportHeight : contentHeight + lensPad * 2)
                   .onAppear { if overflowing, let activeId { proxy.scrollTo(activeId) } }
-                  .onChange(of: activeId) { _, newValue in
-                      if let newValue {
-                          if overflowing { proxy.scrollTo(newValue) }
+                  .onChange(of: selection) { old, new in
+                      guard old.activeId != new.activeId else { return }
+                      // A close can remove the selection and activate its
+                      // replacement in separate updates. Keep the viewport
+                      // through both; AppKit only clamps the shorter content.
+                      let previous = closingSelection ?? old
+                      closingSelection = nil
+                      let removed = previous.activeId.map { !new.ids.contains($0) } ?? false
+                      let sameProfile = new.profileId == nil || new.profileId == previous.profileId
+                      let replacement = new.activeId.map { previous.ids.contains($0) } ?? true
+                      if removed && sameProfile && replacement {
+                          if new.activeId == nil { closingSelection = previous }
+                          return
                       }
+                      if overflowing, let active = new.activeId { proxy.scrollTo(active) }
                   }
                   .onChange(of: overflowing) { _, value in
                       if value, let activeId { proxy.scrollTo(activeId) }

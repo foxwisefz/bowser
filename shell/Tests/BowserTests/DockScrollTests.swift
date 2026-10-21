@@ -4,6 +4,92 @@ import XCTest
 @testable import Bowser
 
 @MainActor final class DockScrollTests: XCTestCase {
+    func testClosingOverflowTabsPreservesScrollUntilAnExplicitSelection() async throws {
+        _ = NSApplication.shared
+        let cursor = CursorModel()
+        var ids = Array(1...60)
+        func root(active: Int?, profile: String? = "default") -> SurfaceTreeView {
+            var node: [String: Any] = ["t": "magnify_strip", "items": ids.map {
+                ["id": String($0), "symbol": "globe", "active": $0 == active] as [String: Any]
+            }, "size": 32.0, "spacing": 8.0, "magnify": 1.4,
+                "header": ["t": "text", "text": "Profile"], "header_height": 82.0]
+            node["profile_id"] = profile
+            return SurfaceTreeView(surfaceId: "edge_dock", node: node, cursor: cursor)
+        }
+        let hosting = NSHostingView(rootView: root(active: 1))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 48, height: 600),
+            styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = hosting
+        window.orderFront(nil)
+        defer { window.close() }
+        func findScroll(_ view: NSView) -> NSScrollView? {
+            (view as? NSScrollView) ?? view.subviews.compactMap { findScroll($0) }.first
+        }
+        try await Task.sleep(for: .milliseconds(250))
+        let scroll = try XCTUnwrap(findScroll(hosting))
+        let document = try XCTUnwrap(scroll.documentView)
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: 500))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        try await Task.sleep(for: .milliseconds(100))
+
+        // Removing an offscreen background tab must leave the viewport alone.
+        ids.removeAll { $0 == 40 }
+        hosting.rootView = root(active: 1)
+        try await Task.sleep(for: .milliseconds(250))
+        XCTAssertEqual(scroll.contentView.bounds.minY, 500, accuracy: 1)
+
+        // Closing the selected tab sends removal and replacement selection as
+        // separate surface updates. The replacement can be far up the list.
+        hosting.rootView = root(active: 60)
+        try await Task.sleep(for: .milliseconds(250))
+        XCTAssertGreaterThan(scroll.contentView.bounds.minY, 1500)
+        let beforeClose = scroll.contentView.bounds.minY
+        ids.removeAll { $0 == 60 }
+        hosting.rootView = root(active: nil, profile: nil)
+        try await Task.sleep(for: .milliseconds(150))
+        hosting.rootView = root(active: 1)
+        try await Task.sleep(for: .milliseconds(250))
+        XCTAssertEqual(scroll.contentView.bounds.minY,
+            min(beforeClose, document.bounds.height - scroll.contentView.bounds.height), accuracy: 1,
+            "Closing the selected tab must only clamp to the shorter content")
+
+        // Keyboard/click selection still reveals a tab outside the viewport.
+        hosting.rootView = root(active: 2)
+        try await Task.sleep(for: .milliseconds(250))
+        XCTAssertLessThan(scroll.contentView.bounds.minY, 80)
+
+        // SwiftUI can also coalesce removal and replacement into one update.
+        hosting.rootView = root(active: 59)
+        try await Task.sleep(for: .milliseconds(250))
+        let beforeCoalescedClose = scroll.contentView.bounds.minY
+        ids.removeAll { $0 == 59 }
+        hosting.rootView = root(active: 1)
+        try await Task.sleep(for: .milliseconds(250))
+        XCTAssertEqual(scroll.contentView.bounds.minY,
+            min(beforeCoalescedClose, document.bounds.height - scroll.contentView.bounds.height), accuracy: 1)
+
+        // A newly opened tab is an intentional selection even when the old
+        // selection disappeared in the preceding update.
+        ids.removeAll { $0 == 1 }
+        hosting.rootView = root(active: nil, profile: nil)
+        try await Task.sleep(for: .milliseconds(150))
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: 500))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        ids.append(61)
+        hosting.rootView = root(active: 61)
+        try await Task.sleep(for: .milliseconds(250))
+        XCTAssertGreaterThan(scroll.contentView.bounds.minY, 1500)
+
+        // Switching profiles after a removal must reveal the new selection.
+        ids.removeAll { $0 == 61 }
+        hosting.rootView = root(active: nil, profile: nil)
+        try await Task.sleep(for: .milliseconds(150))
+        hosting.rootView = root(active: 2, profile: "work")
+        try await Task.sleep(for: .milliseconds(250))
+        XCTAssertLessThan(scroll.contentView.bounds.minY, 80)
+    }
+
     func testNotchFitsVisibleIconsInsteadOfHiddenLensPadding() async throws {
         let cursor = CursorModel()
         let node: [String: Any] = ["t": "magnify_strip", "items": (1...5).map {
