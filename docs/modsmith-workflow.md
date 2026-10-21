@@ -36,6 +36,23 @@ context and durable history. UI snapshots expose only short activity messages;
 Undo uses the same short labels. Previously saved enable/resume instructions
 are presented this way as well. Owner-written requests remain visible.
 
+Direct API runs checkpoint tool arguments, returned results, and assistant handoff
+notes into the same mod conversation before and after each tool action. Resume
+receives that work history with the current request and API contract. A cancelled
+or interrupted action without a saved result is marked pending; the agent must
+inspect its state before retrying. Checkpoints survive restart, are cleared by
+Undo, and are not copied to another profile. History retains at most 96 recent
+entries and 256 KiB per project, truncates large values, and omits screenshot
+pixels. These historical observations do not count as fresh verification.
+The result card distinguishes the request limit, elapsed-time limit, and a lack
+of further progress using the runner's actual stopping reason.
+
+A final `files` entry may omit content for a draft written in this run or an
+owned file inspected with `read_mod` in this run. The file must still match the
+written or observed content. This lets resumed verification finish without
+reinstalling unchanged code. New and modified files still require content;
+other mods' files and external edits cannot be adopted by a reference.
+
 Security-review failures produce a separate repair notice even when the final
 result also asks for input. A later approved revision for the same file clears
 that run's review failure. Enabling a mod does not establish verification.
@@ -99,7 +116,7 @@ When a target tab leaves the mod’s site, ModSmith recovers to another matching
 
 Before calling a result working, ModSmith runs a separate, tool-free outcome review against the original request, later changes and actual tool receipts. The proposed files must already be installed, and the reviewer must cite live observations after the last draft write. Compilation, a visible button or disabling a failed action alone does not establish success. The review can send the generator back for up to two repair attempts; unavailable or inconclusive reviews leave the result unverified. This is model-assisted evidence review, not a guarantee of correctness.
 
-Failed review findings stay with the mod independently of the recent chat window. Refinements use them to investigate different implementations, including maintained local libraries or tools through an audited native mod when appropriate. The review does not bypass the code security audit or grant permission for external actions. Raw tool transcripts remain bounded in run memory; the retained history contains concise review findings.
+Failed review findings stay with the mod independently of the recent chat window. Refinements use them to investigate different implementations, including maintained local libraries or tools through an audited native mod when appropriate. The review does not bypass the code security audit or grant permission for external actions. Raw tool transcripts remain bounded in run memory; direct API continuations also retain bounded tool excerpts, separately from fresh verification receipts.
 
 `page_screenshot(webview: id, max_width: 1280)` returns a PNG image of the loaded webpage viewport directly from WebKit, without desktop screen-recording permission. `list_tabs` supplies tab IDs; ModSmith pins the target to its scoped tab, and saved apps capture only their own page. Deferred tabs must be activated first. `max_width` bounds the longest image edge to 320–1920 pixels; `point_width`, `point_height` and `scale` map image pixels to viewport points. The tool excludes browser chrome and does not capture the full document; WebKit may omit protected video.
 

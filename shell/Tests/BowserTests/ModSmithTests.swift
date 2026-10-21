@@ -5,6 +5,18 @@ import BowserSurfaceKit
 @testable import Bowser
 
 final class ModSmithTests: XCTestCase {
+    func testPauseReasonsDistinguishRequestLimitFromTimeoutAndOldTurns() throws {
+        func turn(_ reason: String?) throws -> ModSmithTurn {
+            var value: [String: Any] = ["id": "paused", "role": "assistant", "status": "partial", "text": "One check remains."]
+            value["pause_reason"] = reason
+            return try JSONDecoder().decode(ModSmithTurn.self, from: JSONSerialization.data(withJSONObject: value))
+        }
+        XCTAssertNotNil(try turn("request_limit").pauseExplanation)
+        XCTAssertNotEqual(try turn("request_limit").pauseExplanation, try turn("time_limit").pauseExplanation)
+        XCTAssertNotNil(try turn("no_progress").pauseExplanation)
+        XCTAssertNil(try turn(nil).pauseExplanation)
+        XCTAssertNil(try turn("unknown").pauseExplanation)
+    }
     @MainActor func testCopyTargetsDestinationWithoutSwitchingSourceProfile() {
         let model = ModSmithModel()
         model.connected = { true }
@@ -43,8 +55,9 @@ final class ModSmithTests: XCTestCase {
 
     @MainActor func testResultCardsRenderWithReadableExpandedEvidence() async throws {
         _ = NSApplication.shared
-        let partial = try resultTurn(status: "partial", checks: ["Opened the sidebar and confirmed the new layout.",
+        var partial = try resultTurn(status: "partial", checks: ["Opened the sidebar and confirmed the new layout.",
             "The toolbar button opens and closes the sidebar. Trackpad scrolling is still not working."])
+        partial.pauseReason = "request_limit"
         let question = try JSONDecoder().decode(ModSmithTurn.self, from: JSONSerialization.data(withJSONObject: [
             "id": "question", "role": "assistant", "status": "needs_help", "checks": [],
             "text": "Should the sidebar appear on every website or only on this site?"

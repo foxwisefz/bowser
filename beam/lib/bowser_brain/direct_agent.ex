@@ -1,17 +1,20 @@
 defmodule BowserBrain.DirectAgent do
   @moduledoc "Bounded direct-API tool loop using the same scoped ModWorkshop gateway as MCP."
-  alias BowserBrain.{AI, ModAuditor, ModWorkshop, ModVerification}
+  alias BowserBrain.{AI, DirectAgentSession, ModAuditor, ModWorkshop, ModVerification}
   require Logger
 
-  def run(prompt, _resume, progress, _app) do
+  def run(prompt, resume, progress, _app) do
+    session = DirectAgentSession.restore(resume) |> Map.delete("stop_reason")
+    Process.put(:direct_agent_session, session)
     Process.put(:direct_agent_phase, "setup")
     Process.put(:direct_agent_deadline, System.monotonic_time(:millisecond) +
       Application.get_env(:bowser_brain, :modsmith_work_ms, 600_000))
     Process.put(:direct_agent_partial_count, 0)
     Process.put(:direct_agent_verification_retries, 0)
-    progress.("Connecting to your AI provider…")
+    save_session(session)
+    progress.(if session["entries"] == [], do: "Connecting to your AI provider…", else: "Continuing from saved work…")
     tools = tools()
-    input = [%{"role" => "user", "content" => prompt}]
+    input = [%{"role" => "user", "content" => prompt}] ++ DirectAgentSession.context(session)
 
     case loop(AI.route(), input, tools, progress, 0, Process.get(:modsmith_run)) do
       {:ok, text} -> {nil, {:output, text}}
@@ -34,6 +37,16 @@ defmodule BowserBrain.DirectAgent do
   defp safe_error(value) when is_atom(value) or is_integer(value), do: to_string(value)
   defp safe_error(_), do: "provider_error"
 
+  defp remember(entry, replace_last \\ false) do
+    session = DirectAgentSession.record(Process.get(:direct_agent_session), entry, replace_last)
+    save_session(session)
+  end
+
+  defp save_session(session) do
+    Process.put(:direct_agent_session, session)
+    if token = Process.get(:modsmith_run), do: ModWorkshop.checkpoint(token, session)
+  end
+
   def audit(prompt) do
     with {:ok, output} <-
            completion(
@@ -48,9 +61,16 @@ defmodule BowserBrain.DirectAgent do
 
   defp finish(route, input, progress, reason) do
     Process.put(:direct_agent_phase, "finish")
-    progress.("Summarizing the changes made…")
+    save_session(Map.put(Process.get(:direct_agent_session), "stop_reason", reason))
+    description = case reason do
+      "request_limit" -> "this run reached its request limit (not a time limit)"
+      "time_limit" -> "this run reached its time limit"
+      "no_progress" -> "the model repeatedly returned unfinished work without another tool action"
+    end
+    progress.("Saving progress and summarizing unfinished work…")
     with {:ok, output} <- completion(route, input, [],
-      "The run stopped because #{reason}. Make no more tool calls. Return the required JSON envelope, preserving all proposed files. Describe actual changes and checks only. In one or two short summary sentences, say what works and what remains unfinished or untested. Explain an allowance or time limit as stopping before the remaining work was finished; keep request counts and internal budget terminology out of the owner-facing summary. Do not ask for owner input merely because this run ended. Keep concrete limitations in notes and observed checks in checks. Do not call this a provider outage or mark unverified behavior complete.") do
+      "The run stopped because #{description}. Make no more tool calls. Return the required JSON envelope, preserving all proposed files. Describe actual changes and checks only. In one or two short summary sentences, say what works and what remains unfinished or untested. The UI separately explains why the run paused; do not invent a time limit or provider outage in the summary. Include the precise next unfinished step and any failed approach to avoid in notes. Do not ask for owner input merely because this run ended. Keep observed checks in checks. Do not mark unverified behavior complete.") do
+      remember(%{"type" => "handoff", "text" => DirectAgentSession.excerpt(text(output))})
       if Enum.any?(output, &(&1["type"] == "function_call")),
         do: {:error, :step_limit}, else: {:ok, verified_or_partial(text(output), Process.get(:modsmith_run))}
     end
@@ -58,9 +78,9 @@ defmodule BowserBrain.DirectAgent do
 
   defp loop(route, input, tools, progress, steps, run) do
     cond do
-      steps >= 32 -> finish(route, input, progress, "the 32-request working allowance was reached")
+      steps >= 32 -> finish(route, input, progress, "request_limit")
       System.monotonic_time(:millisecond) >= Process.get(:direct_agent_deadline) ->
-        finish(route, input, progress, "the 10-minute working budget ended")
+        finish(route, input, progress, "time_limit")
       true -> work(route, input, tools, progress, steps, run)
     end
   end
@@ -80,6 +100,7 @@ defmodule BowserBrain.DirectAgent do
 
       if calls == [] do
         result = text(output)
+        remember(%{"type" => "assistant", "text" => DirectAgentSession.excerpt(result)})
         review = ModVerification.check(result, run)
         cond do
           match?({:error, _}, review) and Process.get(:direct_agent_verification_retries, 0) < 2 ->
@@ -98,7 +119,7 @@ defmodule BowserBrain.DirectAgent do
               loop(route, input ++ output ++ [continuation], tools, progress, steps + 1, run)
             else
               if repairable?(result),
-                do: finish(route, input ++ output, progress, "the model repeatedly returned unfinished work without attempting another tool action"),
+                do: finish(route, input ++ output, progress, "no_progress"),
                 else: {:ok, result}
             end
         end
@@ -110,6 +131,9 @@ defmodule BowserBrain.DirectAgent do
             Process.put(:direct_agent_phase, "tool_#{steps}")
             Logger.info("modsmith event=tool_start step=#{steps} tool=#{if Enum.any?(tools, &(&1["name"] == name)), do: name, else: "unknown"}")
             progress.("Using #{name}…")
+            entry = %{"type" => "tool", "name" => name,
+              "arguments" => DirectAgentSession.excerpt(call["arguments"] || "{}"), "status" => "pending"}
+            remember(entry)
 
             result =
               with true <- index < 8 and System.monotonic_time(:millisecond) < Process.get(:direct_agent_deadline),
@@ -120,8 +144,11 @@ defmodule BowserBrain.DirectAgent do
                 _ -> %{ok: false, error: "Tool was not executed: unavailable or this batch reached its execution budget. Request deferred work in a later batch."}
               end
 
+            output = tool_output(call["call_id"], result)
+            remember(entry |> Map.put("status", "returned")
+              |> Map.put("result", DirectAgentSession.excerpt(hd(output)["output"])), true)
             if result[:waiting_for_user] == true, do: throw(:owner_question)
-            tool_output(call["call_id"], result)
+            output
 
           end)
 

@@ -7,6 +7,19 @@ public struct ModSmithTurn: Decodable, Identifiable {
     public var status: String?
     public var notes: String?
     public var checks: [String]?
+    public var pauseReason: String?
+    enum CodingKeys: String, CodingKey {
+        case id, role, text, status, notes, checks
+        case pauseReason = "pause_reason"
+    }
+    public var pauseExplanation: String? {
+        switch pauseReason {
+        case "request_limit": return "Paused at this run’s request limit. Progress is saved for Resume."
+        case "time_limit": return "Paused at this run’s time limit. Progress is saved for Resume."
+        case "no_progress": return "Paused because the last attempts made no further progress. Work is saved for Resume."
+        default: return nil
+        }
+    }
     public var displayText: String {
         text.replacingOccurrences(of: "NEEDS THE RESIDENT AGENT:", with: "")
             .trimmingCharacters(in: .whitespacesAndNewlines)

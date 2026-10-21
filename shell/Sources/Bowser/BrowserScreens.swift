@@ -21,6 +21,10 @@ struct ModSmithTurnCard: View {
             Text(turn.displayText).font(.system(size: 13)).textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
+            if let pause = turn.pauseExplanation {
+                Text(pause).font(.callout).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             if !notes.isEmpty || !turn.reportedChecks.isEmpty {
                 DisclosureGroup("Supporting details", isExpanded: $detailsExpanded) {
                     VStack(alignment: .leading, spacing: 12) {

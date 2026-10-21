@@ -1044,6 +1044,95 @@ end
       end
     end)
     assert {nil, {:output, "bounded summary"}} = BowserBrain.DirectAgent.run("fixture", nil, fn _ -> :ok end, nil)
+    assert Process.get(:direct_agent_session)["stop_reason"] == "request_limit"
+  end
+
+  test "direct work checkpoints survive interruption and resume with results, not stale verification", %{root: root} do
+    File.write!(Path.join(root, "registration.json"), JSON.encode!(%{"telemetryToken" => "fixture-token"}))
+    owner = self()
+    Application.put_env(:bowser_brain, :modsmith_runner, &BowserBrain.DirectAgent.run/4)
+    on_exit(fn -> Application.delete_env(:bowser_brain, :ai_transport) end)
+    Application.put_env(:bowser_brain, :ai_transport, fn _, _, body, _ ->
+      case body["input"] do
+        [_] ->
+          {:ok, %{"output" => [%{"type" => "function_call", "name" => "put_payload", "call_id" => "write-once",
+            "arguments" => JSON.encode!(%{"name" => "checkpoint.css", "content" => "body {color:blue}"})}]}}
+        [_, %{"role" => "user", "content" => context}] ->
+          send(owner, {:resumed, self(), Process.get(:modsmith_run), context})
+          receive do :finish -> {:ok, %{"output" => [%{"type" => "message", "content" => [%{"type" => "output_text", "text" => "done"}]}]}} end
+        _ ->
+          send(owner, {:after_write, self()})
+          receive do :never -> {:error, :timeout} end
+      end
+    end)
+    state = event("submit", %{"text" => "Create a reading mode", "scope" => "site"})
+    assert_receive {:after_write, pid}, 2000
+    [p] = ModRevision.load()["projects"]
+    assert [%{"name" => "put_payload", "status" => "returned", "result" => result}] = p["session"]["entries"]
+    assert JSON.decode!(result)["ok"]
+    assert ModRevision.read("sites/example.com/checkpoint.css") =~ "color:blue"
+    assert Process.alive?(pid)
+    Process.exit(pid, :kill)
+    await(fn -> :sys.get_state(ModWorkshop).run == nil end)
+    recovered = ModRevision.load() |> BowserBrain.ModIdentity.normalize() |> ModWorkshop.recover()
+    :sys.replace_state(ModWorkshop, &%{&1 | data: recovered})
+    event("continue", %{"project" => state.run.project})
+    assert_receive {:resumed, pid, token, context}, 2000
+    assert context =~ "checkpoint.css"
+    assert context =~ "color:blue"
+    assert context =~ "installed"
+    {:ok, verification} = GenServer.call(ModWorkshop, {:verification_context, token, "{}"})
+    assert verification.receipts == []
+    assert verification.installed == false
+    assert {:error, :ended} = ModWorkshop.checkpoint(state.run.token, %{})
+    send(pid, :finish)
+    await(fn -> :sys.get_state(ModWorkshop).run == nil end)
+    assert hd(ModRevision.load()["projects"])["session"]["entries"] |> Enum.any?(&(&1["name"] == "put_payload"))
+  end
+
+  test "a checkpoint is saved before a tool starts and survives cancellation", %{root: root} do
+    File.write!(Path.join(root, "registration.json"), JSON.encode!(%{"telemetryToken" => "fixture-token"}))
+    owner = self()
+    Application.put_env(:bowser_brain, :modsmith_runner, &BowserBrain.DirectAgent.run/4)
+    on_exit(fn -> Application.delete_env(:bowser_brain, :ai_transport) end)
+    Application.put_env(:bowser_brain, :modsmith_auditor, fn _ ->
+      [p] = ModRevision.load()["projects"]
+      send(owner, {:pending_checkpoint, List.last(p["session"]["entries"])})
+      receive do :never -> {:error, :timeout} end
+    end)
+    Application.put_env(:bowser_brain, :ai_transport, fn _, _, _, _ ->
+      {:ok, %{"output" => [%{"type" => "function_call", "name" => "put_mod", "call_id" => "pending-write",
+        "arguments" => JSON.encode!(%{"name" => "pending.ex", "content" => "defmodule PendingCheckpoint do use BowserBrain.Mod, host: \"example.com\" end"})}]}}
+    end)
+    state = event("submit", %{"text" => "Make a mod", "scope" => "site"})
+    assert_receive {:pending_checkpoint, entry}, 2000
+    assert entry["status"] == "pending"
+    assert entry["name"] == "put_mod"
+    event("cancel", %{"project" => state.run.project})
+    await(fn -> :sys.get_state(ModWorkshop).run == nil end)
+    [p] = ModRevision.load()["projects"]
+    assert List.last(p["session"]["entries"])["status"] == "pending"
+  end
+
+  test "time-limited work saves its actual pause reason independently of the model text", %{root: root} do
+    File.write!(Path.join(root, "registration.json"), JSON.encode!(%{"telemetryToken" => "fixture-token"}))
+    previous = Application.get_env(:bowser_brain, :modsmith_work_ms)
+    Application.put_env(:bowser_brain, :modsmith_work_ms, 0)
+    Application.put_env(:bowser_brain, :modsmith_runner, &BowserBrain.DirectAgent.run/4)
+    on_exit(fn ->
+      Application.delete_env(:bowser_brain, :ai_transport)
+      if previous, do: Application.put_env(:bowser_brain, :modsmith_work_ms, previous), else: Application.delete_env(:bowser_brain, :modsmith_work_ms)
+    end)
+    Application.put_env(:bowser_brain, :ai_transport, fn _, _, body, _ ->
+      assert body["tools"] == []
+      {:ok, %{"output" => [%{"type" => "message", "content" => [%{"type" => "output_text",
+        "text" => JSON.encode!(%{status: "partial", summary: "Testing remains", files: []})}]}]}}
+    end)
+    event("submit", %{"text" => "Make a mod", "scope" => "site"})
+    await(fn -> :sys.get_state(ModWorkshop).run == nil end)
+    [p] = ModRevision.load()["projects"]
+    assert p["session"]["stop_reason"] == "time_limit"
+    assert List.last(p["turns"])["pause_reason"] == "time_limit"
   end
 
   test "direct agent continues past twelve rounds and resumes a partial result", %{root: root} do
@@ -1483,6 +1572,33 @@ end
     [project] = complete(pid, [%{"path" => "sites/example.com/reading.css"}]).data["projects"]
     assert project["status"] == "failed"
     assert hd(project["revisions"])["files"] == %{}
+  end
+
+  test "a resumed run can verify an owned file it reads without reinstalling it" do
+    event("submit", %{"text" => "Reading mode"})
+    assert_receive {:runner, pid, _, _, _, _}, 1000
+    [p] = complete(pid, [file("body {color:blue}")], %{"status" => "partial"}).data["projects"]
+    path = "sites/example.com/reading.css"
+    source = ModRevision.read(path)
+    event("continue", %{"project" => p["id"]})
+    assert_receive {:runner, pid, token, _, _, _}, 1000
+    assert %{ok: true} = ModWorkshop.tool(token, "read_mod", %{"path" => path})
+    {:ok, context} = GenServer.call(ModWorkshop, {:verification_context, token, JSON.encode!(%{files: [%{path: path}]})})
+    assert context.installed
+    stamp = {{2000, 1, 1}, {0, 0, 0}}
+    File.touch!(ModRevision.absolute(path), stamp)
+    [p] = complete(pid, [%{"path" => path}], %{"status" => "partial"}).data["projects"]
+    assert p["status"] == "partial"
+    assert ModRevision.read(path) == source
+    assert File.stat!(ModRevision.absolute(path)).mtime == stamp
+    refute ModRevision.changed?(hd(p["revisions"]))
+    event("continue", %{"project" => p["id"]})
+    assert_receive {:runner, pid, token, _, _, _}, 1000
+    assert %{ok: true} = ModWorkshop.tool(token, "read_mod", %{"path" => path})
+    ModRevision.write(path, "owner edit")
+    [p] = complete(pid, [%{"path" => path}]).data["projects"]
+    assert p["status"] == "failed"
+    assert ModRevision.read(path) == "owner edit"
   end
 
   test "file validation identifies missing content, malformed paths and actual size limits" do

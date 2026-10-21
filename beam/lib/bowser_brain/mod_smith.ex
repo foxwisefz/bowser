@@ -822,7 +822,7 @@ defmodule BowserBrain.ModSmith do
 
   def run_claude(prompt, resume, on_progress, app) do
     if BowserBrain.AI.route() == :cli,
-      do: verified_cli(prompt, resume, on_progress, app, 0),
+      do: verified_cli(prompt, if(is_binary(resume), do: resume), on_progress, app, 0),
       else: BowserBrain.DirectAgent.run(prompt, resume, on_progress, app)
   end
   defp verified_cli(prompt, resume, progress, app, retries) do

@@ -402,7 +402,7 @@ let toolCatalogJSON = #"""
   },
   {
     "name": "read_mod",
-    "description": "Full source of one existing mod or payload by catalog path (mods/<name>.ex or sites/<host>/<name>.css|.js). Disabled (.off) files are found by their plain name too. Only files available to this run can be read.",
+    "description": "Full source of one existing mod or payload by catalog path (mods/<name>.ex or sites/<host>/<name>.css|.js). Disabled (.off) files are found by their plain name too. Only files available to this run can be read. In ModSmith, reading a file already owned by this project allows a final path-only reference while its content remains unchanged. Use this to continue verification without reinstalling the same code. Reading another mod does not transfer ownership.",
     "inputSchema": {
       "type": "object",
       "properties": {

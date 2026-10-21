@@ -6,6 +6,7 @@ defmodule BowserBrain.ModWorkshop do
   def delete_existing(path, profile),
     do: GenServer.call(__MODULE__, {:delete_existing, path, profile}, 15_000)
   def modify(path), do: GenServer.cast(__MODULE__, {:modify, path})
+  def checkpoint(token, session), do: GenServer.call(__MODULE__, {:checkpoint, token, session})
 
   def tool(token, tool, args) do
     result = dispatch_tool(token, tool, args)
@@ -422,6 +423,18 @@ defmodule BowserBrain.ModWorkshop do
   end
 
   @impl true
+  def handle_call({:checkpoint, token, session}, _, %{run: %{token: token}} = state) do
+    if Map.get(state.run, :documentation, false) do
+      {:reply, :ok, state}
+    else
+      p = project(state, state.run.project)
+      session = BowserBrain.DirectAgentSession.restore(session)
+      state = %{state | run: Map.put(state.run, :stop_reason, session["stop_reason"])}
+      {:reply, :ok, put_project(state, Map.put(p, "session", session))}
+    end
+  end
+  def handle_call({:checkpoint, _, _}, _, state), do: {:reply, {:error, :ended}, state}
+
   def handle_call({:delete_existing, path, profile}, _, state) do
     try do
       if state.run, do: raise("Stop the current build before deleting a mod.")
@@ -445,8 +458,9 @@ defmodule BowserBrain.ModWorkshop do
 
   def handle_call({:tool_receipt, token, tool, args, result}, _, %{run: %{token: token}} = state) do
     run = Map.put_new(state.run, :fault_write, Map.get(state.run, :last_write, 0))
+    run = remember_read_source(run, project(state, run.project), tool, args, result)
     id = Map.get(run, :receipt_sequence, 0) + 1
-    # Source is checked separately; keep bounded observations in memory, not full page transcripts on disk.
+    # Fresh verification receipts stay in memory, separate from saved continuation context.
     args = Map.drop(args, ["content"])
     image = Map.get(result, :image) || Map.get(result, "image")
     result = Map.drop(result, [:image, "image"])
@@ -981,7 +995,7 @@ defmodule BowserBrain.ModWorkshop do
       Elixir drafts go through put_mod(name: "my_mod.ex", content: full_source), so the owner can undo them. put_mod automatically invokes the independent source auditor; submit the draft to this tool rather than looking for a separate audit capability. Do not stop preemptively because no audit tool appears in the catalog.
       For a native shell theme, use put_mod BEFORE checking shell_theme. put_mod returns compilation and startup/reload results, including runtime.warnings with message, file and line. A successful compile can still warn about undefined calls that fail only when a callback runs; repair those warnings before exercising the action. Fix reported errors before continuing. Compare the
       returned map to the intended settings. This verifies runtime theme state, not pixels.
-      For drafts already installed in this run, return files as [{"path":"mods/example.ex"}] without repeating content. Only unchanged drafts from this run can be referenced. New or changed files still require content. Do not claim the
+      For drafts installed in this run, or this mod's existing files inspected with read_mod in this run, return files as [{"path":"mods/example.ex"}] without repeating content. References require the file to remain unchanged since that write or read. Do not reinstall unchanged code just to continue verification. Focus on unfinished requirements; do not expand the owner's request into optional checks. New or changed files still require content. Do not claim the
       installer cannot accept Elixir mods. Saved apps still support only CSS/JS.
       Original owner request: #{JSON.encode!(Enum.find_value(p["turns"], fn t -> if t["role"] == "user", do: t["text"] end))}
       Retained failed verification attempts (avoid repeating equivalent failed approaches): #{JSON.encode!(Map.get(p, "failed_attempts", []))}
@@ -1217,7 +1231,7 @@ defmodule BowserBrain.ModWorkshop do
 
             {:ok, recorded} ->
               try do
-                ModRevision.write(path, content)
+                if ModRevision.read(path) != content, do: ModRevision.write(path, content)
                 {:cont, {:ok, recorded}}
               rescue
                 error -> {:halt, {:error, Exception.message(error), recorded}}
@@ -1229,24 +1243,25 @@ defmodule BowserBrain.ModWorkshop do
     error -> {:error, Exception.message(error), state}
   end
 
-  # References may only name an unchanged draft captured by THIS run.
+  # A reference must be written or read in this run, and still match that content.
   defp resolve_drafts(state, files) when is_list(files) do
     p = project(state, state.run.project)
     [revision | _] = p["revisions"]
     Enum.map(files, fn
       %{"path" => path} = file when not is_map_key(file, "content") ->
-        resolve_draft(p, revision, path, file)
+        resolve_draft(p, revision, Map.get(state.run, :read_sources, %{}), path, file)
       file -> file
     end)
   end
   defp resolve_drafts(_, files), do: files
 
-  defp resolve_draft(p, revision, path, file) do
+  defp resolve_draft(p, revision, read_sources, path, file) do
     with true <- is_binary(path),
          {:ok, scoped} <- scoped_path(p, path),
          actual <- ModRevision.actual_path(scoped),
-         %{"after" => content} when is_binary(content) <- revision["files"][actual],
-         ^content <- ModRevision.read(actual) do
+         content when is_binary(content) <- ModRevision.read(actual),
+         true <- get_in(revision, ["files", actual, "after"]) == content or
+           read_sources[actual] == BowserBrain.ModAuditor.digest(content) do
       Map.merge(file, %{"path" => actual, "content" => content})
     else
       _ -> file
@@ -1375,7 +1390,8 @@ defmodule BowserBrain.ModWorkshop do
       "checks" => checks,
       "next_step" => next_step,
       "repair_notice" => repair_notice,
-      "review_failures" => review_failures
+      "review_failures" => review_failures,
+      "pause_reason" => if(status != "active", do: Map.get(state.run, :stop_reason))
     }
 
     p =
@@ -1399,6 +1415,22 @@ defmodule BowserBrain.ModWorkshop do
     state = put_project(state, p)
     %{state | run: nil} |> Map.put(:audit_approvals, [])
   end
+
+  defp remember_read_source(run, p, "read_mod", %{"path" => path}, %{ok: true, content: source}) do
+    with {:ok, scoped} <- scoped_path(p, path),
+         actual <- ModRevision.actual_path(scoped),
+         true <- Enum.any?(paths(p), &(String.replace_suffix(&1, ".off", "") == String.replace_suffix(actual, ".off", ""))),
+         content when is_binary(content) <- ModRevision.read(actual),
+         ^source <- BowserBrain.ModScope.untag(content) do
+      Map.update(run, :read_sources, %{actual => BowserBrain.ModAuditor.digest(content)},
+        &Map.put(&1, actual, BowserBrain.ModAuditor.digest(content)))
+    else
+      _ -> run
+    end
+  rescue
+    _ -> run
+  end
+  defp remember_read_source(run, _, _, _, _), do: run
 
   defp string(value) when is_binary(value), do: value
   defp string(nil), do: ""
