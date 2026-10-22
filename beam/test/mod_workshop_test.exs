@@ -772,6 +772,86 @@ defmodule BowserBrain.ModWorkshopTest do
     assert message =~ "rate limited"
   end
 
+  test "page tasks complete with checked exports, retain checkpoints and cannot install mods", %{root: root} do
+    Application.put_env(:bowser_brain, :task_downloads_dir, Path.join(root, "Downloads"))
+    old_verifier = Application.get_env(:bowser_brain, :modsmith_verifier)
+    on_exit(fn ->
+      Application.delete_env(:bowser_brain, :task_downloads_dir)
+      if old_verifier, do: Application.put_env(:bowser_brain, :modsmith_verifier, old_verifier),
+        else: Application.delete_env(:bowser_brain, :modsmith_verifier)
+    end)
+    event("submit", %{"text" => "Export this page as JSON", "kind" => "task", "webview" => 7})
+    assert_receive {:runner, pid, token, _, nil, nil}, 1000
+    assert %{ok: true, file: file} = ModWorkshop.tool(token, "save_task_file", %{"name" => "page.json", "content" => "{\"title\":\"Example\"}"})
+    for tool <- ["put_payload", "put_mod", "put_asset", "store_put", "native_click", "read_mod"] do
+      assert %{ok: false} = ModWorkshop.tool(token, tool, %{"name" => "task.css", "content" => "body{}"})
+    end
+    checkpoint = BowserBrain.DirectAgentSession.record(BowserBrain.DirectAgentSession.restore(nil), %{"type" => "tool", "name" => "save_task_file", "status" => "completed"})
+    :ok = ModWorkshop.checkpoint(token, checkpoint)
+    state = event("cancel", %{"run" => token})
+    [p] = state.data["projects"]
+    assert p["kind"] == "task" and p["status"] == "interrupted"
+    assert p["artifacts"] == [file]
+    refute Process.alive?(pid)
+    event("continue", %{"project" => p["id"]})
+    assert_receive {:runner, resumed, next_token, _, ^checkpoint, nil}, 1000
+    assert %{ok: true, files: [%{"intact" => true}]} = ModWorkshop.tool(next_token, "task_files", %{})
+    output = JSON.encode!(%{name: "Page export", status: "active", summary: "Saved the page title.", files: [], checks: ["Saved JSON checked"]})
+    Application.put_env(:bowser_brain, :modsmith_verifier, fn prompt ->
+      data = JSON.decode!(prompt)
+      assert data["kind"] == "task"
+      receipt = Enum.find(data["receipts"], &(&1["tool"] == "task_files"))
+      {:ok, JSON.encode!(%{verified: true, reason: "Export checked", evidence: [receipt["id"]]})}
+    end)
+    assert :ok = BowserBrain.ModVerification.check(output, next_token)
+    send(resumed, {:result, {nil, {:output, output}}})
+    await(fn -> :sys.get_state(ModWorkshop).run == nil end)
+    state = :sys.get_state(ModWorkshop)
+    [completed] = ModWorkshop.snapshot(state, "main").projects
+    assert completed["status"] == "active" and completed["files"] == []
+    assert completed["artifacts"] == [file]
+    refute completed["can_undo"]
+    assert ModRevision.read("sites/example.com/task.css") == nil
+    event("delete", %{"project" => p["id"]})
+    assert File.exists?(file["path"])
+    assert %{ok: false} = ModWorkshop.tool(next_token, "save_task_file", %{"name" => "later.txt", "content" => "no"})
+  end
+
+  test "a task cannot follow focus or fall back to a second tab when its tab closes" do
+    event("submit", %{"text" => "Inspect this page", "kind" => "task", "webview" => 7})
+    assert_receive {:runner, _, token, _, _, _}, 1000
+    :sys.replace_state(ModWorkshop, fn state -> %{state | urls: %{7 => "https://example.com/a", 8 => "https://example.com/b"}, active: 8} end)
+    assert %{ok: true, active: 7, tabs: [%{webview: 7}]} = ModWorkshop.tool(token, "list_tabs", %{})
+    :sys.replace_state(ModWorkshop, fn state -> %{state | urls: Map.delete(state.urls, 7)} end)
+    assert %{ok: true, target_available: false, tabs: []} = ModWorkshop.tool(token, "list_tabs", %{})
+    assert %{ok: false} = ModWorkshop.tool(token, "page_eval", %{"webview" => 8, "js" => "document.title"})
+    [p] = event("cancel", %{"run" => token}).data["projects"]
+    :sys.replace_state(ModWorkshop, fn state -> %{state | urls: Map.put(state.urls, 9, p["url"])} end)
+    event("continue", %{"project" => p["id"]})
+    assert_receive {:runner, _, resumed_token, _, _, _}, 1000
+    assert %{ok: true, active: 9, tabs: [%{webview: 9}]} = ModWorkshop.tool(resumed_token, "list_tabs", %{})
+  end
+
+  test "legacy mod histories cannot be converted into tasks by a submit flag" do
+    p = ModWorkshop.new_project("Existing mod", "site", "https://example.com", nil)
+    :sys.replace_state(ModWorkshop, fn state -> put_in(state, [:data, "projects"], [p]) end)
+    event("submit", %{"project" => p["id"], "text" => "Refine it", "kind" => "task"})
+    assert_receive {:runner, _, _, _, _, _}, 1000
+    assert :sys.get_state(ModWorkshop).run.kind == "mod"
+  end
+
+  test "task success requires review and final envelopes cannot install code" do
+    event("submit", %{"text" => "Inspect this page", "kind" => "task"})
+    assert_receive {:runner, pid, _, _, _, _}, 1000
+    state = complete(pid, [], %{"status" => "active"})
+    assert hd(state.data["projects"])["status"] == "partial"
+    event("submit", %{"text" => "Inspect again", "kind" => "task"})
+    assert_receive {:runner, pid, _, _, _, _}, 1000
+    state = complete(pid, [file("body{}")])
+    assert hd(state.data["projects"])["status"] == "failed"
+    assert ModRevision.read("sites/example.com/reading.css") == nil
+  end
+
   defp event(action, values) do
     send(
       ModWorkshop,

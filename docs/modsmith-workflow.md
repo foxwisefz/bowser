@@ -131,3 +131,43 @@ Desktop native mods use `BowserBrain.NativeTools.find_executable/1` (path or nil
 Security rejections return the bounded auditor finding to the generator so it can repair and resubmit the source. The existing exact-source digest and request nonce still gate approval; a rejection cannot grant execution permission. Source security and runtime outcome verification are separate checks.
 
 Results claiming an external dependency also receive independent review before stopping. This review checks the blocker and summary against tool receipts, including executable discovery and audit findings; it does not require installing a genuinely missing dependency. Unsupported blockers and claims that a failed action is working go back through the bounded repair loop. Owner choices and permission requests do not imply consent and are not automatically fulfilled. If review cannot establish the claim, the result stays unfinished rather than reporting success or presenting an unsupported prerequisite as fact.
+
+
+## One-off page tasks
+
+**Tasks & Mods → New request** defaults to **Run once**. The editable intent
+suggestion can recommend **Keep as a mod** for reusable behavior. Explicit choices
+win and unavailable suggestions leave Run once selected. Existing mods and the
+omnibar's explicit Create a mod command retain their mod behavior.
+
+Tasks use the selected tab only; switching focus does not redirect execution and
+closing that tab never falls back to another tab. This first version does not
+select additional tabs. Tasks have their own history tab, progress, Stop, Resume,
+and checked results. Temporary DOM edits can disappear on navigation or a site
+rerender. Website actions can persist; deleting history does not undo them.
+**Run again on current page** starts a fresh task. **Make reusable** opens an
+editable mod draft; it does not install or rerun anything until submitted.
+
+Task completion uses live page observations and export receipts, with the same
+independent outcome reviewer as mods. It does not require source installation,
+usage instructions, or a nonempty `files` envelope. Tasks always return `files: []`.
+`status: active` means the task outcome was checked, rendered as Completed.
+Saved checkpoints retain progress; pending actions must be inspected before retrying.
+
+The task tool allowlist is `list_tabs`, `page_html`, `page_eval`, `page_screenshot`,
+`ask_user`, `save_task_file`, and `task_files`. The server enforces it even if a
+client advertises more tools. Mod writes, native tools, and Store access are not
+available to tasks. Page data is untrusted, and task prompts prohibit persistent
+scripts/timers. `page_eval` still runs arbitrary page JavaScript within the user's
+authorization, so transient edits are not a general-purpose rollback sandbox.
+
+`save_task_file({name, content})` writes UTF-8 .json/.csv/.txt/.md under a unique
+`~/Downloads/Bowser Tasks/` directory. Names cannot contain directories; JSON is
+validated. Limit: 1 MiB per file, 32 files and 8 MiB per task. Existing files are
+never overwritten. The result includes `file: {name, path, bytes, sha256,
+exported_at}`. Export time is not an original content timestamp.
+`task_files({})` returns the task's recorded files with an `intact` boolean based
+on current bytes/hash. Both require an active task token and can run even after
+its tab closes. The UI exposes recorded files through Show in Finder. Deleting
+task history leaves exported files in Downloads. Model-provided paths in a final
+response never authorize filesystem writes or Finder actions.

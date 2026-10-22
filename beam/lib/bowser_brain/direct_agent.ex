@@ -355,6 +355,9 @@ defmodule BowserBrain.DirectAgent do
         |> File.read!()
         |> JSON.decode!()
 
+    catalog = if Process.get(:modsmith_kind) == "task",
+      do: Enum.filter(catalog, &(&1["name"] in BowserBrain.PageTask.tools())),
+      else: Enum.reject(catalog, &(&1["name"] in ["save_task_file", "task_files"]))
     Enum.map(
       catalog,
       &%{

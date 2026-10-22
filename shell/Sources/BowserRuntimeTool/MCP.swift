@@ -4,7 +4,13 @@ import BackendRuntime
 func runMCP() throws {
     let env = ProcessInfo.processInfo.environment
     let root = URL(fileURLWithPath: ((env["BOWSER_HOME"] ?? "~/.bowser") as NSString).expandingTildeInPath)
-    let catalog = try JSONSerialization.jsonObject(with: Data(toolCatalogJSON.utf8))
+    let allTools = try JSONSerialization.jsonObject(with: Data(toolCatalogJSON.utf8)) as? [Message] ?? []
+    let taskTools: Set<String> = ["list_tabs", "page_html", "page_eval", "page_screenshot", "ask_user", "save_task_file", "task_files"]
+    let catalog = allTools.filter { tool in
+        let name = tool["name"] as? String ?? ""
+        if env["BOWSER_MODSMITH_KIND"] == "task" { return taskTools.contains(name) }
+        return !["save_task_file", "task_files"].contains(name)
+    }
     while let line = readLine() {
         guard let message = try? json(Data(line.utf8)) else { continue }
         let id = message["id"] ?? NSNull()

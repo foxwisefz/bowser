@@ -31,6 +31,84 @@ final class ModSmithTests: XCTestCase {
         XCTAssertEqual(sent["destination"] as? String, "work")
     }
 
+    private var taskFixture: [String: Any] {
+        ["id": "task", "kind": "task", "name": "Table export", "scope": "site", "url": "https://example.com/report",
+         "status": "active", "summary": "Saved all 24 rows as CSV.", "files": [], "enabled": false, "can_undo": false,
+         "artifacts": [["name": "report.csv", "path": "/tmp/bowser-task-fixture/report.csv", "bytes": 1240]],
+         "turns": [["id": "request", "role": "user", "text": "Export this table as CSV"],
+                   ["id": "result", "role": "assistant", "status": "active", "text": "Saved all 24 rows as CSV.", "checks": ["Compared all 24 source rows with the exported file."]]]]
+    }
+
+    @MainActor func testOneOffSubmissionAndReusablePromotionKeepSeparateHistories() {
+        let model = ModSmithModel()
+        model.connected = { true }
+        model.targetURL = "https://example.com/report"
+        model.targetWebview = 7
+        model.scopeChoice.reset(url: model.targetURL)
+        var events: [[String: Any]] = []
+        model.send = { events.append($0) }
+        model.draft = "Export this table as CSV"
+        model.submit()
+        XCTAssertEqual(events.last?["kind"] as? String, "task")
+        XCTAssertEqual(events.last?["webview"] as? UInt64, 7)
+        let accepted = events.last?["request_id"] as? String
+        model.receive(["projects": [taskFixture], "selected": "task", "busy": false, "progress": [], "stage": "Ready", "accepted": accepted ?? ""])
+        XCTAssertEqual(model.project?.statusLabel, "Completed")
+        XCTAssertEqual(model.project?.artifacts?.first?.name, "report.csv")
+        events = []
+        model.action("make_reusable")
+        XCTAssertNil(model.snapshot.selected)
+        XCTAssertEqual(model.requestKind, "mod")
+        XCTAssertFalse(events.contains { $0["action"] as? String == "submit" })
+        XCTAssertTrue(model.draft.contains("Export this table as CSV"))
+        XCTAssertEqual(model.snapshot.projects.count, 1)
+        model.submit()
+        XCTAssertEqual(events.last?["kind"] as? String, "mod")
+        XCTAssertNil(events.last?["project"])
+    }
+
+    @MainActor func testRunAgainUsesFreshConversationAndCurrentTarget() {
+        let model = ModSmithModel()
+        model.connected = { true }
+        model.receive(["projects": [taskFixture], "selected": "task", "busy": false, "progress": [], "stage": "Ready"])
+        model.targetURL = "https://example.org/other"
+        model.targetWebview = 22
+        var events: [[String: Any]] = []
+        model.send = { events.append($0) }
+        model.action("run_again")
+        XCTAssertEqual(events.last?["kind"] as? String, "task")
+        XCTAssertEqual(events.last?["text"] as? String, "Export this table as CSV")
+        XCTAssertEqual(events.last?["url"] as? String, "https://example.org/other")
+        XCTAssertNil(events.last?["project"])
+        XCTAssertEqual(model.snapshot.projects.first?.id, "task")
+    }
+
+    @MainActor func testRenderOneOffTaskWorkspace() async throws {
+        guard let directory = ProcessInfo.processInfo.environment["BOWSER_TASK_RENDER"] else { throw XCTSkip("Set BOWSER_TASK_RENDER for task UI previews") }
+        _ = NSApplication.shared
+        for state in ["new", "result", "history"] {
+            let model = ModSmithModel()
+            model.targetURL = "https://example.com/report"
+            model.scopeChoice.reset(url: model.targetURL)
+            if state != "new" {
+                model.receive(["projects": [taskFixture], "selected": "task", "busy": false, "progress": [], "stage": "Ready"])
+            }
+            model.workspacePage = state == "history" ? "overview" : state == "new" ? "new" : "history"
+            let view = NSHostingView(rootView: ModSmithRootView(model: model))
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1060, height: 760), styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = view
+            view.frame = NSRect(x: 0, y: 0, width: 1060, height: 760)
+            window.orderFront(nil)
+            try await Task.sleep(for: .milliseconds(180))
+            view.layoutSubtreeIfNeeded()
+            let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+            view.cacheDisplay(in: view.bounds, to: bitmap)
+            try bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: directory).appendingPathComponent("task-\(state).png"))
+            window.close()
+        }
+    }
+
     private func resultTurn(status: String?, checks: [String]? = nil, role: String = "assistant") throws -> ModSmithTurn {
         var json: [String: Any] = ["id": "result", "role": role,
             "text": "The sidebar layout is updated. Scrolling still needs a fix.",

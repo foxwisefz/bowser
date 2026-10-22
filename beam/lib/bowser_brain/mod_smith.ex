@@ -1223,7 +1223,8 @@ defmodule BowserBrain.ModSmith do
         do: %{"BOWSER_SITE_APP_ID" => app["id"], "BOWSER_HOME" => BowserBrain.Paths.home()},
         else: %{"BOWSER_HOME" => BowserBrain.Paths.home()}
 
-    env = Map.put(env, "BOWSER_MODSMITH_RUN", Process.get(:modsmith_run, ""))
+    env = env |> Map.put("BOWSER_MODSMITH_RUN", Process.get(:modsmith_run, ""))
+      |> Map.put("BOWSER_MODSMITH_KIND", Process.get(:modsmith_kind, "mod"))
     File.mkdir_p!(Path.dirname(config))
 
     File.write!(
@@ -1235,7 +1236,9 @@ defmodule BowserBrain.ModSmith do
       })
     )
 
-    ["--mcp-config", config, "--allowedTools", @mcp_tools] ++
+    allowed = if Process.get(:modsmith_kind) == "task",
+      do: Enum.map_join(BowserBrain.PageTask.tools(), ",", &("mcp__bowser__" <> &1)), else: @mcp_tools
+    ["--mcp-config", config, "--allowedTools", allowed] ++
       ["--tools", "", "--strict-mcp-config", "--disable-slash-commands"] ++ isolation_args()
   end
 

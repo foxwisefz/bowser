@@ -1,7 +1,7 @@
 defmodule BowserBrain.ModWorkshop do
   @moduledoc "Core ModSmith workflow: durable conversations, scoped runs and reversible file revisions."
   use GenServer
-  alias BowserBrain.{ModRevision, ModSmith, ModSmithOutcome, Bridge, AppMods}
+  alias BowserBrain.{ModRevision, ModSmith, ModSmithOutcome, Bridge, AppMods, PageTask}
   def start_link(_), do: GenServer.start_link(__MODULE__, nil, name: __MODULE__)
   def delete_existing(path, profile),
     do: GenServer.call(__MODULE__, {:delete_existing, path, profile}, 15_000)
@@ -23,6 +23,12 @@ defmodule BowserBrain.ModWorkshop do
 
           Map.get(run, :documentation, false) and tool not in ["list_tabs", "page_html", "page_screenshot", "read_mod", "list_mods", "mod_diagnostics"] ->
             %{ok: false, error: "Writing instructions is read-only. Inspect existing source and page HTML; do not change or execute the mod."}
+
+          Map.get(run, :kind) == "task" and tool not in PageTask.tools() ->
+            %{ok: false, error: "Run once supports page actions and task exports only. Choose Make reusable to build a mod."}
+
+          tool in ["save_task_file", "task_files"] ->
+            GenServer.call(__MODULE__, {:task_file, token, tool, args}, 15_000)
 
           tool == "put_asset" and run.app == nil ->
             GenServer.call(__MODULE__, {:draft_asset, token, args}, 15_000)
@@ -199,6 +205,7 @@ defmodule BowserBrain.ModWorkshop do
   def recover(data) do
     projects =
       Enum.map(data["projects"], fn p ->
+        p = if PageTask.task?(p), do: Map.delete(p, "target_webview"), else: p
         p =
           if undo = p["pending_undo"] do
             r = Enum.find(p["revisions"], &(&1["id"] == undo))
@@ -302,7 +309,7 @@ defmodule BowserBrain.ModWorkshop do
         state
       ) do
     {index, text} = ModSmith.parse_followup(rest)
-    projects = Enum.filter(state.data["projects"], &is_nil(&1["app"]))
+    projects = Enum.filter(state.data["projects"], &(is_nil(&1["app"]) and not PageTask.task?(&1)))
     project = Enum.at(projects, if(index == :latest, do: 0, else: index - 1))
 
     event = %{
@@ -484,10 +491,12 @@ defmodule BowserBrain.ModWorkshop do
       {:ok, value} when is_map(value) -> value
       _ -> %{}
     end
+    task_files = if PageTask.task?(p), do: PageTask.check(p), else: nil
+    state = put_in(state.run[:reviewed_task_files], task_files)
     installed = verification_files_match?(state, envelope)
-    context = %{documentation: Map.get(state.run, :documentation, false), installed: installed, scope: p["scope"],
+    context = %{documentation: Map.get(state.run, :documentation, false), installed: installed, kind: p["kind"] || "mod", scope: p["scope"],
       requests: Enum.filter(p["turns"], &(&1["role"] == "user")) |> Enum.map(& &1["text"]) |> then(fn requests -> Enum.uniq(Enum.take(requests, 1) ++ Enum.take(requests, -12)) end),
-      candidate: Map.drop(envelope, ["files"]),
+      candidate: Map.drop(envelope, ["files"]), task_files: task_files,
       receipts: Map.get(state.run, :receipts, []), last_write: Map.get(state.run, :last_write, 0),
       images: Map.get(state.run, :images, []), audit_failures: Map.keys(Map.get(state.run, :audit_failures, %{})),
       script_fault: Map.get(state.run, :script_fault, false), repair_write: Map.get(state.run, :repair_write, 0), fault_write: Map.get(state.run, :fault_write, 0),
@@ -501,7 +510,7 @@ defmodule BowserBrain.ModWorkshop do
         Map.get(state.run, :repair_write, 0) <= Map.get(state.run, :fault_write, 0),
       do: {:error, BowserBrain.ModVerification.runtime_fault_instruction()}, else: verdict
     state = if verdict == :ok, do: %{state | run: Map.put(state.run, :script_fault, false)}, else: state
-    state = put_in(state.run[:verification], %{hash: hash, verdict: verdict})
+    state = put_in(state.run[:verification], %{hash: hash, verdict: verdict, task_files: Map.get(state.run, :reviewed_task_files)})
     state = case verdict do
       {:error, reason} ->
         p = project(state, state.run.project)
@@ -526,6 +535,23 @@ defmodule BowserBrain.ModWorkshop do
   end
   def handle_call({:ask_user, _, _}, _, state), do: {:reply, %{ok: false, error: "Run ended"}, state}
 
+  def handle_call({:task_file, token, tool, args}, _, %{run: %{token: token, kind: "task"}} = state) do
+    p = project(state, state.run.project)
+    case tool do
+      "task_files" -> {:reply, %{ok: true, files: PageTask.check(p)}, state}
+      "save_task_file" ->
+        case PageTask.save(p, args) do
+          {:ok, artifact} ->
+            next = put_project(state, Map.update(p, "artifacts", [artifact], &(&1 ++ [artifact])))
+            publish(next)
+            {:reply, %{ok: true, file: artifact}, next}
+          {:error, reason} -> {:reply, %{ok: false, error: reason}, state}
+        end
+    end
+  end
+  def handle_call({:task_file, _, _, _}, _, state),
+    do: {:reply, %{ok: false, error: "An active Run once task is required."}, state}
+
   def handle_call({:context, token, tool}, _, state) do
     case state.run do
       %{token: ^token} = run ->
@@ -534,18 +560,18 @@ defmodule BowserBrain.ModWorkshop do
           state.urls
           |> Enum.filter(fn {wv, url} ->
             BowserBrain.ModScope.profile_of(wv) == run.profile and
-              (p["scope"] == "browser" or URI.parse(url).host == URI.parse(run.url).host)
+              (if PageTask.task?(p), do: wv == run.webview, else: p["scope"] == "browser" or URI.parse(url).host == URI.parse(run.url).host)
           end)
           |> Enum.sort_by(fn {wv, _} -> {wv != run.webview, wv != state.active, wv} end)
           |> Enum.map(fn {wv, url} -> %{webview: wv, url: url} end)
         target = List.first(tabs)
         run = if target, do: %{run | webview: target.webview}, else: run
         state = %{state | run: run}
-        safe = tool in ["ask_user", "discover_native_tools", "list_tabs", "list_mods", "read_mod", "mod_diagnostics"]
+        safe = tool in ["task_files", "save_task_file", "ask_user", "discover_native_tools", "list_tabs", "list_mods", "read_mod", "mod_diagnostics"]
         if target || safe do
-          {:reply, {:ok, Map.merge(run, %{tabs: tabs, target_available: target != nil, capture_host: if(p["scope"] == "site", do: URI.parse(run.url).host)})}, state}
+          {:reply, {:ok, Map.merge(run, %{tabs: tabs, target_available: target != nil, capture_host: if(p["scope"] == "site" and not PageTask.task?(p), do: URI.parse(run.url).host)})}, state}
         else
-          {:reply, {:error, "No matching tab is open in this profile. Source and diagnostics remain available; open #{run.url} to verify page behavior."}, state}
+          {:reply, {:error, if(PageTask.task?(p), do: "The task’s tab is closed. Reopen its original page and Resume; saved exports remain available.", else: "No matching tab is open in this profile. Source and diagnostics remain available; open #{run.url} to verify page behavior.")}, state}
         end
 
       _ ->
@@ -732,7 +758,7 @@ defmodule BowserBrain.ModWorkshop do
           action(next, event |> Map.put("action", String.replace_suffix(action, "_existing", "")) |> Map.put("project", selected(next, client)))
         end
 
-      action == "copy" and valid and client == "main" and state.run == nil ->
+      action == "copy" and valid and not PageTask.task?(project) and client == "main" and state.run == nil ->
         {copy, files} = BowserBrain.ModCopy.prepare(project, event["destination"])
         BowserBrain.ModCopy.install(files, fn ->
           state |> put_project(copy) |> Map.put(:error, nil)
@@ -757,7 +783,7 @@ defmodule BowserBrain.ModWorkshop do
       action == "delete" ->
         %{state | error: if(valid, do: "Stop the current build before deleting a mod.", else: "That mod is unavailable in this window.")}
 
-      action in ["undo", "toggle"] and valid and state.run == nil ->
+      action in ["undo", "toggle"] and valid and not PageTask.task?(project) and state.run == nil ->
         revision_action(state, project, action)
 
       action == "cancel" and state.run != nil and
@@ -794,7 +820,7 @@ defmodule BowserBrain.ModWorkshop do
           state
         end
 
-      action == "document" and valid and state.run == nil ->
+      action == "document" and valid and not PageTask.task?(project) and state.run == nil ->
         request = "Write a usage guide for this existing mod. This is read-only: inspect its current source and page HTML, without modifying files, executing actions or testing side effects. Return usage: {entry_point: exact place/control/command or automatic trigger, steps: [ordered owner-facing steps], tips: optional configuration or limitations}. Describe only implemented behavior. Return files: []. Do not claim runtime verification."
         start(state, Map.put(event, "text", request), project)
 
@@ -806,7 +832,7 @@ defmodule BowserBrain.ModWorkshop do
 
       action == "continue" and valid and state.run == nil and
           project["status"] in ["partial", "needs_help", "failed", "interrupted"] ->
-        request = "Continue this unfinished mod. Preserve the original goal and existing work. " <>
+        request = if PageTask.task?(project), do: "Continue the unfinished task from saved progress. Inspect current page state and task_files before repeating actions. Complete only the remaining requested work, and verify the result.", else: "Continue this unfinished mod. Preserve the original goal and existing work. " <>
           "Inspect the current files and the previous result's limitations, fix what failed, " <>
           "and verify the requested behavior on the page before reporting success."
         request = if get_in(project, ["next_step", "action"]) == "resume",
@@ -858,10 +884,13 @@ defmodule BowserBrain.ModWorkshop do
   defp start(state, event, existing) do
     text = String.trim(event["text"] || "")
     app = (existing && existing["app"]) || event["app"]
+    kind = if existing, do: existing["kind"] || "mod", else: event["kind"] || "mod"
 
     url =
       (existing && existing["url"]) || (app && app["url"]) || event["url"] ||
         state.urls[state.active] || ""
+
+    url = if kind == "task" and existing == nil and app == nil, do: state.urls[event["webview"] || state.active] || url, else: url
 
     if text == "" or (app && not AppMods.valid_id?(app["id"])) do
       state
@@ -869,11 +898,13 @@ defmodule BowserBrain.ModWorkshop do
       scope =
         (existing && existing["scope"]) || if(app, do: "app", else: event["scope"] || "site")
 
-      if scope not in ["browser", "site", "app"] or
+      scope = if kind == "task", do: if(app, do: "app", else: "site"), else: scope
+      if kind not in ["task", "mod"] or scope not in ["browser", "site", "app"] or
            (scope != "browser" and URI.parse(url).host == nil) do
-        %{state | error: "Open a website before creating a site mod."}
+        %{state | error: if(kind == "task", do: "Open a website to run this task.", else: "Open a website before creating a site mod.")}
       else
         p = existing || Map.put(new_project(text, scope, url, app), "profile", BowserBrain.ModScope.profile_of(event["webview"] || state.active))
+        p = Map.put(p, "kind", kind)
         label = ModSmithOutcome.activity(event["action"])
         revision = ModRevision.new_revision(text) |> Map.put("label", label) |> Map.put("usage_before", p["usage"])
         turn = if label,
@@ -893,13 +924,21 @@ defmodule BowserBrain.ModWorkshop do
           )
 
         state = state |> put_project(p) |> select(client(event), p["id"])
-        wv = if app, do: 0, else: target_webview(state, url, event["webview"])
-        run = %{previous_next_step: existing && existing["next_step"], previous_repair_notice: existing && existing["repair_notice"], previous_review_failures: existing && existing["review_failures"], documentation: event["action"] == "document", previous_status: existing && existing["status"], token: revision["id"], project: p["id"], webview: wv, profile: BowserBrain.ModScope.profile_of(wv), url: url, app: p["app"]}
+        wv = cond do
+          app -> 0
+          kind == "task" and existing -> resume_task_webview(state, existing)
+          kind == "task" -> event["webview"] || state.active
+          true -> target_webview(state, url, event["webview"])
+        end
+        p = Map.put(p, "target_webview", wv)
+        state = put_project(state, p)
+        run = %{kind: kind, previous_next_step: existing && existing["next_step"], previous_repair_notice: existing && existing["repair_notice"], previous_review_failures: existing && existing["review_failures"], documentation: event["action"] == "document", previous_status: existing && existing["status"], token: revision["id"], project: p["id"], webview: wv, profile: if(kind == "task", do: p["profile"], else: BowserBrain.ModScope.profile_of(wv)), url: url, app: p["app"]}
         parent = self()
 
         {pid, ref} =
           spawn_monitor(fn ->
             Process.put(:modsmith_run, run.token)
+            Process.put(:modsmith_kind, kind)
 
             result =
               try do
@@ -935,6 +974,20 @@ defmodule BowserBrain.ModWorkshop do
     end
   end
 
+  defp resume_task_webview(state, project) do
+    previous = project["target_webview"]
+    profile = Map.get(project, "profile", "default")
+    if previous && Map.has_key?(state.urls, previous) and BowserBrain.ModScope.profile_of(previous) == profile do
+      previous
+    else
+      # Only an explicit Resume can bind a reopened exact URL. During a run,
+      # context never falls back when its tab closes or focus moves.
+      Enum.find_value(state.urls, previous || -1, fn {wv, url} ->
+        if url == project["url"] and BowserBrain.ModScope.profile_of(wv) == profile, do: wv
+      end)
+    end
+  end
+
   defp target_webview(state, url, preferred) do
     host = URI.parse(url).host
 
@@ -951,6 +1004,8 @@ defmodule BowserBrain.ModWorkshop do
         end)
     end
   end
+
+  defp prompt(%{"kind" => "task"} = p, request, wv), do: PageTask.prompt(p, request, wv)
 
   defp prompt(p, request, wv) do
     host = URI.parse(p["url"]).host || "unknown"
@@ -1098,6 +1153,9 @@ defmodule BowserBrain.ModWorkshop do
       :ok
     end
   end
+
+  defp prepared_files(%{run: %{kind: "task"}}, files),
+    do: Enum.map(files, fn _ -> {:error, "Run once cannot install files. Use save_task_file for exports."} end)
 
   defp prepared_files(state, files) do
     p = project(state, state.run.project)
@@ -1306,6 +1364,7 @@ defmodule BowserBrain.ModWorkshop do
 
   defp finish(state, session, result) do
     Process.demonitor(state.run.ref, [:flush])
+    task? = PageTask.task?(project(state, state.run.project))
     question = if result != :cancelled, do: Map.get(state.run, :question)
     result = if question, do: {:output, JSON.encode!(%{"status" => "needs_help",
       "summary" => question["title"] <> "\n" <> question["detail"], "files" => []})}, else: result
@@ -1320,7 +1379,7 @@ defmodule BowserBrain.ModWorkshop do
     {state, status, summary, notes, checks, name} =
       case result do
         :cancelled ->
-          {state, "interrupted", "Build stopped. Changes already applied are kept; use Undo to revert them.", "", [], nil}
+          {state, "interrupted", if(task?, do: "Task stopped. Completed actions and saved files are kept. Resume to continue.", else: "Build stopped. Changes already applied are kept; use Undo to revert them."), "", [], nil}
 
         {:output, output} ->
           case ModSmith.extract_json(output) do
@@ -1336,6 +1395,9 @@ defmodule BowserBrain.ModWorkshop do
                   else: []
 
               cond do
+                task? and files == [] ->
+                  {state, if(envelope["status"] in ["partial", "needs_help", "failed"], do: envelope["status"], else: "active"), summary, notes, checks, envelope["name"]}
+
                 files == [] ->
                   {state, "needs_help", summary, notes, checks, envelope["name"]}
 
@@ -1362,7 +1424,7 @@ defmodule BowserBrain.ModWorkshop do
       end
 
     verified = case {result, Map.get(state.run, :verification)} do
-      {{:output, output}, %{hash: hash, verdict: :ok}} -> BowserBrain.ModAuditor.digest(output) == hash and verification_files_match?(state, envelope)
+      {{:output, output}, %{hash: hash, verdict: :ok}} -> BowserBrain.ModAuditor.digest(output) == hash and (if task?, do: PageTask.check(project(state, state.run.project)) == state.run.verification[:task_files], else: verification_files_match?(state, envelope))
       _ -> false
     end
     {status, summary, notes} = if status == "active" and not verified,
@@ -1628,7 +1690,7 @@ defmodule BowserBrain.ModWorkshop do
           do: state.progress,
           else: []
         ),
-      stage: stage(state.progress),
+      stage: if(state.run && Map.get(state.run, :kind) == "task", do: task_stage(state.progress), else: stage(state.progress)),
       projects:
         Enum.map(projects, fn p ->
           files = live_paths(p)
@@ -1647,6 +1709,16 @@ defmodule BowserBrain.ModWorkshop do
           |> Map.put("undo_label", revision && ModSmithOutcome.revision_label(revision))
         end)
     }
+  end
+
+  defp task_stage(progress) do
+    line = List.last(progress) || ""
+    cond do
+      String.contains?(line, "save_task_file") -> "Saving the export"
+      String.contains?(line, "task_files") -> "Checking saved files"
+      String.contains?(line, "Continuing") -> "Continuing from saved work"
+      true -> "Working on the page"
+    end
   end
 
   def stage(progress) do

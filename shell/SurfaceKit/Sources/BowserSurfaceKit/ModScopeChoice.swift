@@ -3,6 +3,12 @@ import Combine
 
 /// Shared by the omnibar and creation screen. Suggestions never override a user's choice.
 @MainActor public final class ModScopeChoice: ObservableObject {
+    @Published public private(set) var kind = "task"
+    public private(set) var manualKind = false
+    public func chooseKind(_ value: String) {
+        guard ["task", "mod"].contains(value) else { return }
+        kind = value; manualKind = true
+    }
     @Published public private(set) var selected = "site"
     @Published public private(set) var suggested: String?
     @Published public private(set) var checking = false
@@ -16,8 +22,9 @@ import Combine
     private var frozen = false
     public init() {}
     public var valid: Bool { selected == "browser" || host != nil }
-    public func reset(url: String, selected: String = "site", manual: Bool = false, faviconPath: String? = nil) {
+    public func reset(url: String, selected: String = "site", manual: Bool = false, faviconPath: String? = nil, kind: String = "task", manualKind: Bool = false) {
         cancel()
+        self.kind = kind; self.manualKind = manualKind
         let parsed = URL(string: url)
         host = ["http", "https"].contains(parsed?.scheme?.lowercased() ?? "") ? parsed?.host : nil
         self.faviconPath = host == nil ? nil : faviconPath
@@ -30,8 +37,9 @@ import Combine
     public func update(_ text: String) {
         guard !frozen, text != prompt else { return }
         prompt = text; cancel(); suggested = nil
-        guard !manual else { return }
-        selected = "site"
+        guard !manual || !manualKind else { return }
+        if !manual { selected = "site" }
+        if !manualKind { kind = "task" }
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard text.count >= 4 else { return }
         let id = UUID().uuidString
@@ -45,9 +53,11 @@ import Combine
             self.cancel()
         }
     }
-    public func receive(id: String, choice: String) {
-        guard generation == id, !manual, !frozen else { return }
+    public func receive(id: String, choice: String, kind: String? = nil) {
+        guard generation == id, !frozen else { return }
         cancel()
+        if !manualKind, let kind, ["task", "mod"].contains(kind) { self.kind = kind }
+        guard !manual else { return }
         guard ["site", "browser"].contains(choice), choice != "site" || host != nil else { return }
         selected = choice; suggested = choice
     }

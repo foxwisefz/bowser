@@ -1,5 +1,37 @@
 [
   {
+    "name": "save_task_file",
+    "description": "Save a UTF-8 JSON, CSV, text or Markdown export for an active Run once task. Use a plain filename, no directories. Creates a unique folder in Downloads/Bowser Tasks, never overwrites files; returns path, bytes, SHA-256 and export time (not an original message timestamp). Limits: 1 MiB per file, 32 files and 8 MiB per task. JSON must be valid. Persisted in task history. Unavailable in mod builds or unscoped calls.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "maxLength": 120,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._ -]*\\.(json|csv|txt|md)$"
+        },
+        "content": {
+          "type": "string",
+          "maxLength": 1048576
+        }
+      },
+      "required": [
+        "name",
+        "content"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "task_files",
+    "description": "List this Run once task’s saved exports with path, byte count, SHA-256, export time, and intact boolean checked against the current file. Use on Resume before exporting again. Includes earlier runs of the same task. Does not read any unrelated files. Requires an active Run once task.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    }
+  },
+  {
     "name": "discover_native_tools",
     "description": "Read-only discovery of 1–8 native executable names on this Mac. Checks the browser PATH plus standard macOS/Homebrew and user-local bin directories; returns available and absolute path. Runs nothing, installs nothing, and does not verify versions or successful feature execution. Use before claiming a dependency is missing or asking for a restart. Not available in saved-app ModSmith runs.",
     "inputSchema": {

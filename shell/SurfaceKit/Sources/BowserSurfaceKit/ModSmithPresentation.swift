@@ -61,9 +61,19 @@ public struct ModSmithUsage: Decodable {
     enum CodingKeys: String, CodingKey { case entryPoint = "entry_point", steps, tips }
 }
 
+public struct TaskArtifact: Decodable, Identifiable {
+    public let name: String
+    public let path: String
+    public let bytes: Int
+    public var id: String { path }
+}
+
 public struct ModSmithProject: Decodable, Identifiable {
     public let id: String
     public let name: String
+    public let kind: String?
+    public let artifacts: [TaskArtifact]?
+    public var isTask: Bool { kind == "task" }
     public let scope: String
     public let url: String
     public let status: String
@@ -78,11 +88,12 @@ public struct ModSmithProject: Decodable, Identifiable {
     public let repairNotice: String?
     public let usage: ModSmithUsage?
     enum CodingKeys: String, CodingKey {
-        case id, name, scope, url, status, summary, turns, files, enabled, favicon, usage
+        case id, name, kind, artifacts, scope, url, status, summary, turns, files, enabled, favicon, usage
         case canUndo = "can_undo", undoLabel = "undo_label"
         case nextStep = "next_step", repairNotice = "repair_notice"
     }
     public var scopeLabel: String {
+        if isTask { return "Run once · " + (URL(string: url)?.host ?? "This page") }
         switch scope {
         case "browser": return "Across Bowser"
         case "app": return "Only this app"
@@ -95,7 +106,7 @@ public struct ModSmithProject: Decodable, Identifiable {
     public var canRetry: Bool {
         files.isEmpty && ["failed", "interrupted"].contains(status) && nextStep == nil
     }
-    public var recoveryLabel: String { canRetry ? "Try again" : "Resume testing & fixes" }
+    public var recoveryLabel: String { isTask ? "Resume task" : canRetry ? "Try again" : "Resume testing & fixes" }
     public var recoveryAction: String { canRetry ? "retry" : "continue" }
     public var canEnableAndTest: Bool {
         status != "working" && !enabled && !files.isEmpty
@@ -105,14 +116,14 @@ public struct ModSmithProject: Decodable, Identifiable {
     }
     public var statusLabel: String {
         switch status {
-        case "working": return "Building…"
+        case "working": return isTask ? "Working…" : "Building…"
         case "partial": return "Unfinished"
         case "failed": return "Needs attention"
         case "needs_help": return "Needs your input"
         case "interrupted": return "Interrupted"
         case "restored": return files.isEmpty ? "Removed" : "Restored"
         case "ready": return files.isEmpty ? "Draft" : "Not yet verified"
-        case "active": return files.isEmpty ? "Draft" : "Ready"
+        case "active": return isTask ? "Completed" : files.isEmpty ? "Draft" : "Ready"
         default: return files.isEmpty ? "Draft" : "Not yet verified"
         }
     }
@@ -172,6 +183,7 @@ public struct ModSmithSnapshot: Decodable {
     func submit()
 }
 public extension ModSmithPresentation {
+    var requestKind: String { project?.kind ?? (project == nil ? scopeChoice.kind : "mod") }
     func action(_ action: String, project: String? = nil, path: String? = nil) {
         self.action(action, project: project, path: path)
     }

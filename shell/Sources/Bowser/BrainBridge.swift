@@ -382,7 +382,7 @@ final class BrainBridge {
             let id = message["request_id"] as? String ?? ""
             let choice = message["choice"] as? String ?? "unclear"
             CommandBar.shared.receiveScope(id: id, choice: choice)
-            ModSmithWindow.shared.model.scopeChoice.receive(id: id, choice: choice)
+            ModSmithWindow.shared.model.scopeChoice.receive(id: id, choice: choice, kind: message["kind"] as? String)
 
         case "modsmith_state":
             if SiteAppConfiguration.current == nil, message["app"] is String {

@@ -30,6 +30,18 @@ defmodule BowserBrain.ModVerificationTest do
     }
   end
 
+  test "tasks accept observed results without installation but still require receipts" do
+    task = context() |> Map.merge(%{kind: "task", installed: false, last_write: 0,
+      receipts: [%{id: 1, tool: "save_task_file", result: "saved JSON export"}]})
+    Application.put_env(:bowser_brain, :modsmith_verifier, fn prompt ->
+      assert JSON.decode!(prompt)["kind"] == "task"
+      {:ok, JSON.encode!(%{verified: true, reason: "Export observed", evidence: [1]})}
+    end)
+    assert :ok = ModVerification.assess(task)
+    assert {:error, _} = ModVerification.assess(%{task | receipts: []})
+    assert {:error, _} = ModVerification.assess(%{task | kind: "mod"})
+  end
+
   test "external dependency claims require review, but owner choices do not" do
     assert ModVerification.external_blocker?(JSON.encode!(%{status: "needs_help", blocker: %{kind: "external_dependency"}}))
     refute ModVerification.external_blocker?(JSON.encode!(%{status: "needs_help", blocker: %{kind: "owner_decision"}}))

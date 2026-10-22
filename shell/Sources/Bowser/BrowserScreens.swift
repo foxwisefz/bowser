@@ -5,13 +5,14 @@ import BowserSurfaceKit
 
 struct ModSmithTurnCard: View {
     let turn: ModSmithTurn
+    var assistantName = "ModSmith"
     @State var detailsExpanded = false
     private var notes: String { (turn.notes ?? "").trimmingCharacters(in: .whitespacesAndNewlines) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 10) {
-                Text(turn.role == "user" ? "You" : turn.role == "system" ? "Revision history" : turn.role == "activity" ? "Activity" : "ModSmith")
+                Text(turn.role == "user" ? "You" : turn.role == "system" ? "Revision history" : turn.role == "activity" ? "Activity" : assistantName)
                     .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                 if let outcome = turn.outcomeLabel {
                     Text(outcome).font(.caption.weight(.medium))
@@ -478,6 +479,11 @@ struct ModSmithScreen: View {
     @State private var deletingPath: String?
     private var query: Binding<String> { context.binding("modsSearch", default: "") }
     private var filter: Binding<String> { context.binding("modsFilter", default: "all") }
+    private var historyKind: Binding<String> { context.binding("requestHistoryKind", default: "task") }
+    private var deletingTask: Bool { model.snapshot.projects.first(where: { $0.id == deletingProject })?.isTask == true }
+    private var listedProjects: [ModSmithProject] {
+        model.snapshot.projects.filter { ($0.isTask ? "task" : "mod") == historyKind.wrappedValue && matches($0.name, scope: $0.scope, url: $0.url) }
+    }
     private var guideBinding: Binding<Bool> { Binding(get: { model.instructionsOpen }, set: { model.instructionsOpen = $0 }) }
     var body: some View {
         GeometryReader { geometry in
@@ -506,18 +512,19 @@ struct ModSmithScreen: View {
             Color(nsColor: .windowBackgroundColor)
             LinearGradient(colors: [Color.purple.opacity(0.045), .clear], startPoint: .topLeading, endPoint: .bottomTrailing)
         }
-        .alert("Delete this mod?", isPresented: Binding(
+        .alert(deletingTask ? "Delete this task history?" : "Delete this mod?", isPresented: Binding(
             get: { deletingProject != nil || deletingPath != nil }, set: { if !$0 { deletingProject = nil; deletingPath = nil } }
         )) {
-            Button("Delete mod", role: .destructive) {
+            Button(deletingTask ? "Delete history" : "Delete mod", role: .destructive) {
                 if let id = deletingProject { model.action("delete", project: id, path: nil) }
                 if let path = deletingPath { model.action("delete_existing", path: path) }
                 deletingProject = nil; deletingPath = nil
             }
             Button("Cancel", role: .cancel) { deletingProject = nil; deletingPath = nil }
         } message: {
-            Text("This removes the mod’s files and all its ModSmith conversation and undo history. This can’t be undone. Website actions and saved mod data stay as they are.")
+            Text(deletingTask ? "This removes the saved task conversation. Exported files and website actions stay as they are." : "This removes the mod’s files and all its ModSmith conversation and undo history. This can’t be undone. Website actions and saved mod data stay as they are.")
         }
+        .onChange(of: historyKind.wrappedValue) { _, _ in filter.wrappedValue = "all" }
         .onChange(of: model.draft) { _, text in
             if model.project == nil && !model.isSiteApp { model.scopeChoice.update(text) }
         }
@@ -543,12 +550,12 @@ struct ModSmithScreen: View {
         return true
     }
 
-    private var remainingMods: [ModSmithExisting] { model.snapshot.unrepresentedMods }
+    private var remainingMods: [ModSmithExisting] { historyKind.wrappedValue == "mod" ? model.snapshot.unrepresentedMods : [] }
 
     private var overview: some View {
         VStack(alignment: .leading, spacing: 18) {
             HStack {
-                Text("Mods").font(.largeTitle.weight(.semibold))
+                Text("Tasks & Mods").font(.largeTitle.weight(.semibold))
                 Spacer()
                 if !model.isSiteApp {
                     Menu {
@@ -557,23 +564,27 @@ struct ModSmithScreen: View {
                         }
                     } label: { Text(model.snapshot.workspace_profile?.name ?? "Profile") }
                 }
-                Button("New mod", systemImage: "plus") {
+                Button("New request", systemImage: "plus") {
                     model.instructionsOpen = false; model.action("new"); composerFocused = true
                 }.buttonStyle(.borderedProminent)
             }
             HStack {
-                TextField("Search mods", text: query).textFieldStyle(.roundedBorder)
+                Picker("History", selection: historyKind) {
+                    Text("Tasks").tag("task")
+                    Text("Mods").tag("mod")
+                }.pickerStyle(.segmented).labelsHidden().frame(width: 190)
+                TextField(historyKind.wrappedValue == "task" ? "Search tasks" : "Search mods", text: query).textFieldStyle(.roundedBorder)
                 if !model.isSiteApp {
                     Picker("Show", selection: filter) {
                         Text("All").tag("all")
                         Text("This website").tag("site")
-                        Text("Across Bowser").tag("browser")
-                    }.pickerStyle(.segmented).frame(width: 350)
+                        if historyKind.wrappedValue == "mod" { Text("Across Bowser").tag("browser") }
+                    }.pickerStyle(.segmented).labelsHidden().frame(width: historyKind.wrappedValue == "task" ? 230 : 350)
                 }
             }
             ScrollView {
                 LazyVStack(spacing: 0) {
-                    ForEach(model.snapshot.projects.filter { matches($0.name, scope: $0.scope, url: $0.url) }) { project in
+                    ForEach(listedProjects) { project in
                         VStack(alignment: .leading, spacing: 12) {
                             HStack(spacing: 12) {
                                 modIcon(project.favicon, fallback: project.scope == "browser" ? "macwindow" : "globe", size: 28)
@@ -587,7 +598,7 @@ struct ModSmithScreen: View {
                                 projectMenu(project)
                             }
                             HStack(spacing: 18) {
-                                Button("Build history") { openHistory(project.id) }
+                                Button(project.isTask ? "View result" : "Build history") { openHistory(project.id) }
                                 if !project.files.isEmpty { Button("How to use") { openHistory(project.id, guide: true) } }
                             }.buttonStyle(.link).padding(.leading, 40)
                         }.padding(.vertical, 18)
@@ -624,10 +635,10 @@ struct ModSmithScreen: View {
                         }.padding(.vertical, 18)
                         Divider()
                     }
-                    if model.snapshot.projects.isEmpty && remainingMods.isEmpty {
-                        ContentUnavailableView("Make Bowser yours", systemImage: "sparkles", description: Text("Create a mod to change how a website or your browser works."))
-                    } else if model.snapshot.projects.filter({ matches($0.name, scope: $0.scope, url: $0.url) }).isEmpty && remainingMods.filter({ matches($0.name, scope: $0.scope == "Across Bowser" ? "browser" : "site", url: "https://" + $0.scope) }).isEmpty {
-                        ContentUnavailableView("No matching mods", systemImage: "magnifyingglass", description: Text("Try a different search or filter."))
+                    if listedProjects.isEmpty && remainingMods.isEmpty {
+                        ContentUnavailableView(historyKind.wrappedValue == "task" ? "Do something with this page" : "Make Bowser yours", systemImage: "sparkles", description: Text(historyKind.wrappedValue == "task" ? "Run a task once. Its results and saved files will be here." : "Create a mod to change how a website or your browser works."))
+                    } else if listedProjects.isEmpty && remainingMods.filter({ matches($0.name, scope: $0.scope == "Across Bowser" ? "browser" : "site", url: "https://" + $0.scope) }).isEmpty {
+                        ContentUnavailableView("No matching results", systemImage: "magnifyingglass", description: Text("Try a different search or filter."))
                     }
                 }.frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -651,7 +662,11 @@ struct ModSmithScreen: View {
     }
     private func projectMenu(_ project: ModSmithProject) -> some View {
         Menu {
-            if !model.isSiteApp && profileServices.profiles.count > 1 {
+            if project.isTask {
+                Button("Run again on current page") { model.action("run_again", project: project.id) }
+                Button("Make reusable…") { model.action("make_reusable", project: project.id) }
+            }
+            if !project.isTask && !model.isSiteApp && profileServices.profiles.count > 1 {
                 Menu("Copy to profile") {
                     ForEach(profileServices.profiles.filter { $0.id != model.snapshot.workspace_profile?.id }, id: \.id) { profile in
                         Button(profile.name) { model.action("copy", project: project.id, path: profile.id) }
@@ -662,7 +677,7 @@ struct ModSmithScreen: View {
                 Button("Undo last change") { model.action("undo", project: project.id) }
                     .help("Restores mod files. Website actions and saved data stay as they are.")
             }
-            Button("Delete mod…", role: .destructive) { deletingProject = project.id }
+            Button(project.isTask ? "Delete history…" : "Delete mod…", role: .destructive) { deletingProject = project.id }
         } label: { Image(systemName: "ellipsis") }
             .menuStyle(.borderlessButton).menuIndicator(.hidden).frame(width: 24).disabled(model.snapshot.busy)
     }
@@ -724,7 +739,7 @@ struct ModSmithScreen: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Button("All mods", systemImage: "chevron.left") { composerFocused = false; model.action("overview") }.buttonStyle(.plain).foregroundStyle(.secondary)
+            Button("Tasks & Mods", systemImage: "chevron.left") { composerFocused = false; model.action("overview") }.buttonStyle(.plain).foregroundStyle(.secondary)
             if let project = model.project {
                 HStack(spacing: 12) {
                     modIcon(project.favicon, fallback: project.scope == "browser" ? "macwindow" : "globe")
@@ -741,8 +756,17 @@ struct ModSmithScreen: View {
                     projectMenu(project)
                 }
             } else {
-                Text("What would you change?").font(.title.weight(.semibold))
-                if model.isSiteApp { Label("Only this app", systemImage: "app") }
+                Text("What would you like to do?").font(.title.weight(.semibold))
+                Picker("Keep this request", selection: Binding(get: { model.requestKind }, set: { model.action("choose_kind", path: $0) })) {
+                    Text("Run once").tag("task")
+                    Text("Keep as a mod").tag("mod")
+                }.pickerStyle(.segmented).labelsHidden().frame(width: 320).accessibilityIdentifier("request-kind")
+                if model.requestKind == "task" {
+                    Label(URL(string: model.targetURL)?.host ?? "Open a page to start", systemImage: "doc")
+                        .font(.callout).foregroundStyle(.secondary)
+                    Text("Work on this tab now. Temporary page changes last until navigation or a site refresh.")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else if model.isSiteApp { Label("Only this app", systemImage: "app") }
                 else { ModScopeCards(choice: model.scopeChoice) }
             }
         }.padding(20).frame(maxWidth: .infinity, alignment: .leading)
@@ -827,8 +851,30 @@ struct ModSmithScreen: View {
                             Text("Describe the next change below. Your existing files will be refined in place.").foregroundStyle(.secondary)
                         }
                         ForEach(project.turns) { turn in turnView(turn).id(turn.id) }
+                        if let files = project.artifacts, !files.isEmpty {
+                            VStack(alignment: .leading, spacing: 10) {
+                                Text("Saved files").font(.headline)
+                                ForEach(files) { file in
+                                    HStack {
+                                        Image(systemName: "doc")
+                                        VStack(alignment: .leading, spacing: 3) {
+                                            Text(file.name).font(.callout.weight(.medium))
+                                            Text(ByteCountFormatter.string(fromByteCount: Int64(file.bytes), countStyle: .file)).font(.caption).foregroundStyle(.secondary)
+                                        }
+                                        Spacer()
+                                        Button("Show in Finder") { model.action("reveal_file", path: file.path) }
+                                    }.padding(12).background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 10))
+                                }
+                            }
+                        }
+                        if project.isTask && project.status == "active" {
+                            HStack {
+                                Button("Run again on current page") { model.action("run_again", project: project.id) }
+                                Button("Make reusable…") { model.action("make_reusable", project: project.id) }
+                            }.disabled(model.snapshot.busy)
+                        }
                         if project.canRetry {
-                            Text("Your request is saved. Try again to build the mod; you don’t need to retype it.")
+                            Text(project.isTask ? "Your progress is saved. Resume to continue the task." : "Your request is saved. Try again to build the mod; you don’t need to retype it.")
                                 .font(.callout).foregroundStyle(.secondary)
                         }
                         if project.status == "interrupted" || project.status == "restored" {
@@ -837,7 +883,7 @@ struct ModSmithScreen: View {
                     } else {
                         VStack(alignment: .leading, spacing: 12) {
                             Text("START WITH AN IDEA").font(.system(size: 10, weight: .semibold)).tracking(1.5).foregroundStyle(.secondary)
-                            ForEach(["Hide distractions and leave only the main content", "Make this page easier to read"], id: \.self) { example in
+                            ForEach(model.requestKind == "task" ? ["Export the table on this page as CSV", "Make this page easier to read"] : ["Always hide distractions on this site", "Add a button to export tables as CSV"], id: \.self) { example in
                                 Button { model.draft = example; composerFocused = true } label: {
                                     HStack(spacing: 12) {
                                         Image(systemName: "sparkles").foregroundStyle(.purple)
@@ -873,7 +919,7 @@ struct ModSmithScreen: View {
     }
 
     private func turnView(_ turn: ModSmithTurn) -> some View {
-        ModSmithTurnCard(turn: turn)
+        ModSmithTurnCard(turn: turn, assistantName: model.project?.isTask == true ? "Bowser" : "ModSmith")
     }
 
     @ViewBuilder private var activeBuild: some View {
@@ -905,7 +951,7 @@ struct ModSmithScreen: View {
                 Text(error).font(.caption).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
             }
             if let notice = model.snapshot.notice { Text(notice).foregroundStyle(.secondary) }
-            TextField(model.project == nil ? "Describe what you want to change…" : "What should we change next?", text: Binding(get: { model.draft }, set: { model.draft = $0 }), axis: .vertical)
+            TextField(model.requestKind == "task" ? "What would you like me to do?" : model.project == nil ? "Describe what you want to change…" : "What should we change next?", text: Binding(get: { model.draft }, set: { model.draft = $0 }), axis: .vertical)
                 .textFieldStyle(.plain).lineLimit(3...6).focused($composerFocused)
                 .padding(13).background(.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 12))
                 .overlay(RoundedRectangle(cornerRadius: 10).stroke(.quaternary))
@@ -920,7 +966,7 @@ struct ModSmithScreen: View {
                     }
                 }
                 if model.snapshot.busy {
-                    Button("Stop build", systemImage: "stop.fill", role: .destructive) {
+                    Button(model.snapshot.projects.first(where: { $0.status == "working" })?.isTask == true ? "Stop task" : "Stop build", systemImage: "stop.fill", role: .destructive) {
                         model.action("cancel", project: model.snapshot.running_project ?? model.snapshot.projects.first(where: { $0.status == "working" })?.id)
                     }
                     .buttonStyle(.borderedProminent).tint(.red).fixedSize()
@@ -928,7 +974,7 @@ struct ModSmithScreen: View {
                     .help(model.snapshot.canStop ? "Stop generation, verification and repairs" : "A build is running in another app window. Stop it there.")
                     .accessibilityIdentifier("modsmith-stop-build")
                 } else {
-                    Button(model.project == nil ? "Create mod" : "Make changes", systemImage: "arrow.up") { model.submit() }
+                    Button(model.requestKind == "task" ? "Run task" : model.project == nil ? "Create mod" : "Make changes", systemImage: "arrow.up") { model.submit() }
                         .buttonStyle(.borderedProminent).keyboardShortcut(.return, modifiers: .command)
                         .disabled(model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }

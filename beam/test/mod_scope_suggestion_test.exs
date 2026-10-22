@@ -20,4 +20,13 @@ defmodule BowserBrain.ModScopeSuggestionTest do
     assert Scope.decide(nil, "example.com", no_call) == "unclear"
     assert Scope.decide(String.duplicate("x", 8001), "example.com", no_call) == "unclear"
   end
+  test "intent is independent of scope and uncertain intent defaults to a one-off task" do
+    for {intent, confidence, expected} <- [{"mod", 0.95, "mod"}, {"task", 0.95, "task"}, {"mod", 0.2, "task"}, {"unknown", 1, "task"}] do
+      evaluate = fn _, _ -> {:ok, %{"answers" => %{
+        "scope" => %{"choice" => "site", "confidence" => 0.9},
+        "kind" => %{"choice" => intent, "confidence" => confidence}}}} end
+      assert Scope.decisions("Export this table", "example.com", evaluate) == %{choice: "site", kind: expected}
+    end
+  end
+
 end
