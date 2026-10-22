@@ -2,6 +2,20 @@ import AppKit
 import SwiftUI
 import BowserSurfaceKit
 
+struct PaletteRequest {
+    let draft: String
+    let kind: String
+    let start: Bool
+
+    init?(command: String) {
+        let parts = command.split(maxSplits: 1, whereSeparator: \.isWhitespace)
+        guard let name = parts.first, ["task", "new-task", "do", "do+", "new-mod"].contains(name) else { return nil }
+        draft = parts.count == 2 ? String(parts[1]).trimmingCharacters(in: .whitespacesAndNewlines) : ""
+        kind = ["task", "new-task"].contains(name) ? "task" : "mod"
+        start = !name.hasPrefix("new-") && !draft.isEmpty
+    }
+}
+
 @MainActor enum PaletteSuggestions {
     typealias TabCandidate = CommandPaletteState.TabCandidate
     typealias Result = CommandPaletteState.Result
@@ -59,15 +73,16 @@ import BowserSurfaceKit
         let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
         if text.hasPrefix(":"), text.contains(where: \.isWhitespace) { return [] }
         let needle = (text.hasPrefix(":") ? String(text.dropFirst()) : text).lowercased()
-        var commands = commands
-        commands["do"] = "Create a mod"
-        commands["do+"] = "Create a mod"
+        let commands = commandLabels(commands)
         return commands.keys.sorted().filter { name in
-            if needle.isEmpty { return ["settings", "mods"].contains(name) }
+            if needle.isEmpty { return ["settings", "mods", "task"].contains(name) }
             return name.lowercased().hasPrefix(needle) || (!text.hasPrefix(":") && (commands[name] ?? "").localizedCaseInsensitiveContains(needle))
         }.prefix(5).map { Result(tab: nil, query: ":" + $0) }
     }
 
+    static func commandLabels(_ commands: [String: String]) -> [String: String] {
+        commands.merging(["task": "Run a task…", "do": "Create a mod…", "do+": "Create a mod…"]) { _, builtIn in builtIn }
+    }
 }
 
 @MainActor final class CommandPaletteRenderer: NSVisualEffectView, NSTextFieldDelegate, NSTableViewDataSource, NSTableViewDelegate, BrowserScreenActivating {
@@ -77,6 +92,7 @@ import BowserSurfaceKit
     private let hint = NSTextField(labelWithString: "")
     private let table = NSTableView()
     private let createMod = NSButton(title: "Create a mod…", target: nil, action: nil)
+    private let runTask = NSButton(title: "Run a task…", target: nil, action: nil)
     private let footer = NSTextField(labelWithString: "↑ ↓  Navigate      ↵  Open      esc  Dismiss")
     private let scroll = NSScrollView()
     private var scopeCards: NSHostingView<ModScopeCards>!
@@ -175,10 +191,21 @@ import BowserSurfaceKit
         createMod.translatesAutoresizingMaskIntoConstraints = false
         createMod.setAccessibilityIdentifier("palette-create-mod")
         effect.addSubview(createMod)
+        runTask.bezelStyle = .inline
+        runTask.image = NSImage(systemSymbolName: "play.circle", accessibilityDescription: nil)
+        runTask.imagePosition = .imageLeading
+        runTask.target = self
+        runTask.action = #selector(runTaskClicked)
+        runTask.translatesAutoresizingMaskIntoConstraints = false
+        runTask.setAccessibilityIdentifier("palette-run-task")
+        runTask.toolTip = "Run once on this page. You can also type :task followed by your request."
+        effect.addSubview(runTask)
         NSLayoutConstraint.activate([
             createMod.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
             createMod.centerYAnchor.constraint(equalTo: footer.centerYAnchor),
-            footer.trailingAnchor.constraint(lessThanOrEqualTo: createMod.leadingAnchor, constant: -16),
+            runTask.trailingAnchor.constraint(equalTo: createMod.leadingAnchor, constant: -12),
+            runTask.centerYAnchor.constraint(equalTo: footer.centerYAnchor),
+            footer.trailingAnchor.constraint(lessThanOrEqualTo: runTask.leadingAnchor, constant: -16),
             footer.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 18),
             footer.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -11),
         ])
@@ -226,11 +253,12 @@ import BowserSurfaceKit
     if let prompt = modPrompt { model.modScope.update(prompt) } else { model.modScope.cancel() }
     updateMode()
   }
-  private var modPrompt: String? {
-    let parts = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: " ", maxSplits: 1)
-    guard let command = parts.first, [":do", ":do+"].contains(String(command)) else { return nil }
-    return parts.count == 2 ? String(parts[1]) : ""
+  private var request: PaletteRequest? {
+    let text = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard text.hasPrefix(":") else { return nil }
+    return PaletteRequest(command: String(text.dropFirst()))
   }
+  private var modPrompt: String? { request.flatMap { $0.kind == "mod" ? $0.draft : nil } }
 
   func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
     if selector == #selector(NSResponder.cancelOperation(_:)) {
@@ -264,7 +292,7 @@ import BowserSurfaceKit
 
     private func refreshResults() {
         if modPrompt == nil && !field.stringValue.hasPrefix(":") { model.searchHistory(field.stringValue) }
-        results = modPrompt != nil ? [] : PaletteSuggestions.results(query: field.stringValue, tabs: model.tabs(), profile: model.profile, active: model.active, commands: model.commands())
+        results = request != nil ? [] : PaletteSuggestions.results(query: field.stringValue, tabs: model.tabs(), profile: model.profile, active: model.active, commands: model.commands())
         if modPrompt == nil && !field.stringValue.hasPrefix(":") {
             let openURLs = Set(results.compactMap { $0.tab?.url })
             let history = model.historyResults.filter { !openURLs.contains($0.url) }.prefix(3).map { Result(history: $0, query: field.stringValue) }
@@ -275,7 +303,8 @@ import BowserSurfaceKit
         if !results.isEmpty { table.selectRowIndexes(IndexSet(integer: min(model.selected, results.count - 1)), byExtendingSelection: false) }
         scroll.isHidden = results.isEmpty
         scopeCards.isHidden = modPrompt == nil
-        createMod.isHidden = modPrompt != nil
+        createMod.isHidden = request != nil
+        runTask.isHidden = request != nil
         let width = max(200, bounds.width > 0 ? bounds.width - 70 : 570)
         let text = field.stringValue.isEmpty ? " " : field.stringValue
         let measured = (text as NSString).boundingRect(with: NSSize(width: width, height: .greatestFiniteMagnitude), options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: [.font: NSFont.systemFont(ofSize: 17)])
@@ -292,6 +321,10 @@ import BowserSurfaceKit
     private func updateFooter() {
         let selected = results.indices.contains(table.selectedRow) ? results[table.selectedRow] : nil
         let action = selected?.tab != nil ? "Switch tab" : selected?.query.hasPrefix(":") == true ? "Run action" : "Open"
+        if request?.kind == "task" {
+            footer.stringValue = model.modScope.host != nil ? "This page only · ↵ Run once" : "Open a website to run a task"
+            return
+        }
         if modPrompt != nil {
             footer.stringValue = model.modScope.valid ? "Choose where it applies · ↵ Create mod" : "Choose Across Bowser, or open a website"
             return
@@ -302,6 +335,11 @@ import BowserSurfaceKit
         let draft = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         hide()
         model.command("new-mod " + draft)
+    }
+    @objc private func runTaskClicked() {
+        let draft = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        hide()
+        model.command("new-task " + draft)
     }
     @objc private func resultClicked() {
         guard results.indices.contains(table.clickedRow) else { return }
@@ -319,7 +357,7 @@ import BowserSurfaceKit
     let cell = NSTableCellView()
     let command = result.tab == nil && result.query.hasPrefix(":") ? String(result.query.dropFirst()) : nil
     let navigating = result.query.contains("://") || (result.query.contains(".") && !result.query.contains(" ")) || result.query.hasPrefix("/")
-    let label = result.history?.title ?? command.flatMap { model.commands()[$0] } ?? (result.tab != nil ? result.title : navigating ? "Go to \(result.query)" : "Search \(SearchEngine.selected().title) for “\(result.query)”")
+    let label = result.history?.title ?? command.flatMap { PaletteSuggestions.commandLabels(model.commands())[$0] } ?? (result.tab != nil ? result.title : navigating ? "Go to \(result.query)" : "Search \(SearchEngine.selected().title) for “\(result.query)”")
     let title = NSTextField(labelWithString: label)
     title.font = .systemFont(ofSize: 13, weight: .medium)
     title.lineBreakMode = .byTruncatingTail

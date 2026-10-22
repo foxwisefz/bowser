@@ -103,7 +103,7 @@ final class CommandBarTests: XCTestCase {
     let commands = ["settings": "Settings", "mods": "Manage mods", "reload": "Reload page"]
     XCTAssertEqual(PaletteSuggestions.actions(query: ":set", commands: commands).map(\.query), [":settings"])
     XCTAssertEqual(PaletteSuggestions.actions(query: "reload", commands: commands).map(\.query), [":reload"])
-    XCTAssertEqual(PaletteSuggestions.actions(query: "", commands: commands).count, 2)
+    XCTAssertEqual(PaletteSuggestions.actions(query: "", commands: commands).map(\.query), [":mods", ":settings", ":task"])
   }
 
   @MainActor func testExactActionIsSelectedAndEnterRunsIt() throws {
@@ -189,10 +189,107 @@ final class CommandBarTests: XCTestCase {
     state.dismiss = { dismissed = true }
     let renderer = CommandPaletteRenderer(state: state)
     renderer.activateScreen()
-    let button = try XCTUnwrap(renderer.subviews.compactMap { $0 as? NSButton }.first)
+    let button = try XCTUnwrap(renderer.subviews.compactMap { $0 as? NSButton }.first { $0.accessibilityIdentifier() == "palette-create-mod" })
     button.performClick(nil)
     XCTAssertTrue(dismissed)
     XCTAssertEqual(command, "new-mod Add a notes sidebar")
+  }
+
+  func testTaskCommandsDistinguishDraftsFromImmediateRunsAndPreserveModCommands() throws {
+    for (command, kind, start, draft) in [
+      ("task Export this table\nas CSV", "task", true, "Export this table\nas CSV"),
+      ("task", "task", false, ""),
+      ("new-task Export this table", "task", false, "Export this table"),
+      ("do Add a sidebar", "mod", true, "Add a sidebar"),
+      ("do+ Change the sidebar", "mod", true, "Change the sidebar"),
+      ("new-mod Add a sidebar", "mod", false, "Add a sidebar")
+    ] {
+      let request = try XCTUnwrap(PaletteRequest(command: command))
+      XCTAssertEqual(request.kind, kind)
+      XCTAssertEqual(request.start, start)
+      XCTAssertEqual(request.draft, draft)
+    }
+    for command in ["tasks", "taskboard open", "settings", "https://example.com/task"] {
+      XCTAssertNil(PaletteRequest(command: command))
+    }
+  }
+
+  @MainActor func testTaskActionIsDiscoverableAndTaskPromptSubmitsWithoutSearch() throws {
+    for query in ["task", ":task", ":task Export this table as CSV"] {
+      let state = CommandPaletteState()
+      state.modScope.reset(url: "https://example.com/report")
+      state.query = query
+      var command: String?
+      state.command = { command = $0 }
+      state.choose = { _ in XCTFail("A task must not navigate or search") }
+      let renderer = CommandPaletteRenderer(state: state)
+      renderer.activateScreen()
+      if query == "task" {
+        XCTAssertEqual(state.results.first?.query, ":task")
+        let cell = try XCTUnwrap(renderer.tableView(NSTableView(), viewFor: nil, row: 0) as? NSTableCellView)
+        XCTAssertEqual(cell.textField?.stringValue, "Run a task…")
+      } else {
+        XCTAssertTrue(state.results.isEmpty)
+      }
+      let field = try XCTUnwrap(renderer.subviews.compactMap { $0 as? NSTextField }.first { $0.isEditable })
+      XCTAssertTrue(field.sendAction(field.action, to: field.target))
+      XCTAssertEqual(command, query.hasPrefix(":") ? String(query.dropFirst()) : query)
+    }
+  }
+
+  @MainActor func testRunTaskButtonPreservesTypedRequestAndNavigationDefault() throws {
+    let state = CommandPaletteState()
+    state.query = "Export this table as CSV"
+    var command: String?
+    var dismissed = false
+    state.command = { command = $0 }
+    state.dismiss = { dismissed = true }
+    let renderer = CommandPaletteRenderer(state: state)
+    renderer.frame.size = NSSize(width: 640, height: 146)
+    renderer.activateScreen()
+    XCTAssertEqual(state.results.first?.query, state.query)
+    let button = try XCTUnwrap(renderer.subviews.compactMap { $0 as? NSButton }.first { $0.accessibilityIdentifier() == "palette-run-task" })
+    XCTAssertFalse(button.isHidden)
+    if let path = ProcessInfo.processInfo.environment["BOWSER_TASK_COMMAND_RENDER"] {
+      renderer.layoutSubtreeIfNeeded()
+      let bitmap = try XCTUnwrap(renderer.bitmapImageRepForCachingDisplay(in: renderer.bounds))
+      renderer.cacheDisplay(in: renderer.bounds, to: bitmap)
+      try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: URL(fileURLWithPath: path))
+    }
+    button.performClick(nil)
+    XCTAssertTrue(dismissed)
+    XCTAssertEqual(command, "new-task Export this table as CSV")
+  }
+
+  @MainActor func testCommandBarTaskUsesPageCapturedWhenPaletteOpened() throws {
+    let controller = BrowserWindowController(profile: .defaultProfile)
+    let workspace = ModSmithWindow.shared.model
+    let originalSend = workspace.send
+    let originalConnected = workspace.connected
+    defer {
+      CommandBar.shared.hide()
+      controller.window?.close()
+      NSApp.windows.first { $0.title == "Tasks & Mods" }?.close()
+      workspace.send = originalSend
+      workspace.connected = originalConnected
+    }
+    workspace.send = { _ in }
+    workspace.connected = { true }
+    let target = try XCTUnwrap(controller.activeTab)
+    target.restore(urlString: "https://example.com/report")
+    CommandBar.shared.show(for: controller)
+    // An unrelated tab change must not redirect the pending request.
+    controller.openTab().restore(urlString: "https://other.test/")
+    let panel = try XCTUnwrap(NSApp.windows.first { $0 is NSPanel && ($0 as? BrowserOwnedPanel)?.browserOwner === controller })
+    func findButton(_ view: NSView) -> NSButton? {
+      if let button = view as? NSButton, button.accessibilityIdentifier() == "palette-run-task" { return button }
+      return view.subviews.lazy.compactMap(findButton).first
+    }
+    try XCTUnwrap(findButton(try XCTUnwrap(panel.contentView))).performClick(nil)
+    XCTAssertEqual(workspace.requestKind, "task")
+    XCTAssertEqual(workspace.targetWebview, target.webviewId)
+    XCTAssertEqual(workspace.targetURL, "https://example.com/report")
+    XCTAssertNil(workspace.snapshot.selected)
   }
 
   @MainActor func testChoosingTabPreservesWebviewAndDoesNotOpenDuplicate() async throws {

@@ -72,6 +72,8 @@ they are not required for this source-build workflow.
 
 A browser window appears. `⌘K` opens the command bar: type a URL, or a
 `:command`. Useful ones out of the box: `:settings`, `:panels`, `:do`.
+For a one-off page task, type `:task <request>` and press Return. Or type your
+request and click **Run a task…** to review it in **Tasks & Mods** first.
 Press `⌘K` again while Bowser’s command bar is open to send `⌘K` to the webpage and open its own command menu, when supported.
 Use `⌘L` to view the current URL, selected for copying or editing, or `⌘⇧C` to copy it directly. Hover over the page title to see the URL.
 

@@ -70,14 +70,14 @@ import BowserSurfaceKit
         state.choose = { [weak self] in self?.choose($0) }
         state.searchHistory = { [weak self] query in self?.searchHistory(query) }
         state.command = { [weak self] text in
-            let modCommand = text == "do" || text == "do+" || text.hasPrefix("do ") || text.hasPrefix("do+ ")
-            if text.hasPrefix("new-mod ") || modCommand {
+            if let request = PaletteRequest(command: text) {
                 let workspace = ModSmithWindow.shared
                 workspace.model.targetWebview = self?.state.active
                 workspace.model.targetURL = self?.targetURL ?? ""
                 workspace.show(captureTarget: false)
-                let draft = modCommand ? text.split(separator: " ", maxSplits: 1).dropFirst().first.map(String.init) ?? "" : String(text.dropFirst("new-mod ".count))
-                workspace.model.prepareNewDraft(draft, scope: self?.state.modScope.selected ?? "site", start: modCommand && !draft.isEmpty)
+                workspace.model.prepareNewDraft(request.draft,
+                    scope: request.kind == "task" ? "site" : self?.state.modScope.selected ?? "site",
+                    kind: request.kind, start: request.start)
                 return
             }
             ChromeSurface.emit(["op": "event", "event": "omnibar_command", "text": text,

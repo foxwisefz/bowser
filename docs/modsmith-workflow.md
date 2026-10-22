@@ -135,6 +135,11 @@ Results claiming an external dependency also receive independent review before s
 
 ## One-off page tasks
 
+**⌘K → Run a task…** opens a Run once draft with the text already typed and
+the page where the command bar opened. Type `:task <request>` and press Return
+to run directly; bare `:task` opens an empty draft. Ordinary searches retain
+their navigation behavior, and `:do` / **Create a mod…** select a reusable mod.
+
 **Tasks & Mods → New request** defaults to **Run once**. The editable intent
 suggestion can recommend **Keep as a mod** for reusable behavior. Explicit choices
 win and unavailable suggestions leave Run once selected. Existing mods and the
