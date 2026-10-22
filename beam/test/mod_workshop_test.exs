@@ -843,13 +843,103 @@ defmodule BowserBrain.ModWorkshopTest do
   test "task success requires review and final envelopes cannot install code" do
     event("submit", %{"text" => "Inspect this page", "kind" => "task"})
     assert_receive {:runner, pid, _, _, _, _}, 1000
-    state = complete(pid, [], %{"status" => "active"})
+    state = complete(pid, [], %{"status" => "active", "summary" => "Draft answer with source links and three detailed recommendations."})
     assert hd(state.data["projects"])["status"] == "partial"
+    assert hd(state.data["projects"])["summary"] =~ "Draft answer with source links and three detailed recommendations."
+    refute hd(state.data["projects"])["summary"] == "Draft answer with source links and three detailed recommendations."
     event("submit", %{"text" => "Inspect again", "kind" => "task"})
     assert_receive {:runner, pid, _, _, _, _}, 1000
     state = complete(pid, [file("body{}")])
     assert hd(state.data["projects"])["status"] == "failed"
     assert ModRevision.read("sites/example.com/reading.css") == nil
+  end
+
+  test "task activity follows actual operations and folds consecutive duplicates" do
+    event("submit", %{"text" => "Summarize this page", "kind" => "task"})
+    assert_receive {:runner, _, token, _, _, _}, 1000
+    for line <- ["Using page_html…", "Using page_eval…", "Using page_eval…", "Checking the task result…"] do
+      send(ModWorkshop, {:progress, token, line})
+    end
+    state = :sys.get_state(ModWorkshop)
+    assert state.progress == ["Reading the page…", "Working with the page…", "Checking the task result…"]
+    assert ModWorkshop.snapshot(state, "main").stage == List.last(state.progress)
+    event("cancel", %{"run" => token})
+    event("submit", %{"text" => "Create a reusable control", "kind" => "mod"})
+    assert_receive {:runner, _, mod_token, _, _, _}, 1000
+    send(ModWorkshop, {:progress, mod_token, "Using page_eval…"})
+    assert :sys.get_state(ModWorkshop).progress == ["Using page_eval…"]
+  end
+
+  test "text task continues with page tools and completes without files or installed-mod review", %{root: root} do
+    File.write!(Path.join(root, "registration.json"), JSON.encode!(%{"telemetryToken" => "fixture-token"}))
+    owner = self()
+    old_verifier = Application.get_env(:bowser_brain, :modsmith_verifier)
+    Application.delete_env(:bowser_brain, :modsmith_verifier)
+    Application.put_env(:bowser_brain, :modsmith_runner, &BowserBrain.DirectAgent.run/4)
+    on_exit(fn ->
+      Application.delete_env(:bowser_brain, :ai_transport)
+      if old_verifier, do: Application.put_env(:bowser_brain, :modsmith_verifier, old_verifier)
+    end)
+    answer = "Start with small estimates.\n\nCompare them with actual results and record why they differed."
+    Application.put_env(:bowser_brain, :ai_transport, fn _, _, body, _ ->
+      text = if body["tools"] == [] do
+        assert body["instructions"] == BowserBrain.PageTask.review_instructions()
+        context = body["input"] |> hd() |> Map.fetch!("content") |> hd() |> Map.fetch!("text") |> JSON.decode!()
+        assert context["kind"] == "task"
+        assert context["candidate"]["summary"] == answer
+        assert context["task_files"] == []
+        send(owner, :reviewed_text_task)
+        JSON.encode!(%{verified: true, reason: "The answer reflects the observed source", evidence: [1]})
+      else
+        assert Enum.sort(Enum.map(body["tools"], & &1["name"])) == Enum.sort(BowserBrain.PageTask.tools())
+        refute body["instructions"] =~ "ModSmith"
+        n = Process.get(:text_task_calls, 0)
+        Process.put(:text_task_calls, n + 1)
+        if n == 0 do
+          :ok = GenServer.call(ModWorkshop, {:tool_receipt, Process.get(:modsmith_run), "page_html", %{}, %{ok: true, html: "Start small. Compare estimates with actuals and track the reasons for differences."}})
+          JSON.encode!(%{status: "partial", summary: "Start with small estimates.", files: []})
+        else
+          assert n == 1
+          refute List.last(body["input"])["content"] =~ "mod_diagnostics"
+          JSON.encode!(%{status: "active", summary: answer, files: []})
+        end
+      end
+      {:ok, %{"output" => [%{"type" => "message", "content" => [%{"type" => "output_text", "text" => text}]}]}}
+    end)
+    event("submit", %{"text" => "Synthesize the advice on this page", "kind" => "task"})
+    await(fn -> :sys.get_state(ModWorkshop).run == nil end)
+    assert_received :reviewed_text_task
+    [task] = ModRevision.load()["projects"]
+    assert task["status"] == "active"
+    assert task["summary"] == answer
+    assert Map.get(task, "artifacts", []) == []
+    [visible] = ModWorkshop.snapshot(:sys.get_state(ModWorkshop), "main").projects
+    assert visible["files"] == []
+  end
+
+  test "a time-limited task keeps its drafted answer and pause reason", %{root: root} do
+    File.write!(Path.join(root, "registration.json"), JSON.encode!(%{"telemetryToken" => "fixture-token"}))
+    previous_budget = Application.get_env(:bowser_brain, :modsmith_work_ms)
+    Application.put_env(:bowser_brain, :modsmith_work_ms, 0)
+    Application.put_env(:bowser_brain, :modsmith_runner, &BowserBrain.DirectAgent.run/4)
+    on_exit(fn ->
+      Application.delete_env(:bowser_brain, :ai_transport)
+      if previous_budget, do: Application.put_env(:bowser_brain, :modsmith_work_ms, previous_budget),
+        else: Application.delete_env(:bowser_brain, :modsmith_work_ms)
+    end)
+    draft = String.duplicate("Draft section with source references.\n\n", 40)
+    Application.put_env(:bowser_brain, :ai_transport, fn _, _, body, _ ->
+      assert body["tools"] == []
+      assert body["instructions"] == BowserBrain.PageTask.finish_instruction("this run reached its time limit")
+      {:ok, %{"output" => [%{"type" => "message", "content" => [%{"type" => "output_text",
+        "text" => JSON.encode!(%{status: "partial", summary: draft, notes: "Conclusion remains unfinished", files: []})}]}]}}
+    end)
+    event("submit", %{"text" => "Write a detailed draft based on this page", "kind" => "task"})
+    await(fn -> :sys.get_state(ModWorkshop).run == nil end)
+    [task] = ModRevision.load()["projects"]
+    assert task["status"] == "partial"
+    assert task["summary"] == draft
+    assert List.last(task["turns"])["pause_reason"] == "time_limit"
   end
 
   defp event(action, values) do

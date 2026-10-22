@@ -344,7 +344,10 @@ defmodule BowserBrain.ModWorkshop do
   end
 
   def handle_info({:progress, token, line}, %{run: %{token: token}} = state) do
-    state = %{state | progress: Enum.take(state.progress ++ [line], -80)}
+    task? = Map.get(state.run, :kind) == "task"
+    line = if task?, do: PageTask.progress(line), else: line
+    progress = if task? and List.last(state.progress) == line, do: state.progress, else: Enum.take(state.progress ++ [line], -80)
+    state = %{state | progress: progress}
     publish(state)
     {:noreply, state}
   end
@@ -832,7 +835,7 @@ defmodule BowserBrain.ModWorkshop do
 
       action == "continue" and valid and state.run == nil and
           project["status"] in ["partial", "needs_help", "failed", "interrupted"] ->
-        request = if PageTask.task?(project), do: "Continue the unfinished task from saved progress. Inspect current page state and task_files before repeating actions. Complete only the remaining requested work, and verify the result.", else: "Continue this unfinished mod. Preserve the original goal and existing work. " <>
+        request = if PageTask.task?(project), do: "Continue the unfinished task from saved progress. Keep any drafted answer. Inspect current page state before repeating actions, and use task_files only if exports were saved. Complete only the remaining requested work, and check the result.", else: "Continue this unfinished mod. Preserve the original goal and existing work. " <>
           "Inspect the current files and the previous result's limitations, fix what failed, " <>
           "and verify the requested behavior on the page before reporting success."
         request = if get_in(project, ["next_step", "action"]) == "resume",
@@ -1428,7 +1431,7 @@ defmodule BowserBrain.ModWorkshop do
       _ -> false
     end
     {status, summary, notes} = if status == "active" and not verified,
-      do: {"partial", "The requested behavior is not verified yet.", "Live outcome verification is still required. " <> notes},
+      do: {"partial", BowserBrain.ModVerification.unverified_summary(summary, if(task?, do: "task", else: "mod")), (if(task?, do: "The result still needs checking. ", else: "Live outcome verification is still required. ")) <> notes},
       else: {status, summary, notes}
 
     fault = Map.get(state.run, :script_fault, false)
@@ -1712,13 +1715,7 @@ defmodule BowserBrain.ModWorkshop do
   end
 
   defp task_stage(progress) do
-    line = List.last(progress) || ""
-    cond do
-      String.contains?(line, "save_task_file") -> "Saving the export"
-      String.contains?(line, "task_files") -> "Checking saved files"
-      String.contains?(line, "Continuing") -> "Continuing from saved work"
-      true -> "Working on the page"
-    end
+    PageTask.progress(List.last(progress) || "Starting your task…")
   end
 
   def stage(progress) do

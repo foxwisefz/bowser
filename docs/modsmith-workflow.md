@@ -135,6 +135,15 @@ Results claiming an external dependency also receive independent review before s
 
 ## One-off page tasks
 
+Task activity describes page work, answer review and file exports in everyday language.
+Repeated identical activity updates are folded together; tool receipts remain in the
+saved execution history. Task continuations and result review use the page-task contract,
+including text answers and writing drafts, rather than installed-mod testing. Review checks
+the requested result against observed evidence and names a specific gap when one remains.
+When a task reaches a run limit or its result cannot be verified, it keeps the drafted
+answer, clearly marked as unfinished or not fully checked. Follow-ups continue the same
+task conversation.
+
 **⌘K → Run a task…** opens a Run once draft with the text already typed and
 the page where the command bar opened. Type `:task <request>` and press Return
 to run directly; bare `:task` opens an empty draft. Ordinary searches retain

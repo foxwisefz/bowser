@@ -168,4 +168,22 @@ defmodule BowserBrain.ModVerificationTest do
       assert {:error, _} = ModVerification.assess(context())
     end
   end
+
+  test "task review failures retain the complete answer as an unverified draft" do
+    answer = String.duplicate("Source-grounded draft paragraph.\n\n", 20)
+    output = JSON.encode!(%{status: "active", summary: answer, files: [], checks: ["Read the page"]})
+    task = context() |> Map.merge(%{kind: "task", installed: false})
+    for response <- [{:error, :timeout}, {:ok, "not JSON"}, {:ok, JSON.encode!(%{verified: true, reason: "Done", evidence: [999]})}] do
+      Application.put_env(:bowser_brain, :modsmith_verifier, fn _ -> response end)
+      assert {:error, reason} = ModVerification.assess(task)
+      refute reason =~ "mod"
+      result = ModVerification.partial(output, reason, "task") |> JSON.decode!()
+      assert result["status"] == "partial"
+      assert result["summary"] =~ answer
+      refute result["summary"] == answer
+      assert result["notes"] == reason
+      assert result["files"] == []
+      assert result["checks"] == ["Read the page"]
+    end
+  end
 end

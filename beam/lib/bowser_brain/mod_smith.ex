@@ -775,16 +775,16 @@ defmodule BowserBrain.ModSmith do
   def run_audit(prompt) do
     if BowserBrain.AI.route() == :cli, do: run_cli_audit(prompt), else: BowserBrain.DirectAgent.audit(prompt)
   end
-  def run_verification(prompt, images \\ []) do
+  def run_verification(prompt, images \\ [], kind \\ "mod") do
     if BowserBrain.AI.route() == :cli do
-      run_cli_audit(prompt, BowserBrain.ModVerification.instructions())
+      run_cli_audit(prompt, BowserBrain.ModVerification.instructions(kind))
     else
       content = [%{"type" => "input_text", "text" => prompt}] ++ Enum.flat_map(images, fn image ->
         [%{"type" => "input_text", "text" => "Image for receipt #{image.id}"},
          %{"type" => "input_image", "image_url" => "data:image/png;base64," <> image.data}]
       end)
       with {:ok, output} <- BowserBrain.DirectAgent.completion(BowserBrain.AI.route(),
-        [%{"role" => "user", "content" => content}], [], BowserBrain.ModVerification.instructions()) do
+        [%{"role" => "user", "content" => content}], [], BowserBrain.ModVerification.instructions(kind)) do
         {:ok, Enum.flat_map(output, &(&1["content"] || [])) |> Enum.map_join("", &(&1["text"] || ""))}
       end
     end
@@ -828,12 +828,14 @@ defmodule BowserBrain.ModSmith do
   defp verified_cli(prompt, resume, progress, app, retries) do
     case run_cli(prompt, resume, progress, app) do
       {session, {:output, output}} = result ->
+        if Process.get(:modsmith_kind) == "task" and BowserBrain.ModVerification.active?(output),
+          do: progress.("Checking the task result…")
         case BowserBrain.ModVerification.check(output, Process.get(:modsmith_run)) do
           :ok -> result
           {:error, reason} when retries < 2 ->
             progress.("Checking the outcome and repairing what remains…")
-            verified_cli(prompt <> "\n" <> BowserBrain.ModVerification.correction(reason), session, progress, app, retries + 1)
-          {:error, reason} -> {session, {:output, BowserBrain.ModVerification.partial(output, reason)}}
+            verified_cli(prompt <> "\n" <> BowserBrain.ModVerification.correction(reason, Process.get(:modsmith_kind, "mod")), session, progress, app, retries + 1)
+          {:error, reason} -> {session, {:output, BowserBrain.ModVerification.partial(output, reason, Process.get(:modsmith_kind, "mod"))}}
         end
       result -> result
     end
@@ -887,7 +889,7 @@ defmodule BowserBrain.ModSmith do
             finish_args =
               [
                 "-p",
-                finish_prompt(),
+                if(Process.get(:modsmith_kind) == "task", do: BowserBrain.PageTask.finish_instruction("this run reached its time limit"), else: finish_prompt()),
                 "--output-format",
                 "stream-json",
                 "--verbose",
@@ -903,7 +905,9 @@ defmodule BowserBrain.ModSmith do
               _ ->
                 {session,
                  {:error,
-                  "timed out after #{div(timeout, 1000)}s — session saved, :do+ to continue"}}
+                  if(Process.get(:modsmith_kind) == "task",
+                    do: "The task reached its time limit. Your progress is saved; resume to continue.",
+                    else: "timed out after #{div(timeout, 1000)}s — session saved, :do+ to continue")}}
             end
 
           {:timeout, _none} ->

@@ -68,8 +68,9 @@ defmodule BowserBrain.DirectAgent do
       "no_progress" -> "the model repeatedly returned unfinished work without another tool action"
     end
     progress.("Saving progress and summarizing unfinished work…")
-    with {:ok, output} <- completion(route, input, [],
-      "The run stopped because #{description}. Make no more tool calls. Return the required JSON envelope, preserving all proposed files. Describe actual changes and checks only. In one or two short summary sentences, say what works and what remains unfinished or untested. The UI separately explains why the run paused; do not invent a time limit or provider outage in the summary. Include the precise next unfinished step and any failed approach to avoid in notes. Do not ask for owner input merely because this run ended. Keep observed checks in checks. Do not mark unverified behavior complete.") do
+    instruction = if task?(), do: BowserBrain.PageTask.finish_instruction(description), else:
+      "The run stopped because #{description}. Make no more tool calls. Return the required JSON envelope, preserving all proposed files. Describe actual changes and checks only. In one or two short summary sentences, say what works and what remains unfinished or untested. The UI separately explains why the run paused; do not invent a time limit or provider outage in the summary. Include the precise next unfinished step and any failed approach to avoid in notes. Do not ask for owner input merely because this run ended. Keep observed checks in checks. Do not mark unverified behavior complete."
+    with {:ok, output} <- completion(route, input, [], instruction) do
       remember(%{"type" => "handoff", "text" => DirectAgentSession.excerpt(text(output))})
       if Enum.any?(output, &(&1["type"] == "function_call")),
         do: {:error, :step_limit}, else: {:ok, verified_or_partial(text(output), Process.get(:modsmith_run))}
@@ -94,28 +95,34 @@ defmodule BowserBrain.DirectAgent do
              route,
              input,
              tools,
-             "You are Bowser ModSmith. Follow the owner request and supplied API contract. Return the required JSON envelope when finished."
+             if(task?(),
+               do: "You are Bowser's page assistant. Complete the one-off task under its supplied contract. Return the requested answer or result in the required JSON envelope.",
+               else: "You are Bowser ModSmith. Follow the owner request and supplied API contract. Return the required JSON envelope when finished.")
            ) do
       calls = Enum.filter(output, &(&1["type"] == "function_call"))
 
       if calls == [] do
         result = text(output)
         remember(%{"type" => "assistant", "text" => DirectAgentSession.excerpt(result)})
+        if task?() and (ModVerification.active?(result) or ModVerification.external_blocker?(result)),
+          do: progress.("Checking the task result…")
         review = ModVerification.check(result, run)
         cond do
           match?({:error, _}, review) and Process.get(:direct_agent_verification_retries, 0) < 2 ->
             {:error, reason} = review
             Process.put(:direct_agent_verification_retries, Process.get(:direct_agent_verification_retries, 0) + 1)
             progress.("Checking the outcome and repairing what remains…")
-            loop(route, input ++ output ++ [%{"role" => "user", "content" => ModVerification.correction(reason)}], tools, progress, steps + 1, run)
+            loop(route, input ++ output ++ [%{"role" => "user", "content" => ModVerification.correction(reason, kind())}], tools, progress, steps + 1, run)
           match?({:error, _}, review) ->
             {:error, reason} = review
-            {:ok, ModVerification.partial(result, reason)}
+            {:ok, ModVerification.partial(result, reason, kind())}
           true ->
             if repairable?(result) and Process.get(:direct_agent_partial_count, 0) < 2 do
               Process.put(:direct_agent_partial_count, Process.get(:direct_agent_partial_count, 0) + 1)
               progress.("Finishing the remaining work…")
-              continuation = %{"role" => "user", "content" => "Continue the remaining implementation and verification now using the available tools. Preserve all pending file changes in your eventual final envelope. Clean up test artifacts. Do not stop just because an earlier tool batch ended. A failed check is a repair task, not an external blocker. Inspect mod_diagnostics for the installed module, diagnose the failed stage, repair and verify again. Zero hidden items is valid when all decisions are keep. If progress actually requires owner input, permission, or an unavailable external dependency, return needs_help with blocker: {kind: owner_decision|permission|external_dependency, detail: concrete evidence and required action}. Do not classify your own implementation errors as external blockers. Clean up temporary fixtures; do not repeatedly propose the same unfinished work."}
+              instruction = if task?(), do: BowserBrain.PageTask.continuation(), else:
+                "Continue the remaining implementation and verification now using the available tools. Preserve all pending file changes in your eventual final envelope. Clean up test artifacts. Do not stop just because an earlier tool batch ended. A failed check is a repair task, not an external blocker. Inspect mod_diagnostics for the installed module, diagnose the failed stage, repair and verify again. Zero hidden items is valid when all decisions are keep. If progress actually requires owner input, permission, or an unavailable external dependency, return needs_help with blocker: {kind: owner_decision|permission|external_dependency, detail: concrete evidence and required action}. Do not classify your own implementation errors as external blockers. Clean up temporary fixtures; do not repeatedly propose the same unfinished work."
+              continuation = %{"role" => "user", "content" => instruction}
               loop(route, input ++ output ++ [continuation], tools, progress, steps + 1, run)
             else
               if repairable?(result),
@@ -178,9 +185,12 @@ defmodule BowserBrain.DirectAgent do
   defp verified_or_partial(result, run) do
     case ModVerification.check(result, run) do
       :ok -> result
-      {:error, reason} -> ModVerification.partial(result, reason)
+      {:error, reason} -> ModVerification.partial(result, reason, kind())
     end
   end
+
+  defp kind, do: Process.get(:modsmith_kind, "mod")
+  defp task?, do: kind() == "task"
 
   defp repairable?(text) do
     clean = text |> String.trim() |> String.replace(~r/^```(?:json)?\s*|\s*```$/u, "")

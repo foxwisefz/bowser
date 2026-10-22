@@ -481,6 +481,10 @@ struct ModSmithScreen: View {
     private var filter: Binding<String> { context.binding("modsFilter", default: "all") }
     private var historyKind: Binding<String> { context.binding("requestHistoryKind", default: "task") }
     private var deletingTask: Bool { model.snapshot.projects.first(where: { $0.id == deletingProject })?.isTask == true }
+    private var runningProject: ModSmithProject? {
+        model.snapshot.projects.first(where: { $0.id == model.snapshot.running_project })
+            ?? model.snapshot.projects.first(where: { $0.status == "working" })
+    }
     private var listedProjects: [ModSmithProject] {
         model.snapshot.projects.filter { ($0.isTask ? "task" : "mod") == historyKind.wrappedValue && matches($0.name, scope: $0.scope, url: $0.url) }
     }
@@ -746,7 +750,7 @@ struct ModSmithScreen: View {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(project.name).font(.title2.weight(.semibold)).lineLimit(2)
                         Text("\(model.snapshot.workspace_profile?.name ?? "This app") · \(project.scopeLabel)").font(.caption).foregroundStyle(.secondary)
-                        Text("Latest request: \(project.statusLabel)").font(.caption).foregroundStyle(.secondary)
+                        Text(project.isTask ? project.statusLabel : "Latest request: \(project.statusLabel)").font(.caption).foregroundStyle(.secondary)
                     }
                     Spacer()
                     if !project.files.isEmpty {
@@ -896,9 +900,9 @@ struct ModSmithScreen: View {
                         }.padding(.vertical, 8)
                     }
                     if !model.snapshot.progress.isEmpty && model.project?.status == "working" {
-                        DisclosureGroup("Activity details", isExpanded: context.binding("showDetails", default: false)) {
+                        DisclosureGroup(model.project?.isTask == true ? "Activity" : "Activity details", isExpanded: context.binding("showDetails", default: false)) {
                             Text(model.snapshot.progress.joined(separator: "\n"))
-                                .font(.system(size: 10, design: .monospaced)).textSelection(.enabled)
+                                .font(model.project?.isTask == true ? .callout : .system(size: 10, design: .monospaced)).textSelection(.enabled)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }.font(.caption).foregroundStyle(.secondary)
                     }
@@ -927,7 +931,7 @@ struct ModSmithScreen: View {
             HStack(spacing: 10) {
                 ProgressView().controlSize(.small)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(model.snapshot.projects.first(where: { $0.status == "working" })?.name ?? "A build is running")
+                    Text(runningProject?.name ?? "Another request is running")
                         .font(.caption.weight(.semibold)).lineLimit(1)
                     Text(model.snapshot.stage).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
@@ -935,7 +939,7 @@ struct ModSmithScreen: View {
                 if let profile = model.snapshot.running_profile {
                     profileIdentity(profile, caption: "Running in")
                 }
-                if let running = model.snapshot.projects.first(where: { $0.status == "working" }) {
+                if let running = runningProject {
                     if running.id != model.snapshot.selected {
                         Button("View") { model.action("select", project: running.id) }
                     }
@@ -951,12 +955,12 @@ struct ModSmithScreen: View {
                 Text(error).font(.caption).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
             }
             if let notice = model.snapshot.notice { Text(notice).foregroundStyle(.secondary) }
-            TextField(model.requestKind == "task" ? "What would you like me to do?" : model.project == nil ? "Describe what you want to change…" : "What should we change next?", text: Binding(get: { model.draft }, set: { model.draft = $0 }), axis: .vertical)
+            TextField(model.requestKind == "task" ? (model.project == nil ? "What would you like me to do?" : "Ask a follow-up…") : model.project == nil ? "Describe what you want to change…" : "What should we change next?", text: Binding(get: { model.draft }, set: { model.draft = $0 }), axis: .vertical)
                 .textFieldStyle(.plain).lineLimit(3...6).focused($composerFocused)
                 .padding(13).background(.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 12))
                 .overlay(RoundedRectangle(cornerRadius: 10).stroke(.quaternary))
             HStack {
-                Text(model.snapshot.busy ? "You can draft the next change." : "⌘ Return to send")
+                Text(model.snapshot.busy ? (model.requestKind == "task" ? "You can draft a follow-up while this runs." : "You can draft the next change.") : "⌘ Return to send")
                     .font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 if let project = model.project {
@@ -966,15 +970,15 @@ struct ModSmithScreen: View {
                     }
                 }
                 if model.snapshot.busy {
-                    Button(model.snapshot.projects.first(where: { $0.status == "working" })?.isTask == true ? "Stop task" : "Stop build", systemImage: "stop.fill", role: .destructive) {
-                        model.action("cancel", project: model.snapshot.running_project ?? model.snapshot.projects.first(where: { $0.status == "working" })?.id)
+                    Button(runningProject?.isTask == true ? "Stop task" : runningProject == nil ? "Stop request" : "Stop build", systemImage: "stop.fill", role: .destructive) {
+                        model.action("cancel", project: model.snapshot.running_project ?? runningProject?.id)
                     }
                     .buttonStyle(.borderedProminent).tint(.red).fixedSize()
                     .disabled(!model.snapshot.canStop)
-                    .help(model.snapshot.canStop ? "Stop generation, verification and repairs" : "A build is running in another app window. Stop it there.")
+                    .help(model.snapshot.canStop ? (runningProject?.isTask == true ? "Stop the task and keep its progress and saved files" : "Stop generation, verification and repairs") : "A request is running in another app window. Stop it there.")
                     .accessibilityIdentifier("modsmith-stop-build")
                 } else {
-                    Button(model.requestKind == "task" ? "Run task" : model.project == nil ? "Create mod" : "Make changes", systemImage: "arrow.up") { model.submit() }
+                    Button(model.requestKind == "task" ? (model.project == nil ? "Run task" : "Send follow-up") : model.project == nil ? "Create mod" : "Make changes", systemImage: "arrow.up") { model.submit() }
                         .buttonStyle(.borderedProminent).keyboardShortcut(.return, modifiers: .command)
                         .disabled(model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }

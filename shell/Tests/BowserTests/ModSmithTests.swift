@@ -86,15 +86,27 @@ final class ModSmithTests: XCTestCase {
     @MainActor func testRenderOneOffTaskWorkspace() async throws {
         guard let directory = ProcessInfo.processInfo.environment["BOWSER_TASK_RENDER"] else { throw XCTSkip("Set BOWSER_TASK_RENDER for task UI previews") }
         _ = NSApplication.shared
-        for state in ["new", "result", "history"] {
+        for state in ["new", "working", "result", "history"] {
             let model = ModSmithModel()
             model.targetURL = "https://example.com/report"
             model.scopeChoice.reset(url: model.targetURL)
             if state != "new" {
-                model.receive(["projects": [taskFixture], "selected": "task", "busy": false, "progress": [], "stage": "Ready"])
+                var fixture = taskFixture
+                if state == "working" {
+                    fixture["status"] = "working"
+                    fixture["turns"] = [["id": "request", "role": "user", "text": "Synthesize the advice on this page into a blog post"]]
+                    fixture["artifacts"] = []
+                    fixture["name"] = "Advice for a blog post"
+                }
+                model.receive(["projects": [fixture], "selected": "task", "busy": state == "working",
+                               "running_project": state == "working" ? "task" : "",
+                               "progress": state == "working" ? ["Reading the page…", "Working with the page…", "Checking the task result…"] : [],
+                               "stage": state == "working" ? "Checking the task result…" : "Ready"])
             }
             model.workspacePage = state == "history" ? "overview" : state == "new" ? "new" : "history"
-            let view = NSHostingView(rootView: ModSmithRootView(model: model))
+            let context = BrowserScreenContext(kind: "modsmith", model: model)
+            context.values["showDetails"] = true
+            let view = NSHostingView(rootView: ModSmithScreen(context: context))
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1060, height: 760), styleMask: [.titled], backing: .buffered, defer: false)
             window.isReleasedWhenClosed = false
             window.contentView = view
