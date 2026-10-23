@@ -117,6 +117,10 @@ swift build --package-path shell
 BOWSER_TEST_RELEASE="$PWD/beam/_build/prod/rel/bowser_brain" python3 -m unittest discover -s tests
 ```
 
+Drag a tab from DockTabs into the macOS Dock to save it as an app. The original
+tab stays open. Drag within DockTabs to reorder, or release away from both docks
+to close the tab. Option-drag also exports a saved app to Finder.
+
 Saved apps support page notifications (`new Notification`) while running, with
 website permission and macOS notification authorization. Notification clicks
 return to that app. Background Web Push and service-worker notifications are
