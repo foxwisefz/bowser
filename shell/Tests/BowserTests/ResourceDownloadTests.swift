@@ -10,6 +10,7 @@ private final class ResourceFixtureServer: @unchecked Sendable {
     let listener: NWListener
     private let lock = NSLock()
     private var ready = false
+    private var retryAttempts = 0
     var isReady: Bool { lock.lock(); defer { lock.unlock() }; return ready }
     init(pdf: Data, resources: [String: (mime: String, bytes: Data)] = [:]) throws {
         let parameters = NWParameters.tcp
@@ -19,11 +20,18 @@ private final class ResourceFixtureServer: @unchecked Sendable {
             guard let self, case .ready = state else { return }
             lock.lock(); ready = true; lock.unlock()
         }
-        listener.newConnectionHandler = { connection in
+        listener.newConnectionHandler = { [weak self] connection in
+            guard let self else { return }
             connection.start(queue: .global())
             connection.receive(minimumIncompleteLength: 1, maximumLength: 16384) { bytes, _, _, _ in
                 let request = String(decoding: bytes ?? Data(), as: UTF8.self)
-                let path = request.split(separator: " ").dropFirst().first.map(String.init) ?? "/"
+                var routedPath = request.split(separator: " ").dropFirst().first.map(String.init) ?? "/"
+                if routedPath == "/retry-attachment" {
+                    self.lock.lock(); self.retryAttempts += 1
+                    let first = self.retryAttempts == 1; self.lock.unlock()
+                    routedPath = first ? "/broken-attachment" : "/attachment"
+                }
+                let path = routedPath
                 let authorized = request.contains("pdf_session=allowed")
                 var status = "200 OK", headers = "", type = "text/html"
                 var body = Data("<html><body>Sign in</body></html>".utf8)
@@ -194,6 +202,91 @@ private final class ResourceFixtureServer: @unchecked Sendable {
         XCTAssertTrue(manager.snapshot.isEmpty)
     }
 
+    func testRetryFailedDownloadAfterSourceTabCloses() async throws {
+        try await checkRetry(resource: false)
+    }
+
+    func testRetryFailedResourceAfterSourceTabCloses() async throws {
+        try await checkRetry(resource: true)
+    }
+
+    private func checkRetry(resource: Bool) async throws {
+        _ = NSApplication.shared
+        let bytes = Data(repeating: 42, count: 65536)
+        let server = try ResourceFixtureServer(pdf: bytes)
+        defer { server.listener.cancel() }
+        try await wait { server.isReady }
+        let controller = BrowserWindowController(profile: .defaultProfile)
+        defer { controller.window?.close() }
+        let source = try XCTUnwrap(controller.activeTab)
+        let manager = NativeDownloads.shared
+        let previous = manager.destinationDirectory
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        manager.destinationDirectory = folder
+        defer { manager.destinationDirectory = previous; try? FileManager.default.removeItem(at: folder) }
+        let url = URL(string: "http://127.0.0.1:\(server.listener.port!.rawValue)/retry-attachment")!
+        if resource {
+            let file = try XCTUnwrap(ResourceDownload(response: URLResponse(url: url, mimeType: "video/mp4", expectedContentLength: bytes.count, textEncodingName: nil)))
+            manager.startResource(file, in: source.webView, tab: source.webviewId, profile: source.profileId, destination: .downloads)
+        } else { source.load(urlString: url.absoluteString) }
+        func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+        func activities() -> [DownloadActivityView] {
+            descendants(controller.window!.contentView!).compactMap { $0 as? DownloadActivityView }
+        }
+        try await wait { activities().contains { $0.state == .failed } }
+        let failed = try XCTUnwrap(activities().first)
+        let retry = try XCTUnwrap(descendants(failed).compactMap { $0 as? NSButton }.first { $0.title == "Retry" })
+        XCTAssertFalse(retry.isHidden)
+        let other = controller.openTab()
+        controller.closeTab(source)
+        retry.performClick(nil)
+        retry.performClick(nil) // A second queued click must not start another transfer.
+        try await wait { activities().contains { if case .saved = $0.state { return true }; return false } }
+        XCTAssertTrue(controller.activeTab === other)
+        XCTAssertEqual(try Data(contentsOf: folder.appendingPathComponent("recording.mp4")), bytes)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: folder.path), ["recording.mp4"])
+        XCTAssertTrue(manager.snapshot.isEmpty)
+    }
+
+    func testExplicitCancelStopsSlowTransferAndCompletedXOnlyDismisses() async throws {
+        _ = NSApplication.shared
+        let server = try ResourceFixtureServer(pdf: Data(repeating: 42, count: 65536))
+        defer { server.listener.cancel() }
+        try await wait { server.isReady }
+        let controller = BrowserWindowController(profile: .defaultProfile)
+        defer { controller.window?.close() }
+        let source = try XCTUnwrap(controller.activeTab)
+        let manager = NativeDownloads.shared
+        let previous = manager.destinationDirectory
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        manager.destinationDirectory = folder
+        defer { manager.destinationDirectory = previous; try? FileManager.default.removeItem(at: folder) }
+        source.load(urlString: "http://127.0.0.1:\(server.listener.port!.rawValue)/slow-attachment")
+        func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+        func activity() -> DownloadActivityView? {
+            descendants(controller.window!.contentView!).compactMap { $0 as? DownloadActivityView }.first
+        }
+        try await wait { activity()?.state == .downloading && !manager.snapshot.isEmpty }
+        let row = try XCTUnwrap(activity())
+        let button = try XCTUnwrap(descendants(row).compactMap { $0 as? NSButton }.first { $0.title == "Cancel" })
+        button.performClick(nil)
+        XCTAssertTrue(manager.snapshot.isEmpty)
+        XCTAssertNil(row.superview)
+        try await Task.sleep(for: .seconds(2))
+        XCTAssertTrue(manager.snapshot.isEmpty)
+        let file = folder.appendingPathComponent("recording.mp4")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
+
+        let completed = DownloadActivityView()
+        var cancelled = false
+        completed.onCancel = { cancelled = true }
+        completed.finish(.success(file))
+        completed.closeActivity()
+        XCTAssertFalse(cancelled)
+    }
+
     func testDownloadActivityProgressConcurrentTransfersAndDismissal() async throws {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 700, height: 500), styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -308,7 +401,7 @@ private final class ResourceFixtureServer: @unchecked Sendable {
         func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
         let buttons = descendants(activity).compactMap { $0 as? NSButton }
         XCTAssertTrue(buttons.contains { $0.title == "Show in Finder" && !$0.isHidden && $0.action != nil })
-        XCTAssertTrue(buttons.contains { $0.action == #selector(DownloadActivityView.dismissActivity) })
+        XCTAssertTrue(buttons.contains { $0.action == #selector(DownloadActivityView.closeActivity) })
         XCTAssertEqual(activity.status.stringValue, "Download complete")
     }
 

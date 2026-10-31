@@ -13,6 +13,7 @@ import UniformTypeIdentifiers
         let completed: ((Result<URL, Error>) -> Void)?
         var temporaryDirectory: URL?
         var panel: NSSavePanel?
+        var cancelled = false
         let activity: DownloadActivityView?
         init(resource: ResourceDownload, mode: Destination, window: NSWindow?, completed: ((Result<URL, Error>) -> Void)?) {
             self.resource = resource; self.mode = mode; self.window = window; self.completed = completed
@@ -41,19 +42,49 @@ import UniformTypeIdentifiers
     }
     func attach(_ download: WKDownload, tab: UInt64, profile: String, window: NSWindow? = nil) {
         let activity = DownloadActivityView()
-        activity.show(in: window ?? BrowserWindowController.host(of: tab)?.window)
-        records[UUID().uuidString] = Record(tab: tab, profile: profile, download: download, activity: activity)
+        let window = window ?? BrowserWindowController.host(of: tab)?.window
+        activity.show(in: window)
+        if let store = download.webView?.configuration.websiteDataStore, let request = download.originalRequest {
+            activity.onRetry = { [weak self, weak window] in
+                let configuration = WKWebViewConfiguration()
+                configuration.websiteDataStore = store
+                let source = WKWebView(frame: .zero, configuration: configuration)
+                source.startDownload(using: request) { [weak self, source] retried in
+                    _ = source // Keep the originating store alive through admission.
+                    self?.attach(retried, tab: tab, profile: profile, window: window)
+                }
+            }
+        }
+        let id = UUID().uuidString
+        records[id] = Record(tab: tab, profile: profile, download: download, activity: activity)
+        activity.onCancel = { [weak self] in self?.cancel(id) }
         download.delegate = self
     }
     func startResource(_ resource: ResourceDownload, in webView: WKWebView, tab: UInt64,
                        profile: String, destination: Destination,
-                       completed: ((Result<URL, Error>) -> Void)? = nil) {
-        let save = ResourceSave(resource: resource, mode: destination, window: webView.window, completed: completed)
+                       completed: ((Result<URL, Error>) -> Void)? = nil, window: NSWindow? = nil) {
+        let window = window ?? webView.window
+        let save = ResourceSave(resource: resource, mode: destination, window: window, completed: completed)
+        let store = webView.configuration.websiteDataStore
+        save.activity?.onRetry = { [weak self, weak window] in
+            let configuration = WKWebViewConfiguration()
+            configuration.websiteDataStore = store
+            let source = WKWebView(frame: .zero, configuration: configuration)
+            self?.startResource(resource, in: source, tab: tab, profile: profile,
+                                destination: destination, window: window)
+        }
         save.activity?.show(in: save.window)
         var request = URLRequest(url: resource.url)
         request.mainDocumentURL = resource.url
-        webView.startDownload(using: request) { [self] download in
-            records[UUID().uuidString] = Record(tab: tab, profile: profile, download: download, save: save, activity: save.activity)
+        let id = UUID().uuidString
+        save.activity?.onCancel = { [weak self, weak save] in
+            save?.cancelled = true
+            self?.cancel(id)
+        }
+        webView.startDownload(using: request) { [self, webView] download in
+            _ = webView
+            guard !save.cancelled else { download.cancel(nil); return }
+            records[id] = Record(tab: tab, profile: profile, download: download, save: save, activity: save.activity)
             download.delegate = self
         }
     }
@@ -170,6 +201,7 @@ import UniformTypeIdentifiers
             "webview":record.tab, "profile":record.profile, "state":state]
         if let error { message["error"] = error }
         if let error {
+            if let destination = record.destination { try? FileManager.default.removeItem(at: destination) }
             record.activity?.finish(.failure(NSError(domain: "BowserDownload", code: 3,
                 userInfo: [NSLocalizedDescriptionKey: error])))
         } else if let destination = record.destination {
@@ -181,6 +213,27 @@ import UniformTypeIdentifiers
         if let completed = save.completed { completed(result) }
         else { save.activity?.finish(result) }
     }
+    func cancel(_ id: String) {
+        guard let record = records.removeValue(forKey: id) else { return }
+        record.save?.cancelled = true
+        record.activity?.onCancel = nil
+        record.completion?(nil)
+        record.save?.panel?.cancel(nil)
+        record.activity?.dismissActivity()
+        record.download?.cancel { _ in
+            if let directory = record.save?.temporaryDirectory {
+                try? FileManager.default.removeItem(at: directory)
+            } else if record.save == nil, let destination = record.destination {
+                // WebKit leaves the partial file after cancellation. Its destination
+                // was reserved for this transfer; remove it only after writing stops.
+                try? FileManager.default.removeItem(at: destination)
+            }
+        }
+        record.save?.completed?(.failure(NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled)))
+        BrainBridge.shared.send(["op":"event", "event":"download", "download":id,
+            "webview":record.tab, "profile":record.profile, "state":"cancelled"])
+    }
+
     func cancelDestination(_ id: String) {
         guard let record = records.removeValue(forKey: id) else { return }
         record.completion?(nil)

@@ -8,6 +8,10 @@ import AppKit
     let status = NSTextField(labelWithString: "Connecting…")
     let progressBar = NSProgressIndicator()
     private let revealButton = NSButton(title: "Show in Finder", target: nil, action: nil)
+    var onRetry: (() -> Void)?
+    private let retryButton = NSButton(title: "Retry", target: nil, action: nil)
+    var onCancel: (() -> Void)?
+    private let closeButton = NSButton()
     private var timer: Timer?
     private weak var panel: DownloadActivityPanel?
 
@@ -20,20 +24,23 @@ import AppKit
         status.textColor = .secondaryLabelColor
         status.lineBreakMode = .byTruncatingTail
         status.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        let dismiss = NSButton(image: NSImage(systemSymbolName: "xmark", accessibilityDescription: "Dismiss download notification")!,
-                               target: self, action: #selector(dismissActivity))
-        dismiss.isBordered = false
-        dismiss.controlSize = .small
-        dismiss.toolTip = "Dismiss notification (download continues)"
-        dismiss.widthAnchor.constraint(equalToConstant: 18).isActive = true
-        let heading = NSStackView(views: [filename, dismiss])
+        closeButton.title = "Cancel"
+        closeButton.target = self; closeButton.action = #selector(closeActivity)
+        closeButton.bezelStyle = .rounded
+        closeButton.controlSize = .small
+        closeButton.toolTip = "Cancel download"
+        closeButton.setAccessibilityLabel("Cancel download")
+        closeButton.setContentHuggingPriority(.required, for: .horizontal)
+        let heading = NSStackView(views: [filename, closeButton])
         heading.distribution = .fill; heading.spacing = 8
         progressBar.style = .bar; progressBar.isIndeterminate = true
         progressBar.controlSize = .small
         progressBar.startAnimation(nil)
         revealButton.target = self; revealButton.action = #selector(reveal)
         revealButton.controlSize = .small; revealButton.isHidden = true
-        let stack = NSStackView(views: [heading, status, progressBar, revealButton])
+        retryButton.target = self; retryButton.action = #selector(retryActivity)
+        retryButton.controlSize = .small; retryButton.isHidden = true
+        let stack = NSStackView(views: [heading, status, progressBar, revealButton, retryButton])
         stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 6
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
@@ -86,15 +93,24 @@ import AppKit
     }
 
     func finish(_ result: Result<URL, Error>) {
+        onCancel = nil
+        closeButton.title = ""
+        closeButton.image = NSImage(systemSymbolName: "xmark", accessibilityDescription: "Dismiss download notification")
+        closeButton.isBordered = false
+        closeButton.toolTip = "Dismiss download notification"
+        closeButton.setAccessibilityLabel("Dismiss download notification")
         timer?.invalidate(); timer = nil
         progressBar.stopAnimation(nil); progressBar.isHidden = true
         switch result {
         case .success(let url):
+            onRetry = nil
+            retryButton.isHidden = true
             state = .saved(url)
             filename.stringValue = url.lastPathComponent
             status.stringValue = "Download complete"
             revealButton.isHidden = false
         case .failure(let error):
+            retryButton.isHidden = onRetry == nil
             state = .failed
             status.stringValue = "Download failed · \(error.localizedDescription)"
             status.toolTip = error.localizedDescription
@@ -103,9 +119,27 @@ import AppKit
         panel?.trimCompleted()
     }
 
+    @objc func retryActivity() {
+        guard state == .failed, let retry = onRetry else { return }
+        onRetry = nil
+        retry()
+        dismissActivity()
+    }
+
+    @objc func closeActivity() {
+        if state == .preparing || state == .downloading {
+            let cancel = onCancel
+            onCancel = nil
+            cancel?()
+        }
+        dismissActivity()
+    }
+
     @objc func dismissActivity() {
+        onRetry = nil
         timer?.invalidate(); timer = nil
         panel?.remove(self)
+        panel = nil
     }
     @objc private func reveal() {
         if case .saved(let url) = state { NSWorkspace.shared.activateFileViewerSelecting([url]) }
@@ -140,6 +174,7 @@ import AppKit
         trimCompleted()
     }
     func remove(_ row: DownloadActivityView) {
+        guard rows.arrangedSubviews.contains(where: { $0 === row }) else { return }
         rows.removeArrangedSubview(row); row.removeFromSuperview()
         if rows.arrangedSubviews.isEmpty { removeFromSuperview() }
     }

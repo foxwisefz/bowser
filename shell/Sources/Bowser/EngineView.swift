@@ -321,7 +321,7 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
     private var pendingDownloadableResource: ResourceDownload?
     private var resourceNavigation = UUID()
     private var uncommittedPopup = false
-    private weak var downloadPopupOpener: EngineView?
+    private weak var popupOpener: EngineView?
     private(set) var downloadableResource: ResourceDownload? {
         didSet { BrowserWindowController.host(of: webviewId)?.syncModButtons() }
     }
@@ -847,7 +847,7 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
         guard uncommittedPopup, let host else { return }
         uncommittedPopup = false
         // The download delegate owns the transfer before the empty webview is retired.
-        host.closeTab(self, selecting: downloadPopupOpener?.webviewId)
+        host.closeTab(self, selecting: popupOpener?.webviewId)
     }
 
     static func uniqueDownloadURL(_ suggested: String) -> URL { NativeDownloads.uniqueURL(suggested) }
@@ -993,7 +993,6 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         HistoryController.shared.navigationChanged(self)
         uncommittedPopup = false
-        downloadPopupOpener = nil
         downloadableResource = pendingDownloadableResource
         markNavigationTiming("commit_ms")
         if failedNavigationURL == nil { recordNavigationDiagnostic("committed", navigation: navigation) }
@@ -1275,6 +1274,14 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
 
     // MARK: WKUIDelegate
 
+    // WebKit decides whether script is allowed to close this browsing context.
+    // Mirror its accepted close in the tab model, including persistence and focus.
+    func webViewDidClose(_ webView: WKWebView) {
+        guard webView === self.webView,
+              let host = BrowserWindowController.host(of: webviewId) else { return }
+        host.closeTab(self, selecting: popupOpener?.webviewId)
+    }
+
     // target=_blank / window.open: open a real tab, with opener lineage.
     func webView(
         _ webView: WKWebView,
@@ -1298,7 +1305,7 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
             activate: intent != .backgroundTab
         )
         view.uncommittedPopup = true
-        view.downloadPopupOpener = self
+        view.popupOpener = self
         return view.webView
     }
 }
