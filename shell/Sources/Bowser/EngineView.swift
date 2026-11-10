@@ -1274,6 +1274,17 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
 
     // MARK: WKUIDelegate
 
+    // macOS WebKit asks the embedder for the window frame through this SPI.
+    // Without it, pages see outerWidth/outerHeight as zero. Supply the actual
+    // native frame; WebKit handles the conversion to DOM screen coordinates.
+    @objc(_webView:getWindowFrameWithCompletionHandler:)
+    func webView(_ webView: WKWebView, getWindowFrameWithCompletionHandler completionHandler: @escaping (CGRect) -> Void) {
+        // Fullscreen can move the WKWebView to another window. An inactive tab
+        // can instead be detached while still belonging to its browser window.
+        let host = webView.window ?? BrowserWindowController.host(of: webviewId)?.window ?? window
+        completionHandler(host?.frame ?? .zero)
+    }
+
     // WebKit decides whether script is allowed to close this browsing context.
     // Mirror its accepted close in the tab model, including persistence and focus.
     func webViewDidClose(_ webView: WKWebView) {
