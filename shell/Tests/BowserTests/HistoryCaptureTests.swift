@@ -97,4 +97,27 @@ import XCTest
         let image = try await web.takeSnapshot(configuration: configuration)
         XCTAssertNotNil(image.tiffRepresentation)
     }
+    func testPagePreviewSkipsEditableContentPasswordsVideoAndFrames() async throws {
+        let (web, window, _) = try await fixture()
+        defer { window.orderOut(nil); window.contentView = nil }
+        let editable = try await run(web, "return " + HistoryCapture.validatePreview)
+        XCTAssertEqual(editable, false)
+        _ = try await web.evaluateJavaScript("document.body.innerHTML='<h1>Readable page</h1><input type=search>'")
+        // Exercise visibility explicitly rather than depending on the frontmost app.
+        _ = try await run(web, "Object.defineProperty(document,'visibilityState',{configurable:true,value:'hidden'})")
+        let hidden = try await run(web, "return " + HistoryCapture.validatePreview)
+        XCTAssertEqual(hidden, false)
+        _ = try await run(web, "Object.defineProperty(document,'visibilityState',{configurable:true,value:'visible'})")
+        let readable = try await run(web, "return " + HistoryCapture.validatePreview)
+        XCTAssertEqual(readable, true)
+        let configuration = HistoryCapture.previewConfiguration(bounds: web.bounds, scale: window.backingScaleFactor)
+        let image = try await web.takeSnapshot(configuration: configuration)
+        let pixels = try XCTUnwrap(image.cgImage(forProposedRect: nil, context: nil, hints: nil))
+        XCTAssertLessThanOrEqual(pixels.width, 480, "The stored preview must stay bounded on Retina displays")
+        for content in ["<input type=password style=display:none>", "<input value=private>", "<textarea>Draft</textarea>", "<video style=width:300px;height:200px></video>", "<iframe srcdoc=private></iframe>"] {
+            _ = try await run(web, "document.body.innerHTML=content", arguments: ["content": content], world: .page)
+            let allowed = try await run(web, "return " + HistoryCapture.validatePreview)
+            XCTAssertEqual(allowed, false, content)
+        }
+    }
 }

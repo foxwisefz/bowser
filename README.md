@@ -77,6 +77,12 @@ request and click **Run a task…** to review it in **Tasks & Mods** first.
 Press `⌘K` again while Bowser’s command bar is open to send `⌘K` to the webpage and open its own command menu, when supported.
 Use `⌘L` to view the current URL, selected for copying or editing, or `⌘⇧C` to copy it directly. Hover over the page title to see the URL.
 
+Use `⌘Y` for History: a visual timeline in its own browser tab, with page previews,
+search, profile/site/date filters, and deletion. Visit recording is opt-in through
+History’s settings button. Lightweight visits keep saving while content capture
+pauses during calls. See [local history search](docs/history-search.md) for capture,
+privacy, and storage details.
+
 `⌘F` find in page (`Return`/`⇧Return` or `⌘G`/`⇧⌘G` for matches; `Esc` closes),
 `⌘T` new tab, `⌘⇧[`/`⌘⇧]` cycle tabs, `⌃Tab` last focused tab, `⌘R` reload, `⌘0/+/-` zoom.
 Clicking a neighboring or previously focused tab in DockTabs teaches its shortcut with shortcut glyphs that float inward from the clicked tab and fade away. Hints taper off and stop after using the shortcut.

@@ -13,10 +13,26 @@ private struct HistoryPreferences: Codable {
 
 @MainActor final class HistoryController: NSObject, ObservableObject, HistoryPresentation, WKScriptMessageHandler {
     static let shared = HistoryController()
-    private static var directory: URL { BowserPaths.home.appendingPathComponent("history", isDirectory: true) }
-    private static var preferencesFile: URL { directory.appendingPathComponent("preferences.json") }
+    private let directory: URL
+    private var preferencesFile: URL { directory.appendingPathComponent("preferences.json") }
     private var preferences: [String: HistoryPreferences] = [:]
-    private let worker = HistoryWorkerClient(directory: HistoryController.directory, model: HistoryModelDownload.file)
+    private let worker: HistoryWorkerClient
+    private let repository: HistoryRepository
+    private struct Visit {
+        var id = UUID().uuidString
+        var url: String
+        var title: String
+        var seen = Date()
+        var previewAttempted = false
+        var savedTitle: String?
+        var saving = false
+        var retryAfter = Date.distantPast
+    }
+    private var visits: [UInt64: Visit] = [:]
+    private var recordingErrors: [String: String] = [:]
+    private var settingsError: String?
+    var recordingIssue: String? { settingsError ?? recordingErrors[selectedProfile] }
+    private var resultLimit = 60
     private var timer: Timer?
     private var subscriptions: Set<AnyCancellable> = []
     private var pressure: DispatchSourceMemoryPressure?
@@ -31,13 +47,19 @@ private struct HistoryPreferences: Codable {
     private var processing = false
     private var indexCounts: [String: Int] = [:]
     private var profileStats: [String: HistoryStats] = [:]
-    private var suppressedPage: String?
+    private var suppressedPages: [UInt64: String] = [:]
     private var lastWork = Date.distantPast
     private var queryTask: Task<Void, Never>?
     private var revision = 0
-    @Published var selectedProfile = "default" { didSet { excludedSites = settings.exclusions.joined(separator: "\n"); presentStats(); search() } }
+    @Published var selectedProfile = "default" { didSet { excludedSites = settings.exclusions.joined(separator: "\n"); presentStats(); refreshStatus(); search() } }
     @Published var excludedSites = ""
     @Published var query = "" { didSet { search() } }
+    @Published var allProfiles = false { didSet { search() } }
+    @Published var dateFilter = "all" { didSet { search() } }
+    @Published var siteFilter = "" { didSet { search() } }
+    @Published private(set) var hasMore = false
+    @Published private(set) var lastSaved: Date?
+    @Published private(set) var searchError: String?
     @Published private(set) var results: [HistorySearchItem] = []
     @Published private(set) var isSearching = false
     @Published private(set) var status = "Enable history search to remember pages you visit."
@@ -52,8 +74,12 @@ private struct HistoryPreferences: Codable {
     var retentionDays: Int { get { settings.days } set { change { $0.days = max(1, min(365, newValue)) }; search() } }
     var isDownloading: Bool { HistoryModelDownload.shared.downloading }
     var modelReady: Bool { HistoryModelDownload.shared.ready }
-    private override init() {
-        if let data = try? Data(contentsOf: Self.preferencesFile), let decoded = try? JSONDecoder().decode([String: HistoryPreferences].self, from: data) { preferences = decoded }
+    private override convenience init() { self.init(directory: BowserPaths.home.appendingPathComponent("history", isDirectory: true)) }
+    init(directory: URL) {
+        self.directory = directory
+        worker = HistoryWorkerClient(directory: directory, model: HistoryModelDownload.file)
+        repository = HistoryRepository(directory: directory)
+        if let data = try? Data(contentsOf: directory.appendingPathComponent("preferences.json")), let decoded = try? JSONDecoder().decode([String: HistoryPreferences].self, from: data) { preferences = decoded }
         super.init()
         for (profile, pref) in preferences where pref.enabled { indexCounts[profile] = 1 }
         excludedSites = settings.exclusions.joined(separator: "\n")
@@ -81,16 +107,26 @@ private struct HistoryPreferences: Codable {
     }
     private func change(_ mutate: (inout HistoryPreferences) -> Void) {
         objectWillChange.send()
-        var value = settings; mutate(&value); preferences[selectedProfile] = value
-        revision += 1; pending.removeAll { $0.0 == selectedProfile }
-        worker.stop(); workerError = nil; retryAfter = .distantPast
+        var value = settings; mutate(&value)
+        var updated = preferences; updated[selectedProfile] = value
         do {
-            try FileManager.default.createDirectory(at: Self.directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-            try JSONEncoder().encode(preferences).write(to: Self.preferencesFile, options: .atomic)
-        } catch { status = "History settings could not be saved." }
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+            try JSONEncoder().encode(updated).write(to: preferencesFile, options: .atomic)
+        } catch {
+            settingsError = "History settings could not be saved. Your previous settings are still in use."
+            refreshStatus(); return
+        }
+        preferences = updated; settingsError = nil
+        revision += 1; pending.removeAll { $0.0 == selectedProfile }
+        let profile = selectedProfile, generation = revision
+        Task { await repository.invalidate(profile: profile, generation: generation) }
+        if !value.enabled { visits = visits.filter { EngineView.live[$0.key]?.profileId != profile } }
+        worker.stop(); workerError = nil; retryAfter = .distantPast
         stopCapture(); startTimerIfNeeded(); refresh()
     }
     func downloadModel() { HistoryModelDownload.shared.download() }
+    func showSettings() { SettingsWindow.shared.show(select: "history") }
+    func showBrowser() { (NSApp.delegate as? AppDelegate)?.openHistory(nil) }
     var isResourceLimited: Bool {
         memoryLimited || ProcessInfo.processInfo.thermalState == .serious || ProcessInfo.processInfo.thermalState == .critical
         || CaptureMode.shared.isEnabled || EngineView.live.values.contains {
@@ -103,7 +139,56 @@ private struct HistoryPreferences: Codable {
     }
     func navigationChanged(_ view: EngineView) {
         if captureID == view.webviewId { stopCapture() }
-        suppressedPage = nil
+        suppressedPages.removeValue(forKey: view.webviewId)
+        recordVisit(view, committed: true)
+    }
+    func forget(_ view: EngineView) { visits.removeValue(forKey: view.webviewId); suppressedPages.removeValue(forKey: view.webviewId) }
+    func recordVisit(_ view: EngineView, committed: Bool = false) {
+        guard !view.isHistoryPage, (committed || !view.webView.isLoading), view.webView.configuration.websiteDataStore.isPersistent,
+              let url = view.webView.url?.absoluteString, permits(profile: view.profileId, url: url),
+              suppressedPages[view.webviewId] != url else { return }
+        suppressedPages.removeValue(forKey: view.webviewId)
+        let title = String((view.webView.title ?? URL(string: url)?.host ?? url).prefix(240))
+        var visit: Visit
+        if !committed, let previous = visits[view.webviewId], previous.url == url {
+            guard !previous.saving, Date() >= previous.retryAfter, previous.savedTitle != title else { return }
+            visit = previous; visit.title = title
+        } else { visit = Visit(url: url, title: title) }
+        visit.saving = true
+        visits[view.webviewId] = visit
+        let profile = view.profileId, generation = revision, days = preferences[profile]?.days ?? 90, viewID = view.webviewId
+        Task {
+            do {
+                let stats = try await repository.record(profile: profile, id: visit.id,
+                    value: HistoryRecord(url: url, title: title, text: "", seen: visit.seen), days: days, generation: generation)
+                if visits[viewID]?.id == visit.id { visits[viewID]?.saving = false; visits[viewID]?.savedTitle = stats == nil ? nil : title }
+                guard revision == generation else { return }
+                recordingErrors.removeValue(forKey: profile); updateStats(stats, profile: profile); refreshStatus()
+            } catch {
+                if visits[viewID]?.id == visit.id { visits[viewID]?.saving = false; visits[viewID]?.retryAfter = Date().addingTimeInterval(30) }
+                guard revision == generation else { return }
+                recordingErrors[profile] = "Visits could not be saved. Check available disk space. Bowser will retry automatically."
+                refreshStatus()
+            }
+        }
+    }
+    private var pauseReason: String? {
+        if EngineView.live.values.contains(where: { $0.webView.cameraCaptureState != .none || $0.webView.microphoneCaptureState != .none }) { return "a camera or microphone is in use" }
+        if CaptureMode.shared.isEnabled { return "screen capture mode is on" }
+        if memoryLimited { return "memory pressure is high" }
+        if ProcessInfo.processInfo.thermalState == .serious || ProcessInfo.processInfo.thermalState == .critical { return "the Mac is under thermal pressure" }
+        return nil
+    }
+    private func refreshStatus() {
+        let message: String
+        if let recordingIssue { message = recordingIssue }
+        else if !enabled { message = "Visit recording is off for this profile. Saved history is still available." }
+        else if let reason = pauseReason { message = "Visits keep saving. Content capture and visual search are paused because \(reason)." }
+        else if isDownloading { message = "Visits keep saving. Downloading the visual search model." }
+        else if let error = HistoryModelDownload.shared.error { message = error }
+        else if let workerError { message = workerError }
+        else { message = modelReady ? "Saving visits and page content on this Mac." : "Saving visits. Download the model to search by description and appearance." }
+        if status != message { status = message }
     }
     func refresh() {
         let anyEnabled = preferences.values.contains(where: \.enabled)
@@ -113,10 +198,9 @@ private struct HistoryPreferences: Codable {
         wasResourceLimited = limited
         let browser = BrowserWindowController.all.first { $0.window?.isKeyWindow == true && $0.window?.isMiniaturized != true }
         let view = browser?.activeTab
-        let pageKey = view.map { "\($0.webviewId):\($0.webView.url?.absoluteString ?? "")" }
-        if let pageKey, pageKey != suppressedPage { suppressedPage = nil }
-        if anyEnabled, !limited, NSApp.isActive, let view, !view.isSleeping,
-           pageKey != suppressedPage,
+        if let view { recordVisit(view) }
+        if anyEnabled, !limited, NSApp.isActive, let view, !view.isSleeping, !view.isHistoryPage,
+           suppressedPages[view.webviewId] != view.webView.url?.absoluteString,
            !view.webView.isLoading, view.webView.configuration.websiteDataStore.isPersistent,
            let url = view.webView.url?.absoluteString, permits(profile: view.profileId, url: url) {
             if captureID != view.webviewId || captureURL != url {
@@ -129,14 +213,38 @@ private struct HistoryPreferences: Codable {
                 }
             }
         } else { stopCapture() }
-        if !enabled { status = "History search is off for this profile." }
-        else if limited { status = "Capture and indexing paused during a call, sharing, or resource pressure." }
-        else if isDownloading { status = "Downloading the 388 MB search model. Text search is already available." }
-        else if let error = HistoryModelDownload.shared.error { status = error }
-        else if let workerError { status = workerError }
-        else { status = modelReady ? "History stays on this Mac. New content is indexed in the background." : "Text search is ready. Download the model for semantic and image search." }
+        if !limited, let view { capturePreview(view) }
+        refreshStatus()
         if !limited { drain() }
         if Date().timeIntervalSince(lastWork) > 30 && !processing && !isSearching { worker.stop() }
+    }
+    /// One bounded preview per committed page, only after it settles in the foreground.
+    /// Calls, private pages, exclusions and visible editable/sensitive content skip it.
+    private func capturePreview(_ view: EngineView) {
+        guard NSApp.isActive, !view.isHistoryPage, !view.webView.isLoading, !view.isSleeping, view.window?.isKeyWindow == true,
+              preferences[view.profileId]?.images == true, let visit = visits[view.webviewId],
+              visit.savedTitle != nil,
+              !visit.previewAttempted, Date().timeIntervalSince(visit.seen) >= 2,
+              view.webView.url?.absoluteString == visit.url, permits(profile: view.profileId, url: visit.url),
+              view.webView.bounds.width > 100, view.webView.bounds.height > 80 else { return }
+        visits[view.webviewId]?.previewAttempted = true
+        let generation = revision, profile = view.profileId, days = preferences[profile]?.days ?? 90
+        view.webView.evaluateJavaScript(HistoryCapture.validatePreview, in: nil, in: HistoryCapture.world) { [weak self, weak view] result in
+            guard let self, let view, case .success(let allowed as Bool) = result, allowed,
+                  !self.isResourceLimited, self.revision == generation, self.visits[view.webviewId]?.id == visit.id,
+                  view.webView.url?.absoluteString == visit.url, view.window?.isKeyWindow == true else { return }
+            let configuration = HistoryCapture.previewConfiguration(bounds: view.webView.bounds, scale: view.window?.backingScaleFactor ?? 1)
+            view.webView.takeSnapshot(with: configuration) { [weak self, weak view] image, _ in
+                guard let self, let view, !self.isResourceLimited, self.revision == generation,
+                      self.visits[view.webviewId]?.id == visit.id, view.webView.url?.absoluteString == visit.url,
+                      let cg = image?.cgImage(forProposedRect: nil, context: nil, hints: nil),
+                      let data = NSBitmapImageRep(cgImage: cg).representation(using: .jpeg, properties: [.compressionFactor: 0.55]), data.count <= 64_000 else { return }
+                Task {
+                    do { let stats = try await self.repository.preview(profile: profile, id: visit.id, data: data, days: days, generation: generation); self.updateStats(stats, profile: profile) }
+                    catch { self.workerError = "A page preview could not be saved. Visit history is still available." }
+                }
+            }
+        }
     }
     private func stopCapture() {
         if let captureID, let view = EngineView.live[captureID] {
@@ -193,28 +301,31 @@ private struct HistoryPreferences: Codable {
         let request = next.map { HistoryRequest("capture", profile: profile, record: $0.1, days: preferences[profile]?.days ?? 90) }
             ?? HistoryRequest("index", profile: profile, days: preferences[profile]?.days ?? 90)
         processing = true; lastWork = Date()
+        let generation = revision
         Task {
             defer { processing = false; if !pending.isEmpty { drain() } }
             do {
                 let response = try await worker.send(request)
+                guard revision == generation else { return }
                 if let error = response.error { workerError = error; retryAfter = Date().addingTimeInterval(60) }
                 else { workerError = nil }
                 updateStats(response.stats, profile: profile)
-            } catch { if !isResourceLimited { workerError = "History indexing paused. It will retry automatically."; retryAfter = Date().addingTimeInterval(60) } }
+            } catch { if revision == generation && !isResourceLimited { workerError = "History indexing paused. It will retry automatically."; retryAfter = Date().addingTimeInterval(60) } }
         }
     }
     private func updateStats(_ stats: HistoryStats?, profile: String) {
         guard let stats else { return }
         indexCounts[profile] = stats.pending
         profileStats[profile] = stats
-        guard selectedProfile == profile else { return }
+        guard selectedProfile == profile || allProfiles else { return }
         presentStats()
     }
     private func presentStats() {
+        lastSaved = allProfiles ? profileStats.values.compactMap(\.lastVisit).max() : profileStats[selectedProfile]?.lastVisit
         guard let stats = profileStats[selectedProfile] else {
             storageText = "Up to 128 MB and 10,000 items per profile."; storageWarning = nil; return
         }
-        storageText = "\(stats.records.formatted()) items · \(ByteCountFormatter.string(fromByteCount: stats.bytes, countStyle: .memory)) of 128 MB · \(stats.pending) awaiting semantic indexing"
+        storageText = "\((stats.visits ?? 0).formatted()) visits · \(stats.records.formatted()) content captures · \(ByteCountFormatter.string(fromByteCount: stats.bytes, countStyle: .memory)) of 128 MB · \(stats.pending) awaiting visual search"
         switch stats.capacityState {
         case .normal: storageWarning = nil
         case .nearLimit:
@@ -224,53 +335,124 @@ private struct HistoryPreferences: Codable {
             storageWarning = "History reached its limit. \(count) older \(noun) removed in total to stay within 128 MB and 10,000 items. Last removal: \(cleanup.lastRemovedAt.formatted(date: .abbreviated, time: .shortened))."
         }
     }
-    static func item(_ hit: HistoryHit) -> HistorySearchItem {
-        HistorySearchItem(id: hit.id, url: hit.record.url, title: hit.record.title,
-            snippet: String(hit.record.content.prefix(240)), seen: hit.record.seen, image: hit.record.image)
+    static func item(_ hit: HistoryHit, profile: String = "") -> HistorySearchItem {
+        HistorySearchItem(id: profile + ":" + hit.id, url: hit.record.url, title: hit.record.title,
+            snippet: String(hit.record.content.prefix(240)), seen: hit.record.seen, image: hit.record.image,
+            profile: profile, key: hit.id, isVisit: hit.isVisit == true)
     }
     func search(profile: String, query: String) async -> [HistorySearchItem] {
         guard preferences[profile] != nil else { return [] }
-        // Resource pressure pauses model execution, including interactive queries.
-        guard !isResourceLimited else { return [] }
         lastWork = Date()
         do {
-            let response = try await worker.send(HistoryRequest("search", profile: profile, query: query, days: preferences[profile]?.days ?? 90))
-            updateStats(response.stats, profile: profile)
-            if let error = response.error { status = error }
-            return response.hits.filter { HistoryPolicy.permits($0.record.url, exclusions: preferences[profile]?.exclusions ?? []) }.map(Self.item)
-        } catch { status = "History search is temporarily unavailable. Try again."; return [] }
+            let (hits, stats) = try await repository.browse(profile: profile, query: query, limit: 20, days: preferences[profile]?.days ?? 90)
+            updateStats(stats, profile: profile)
+            var found = hits
+            if !query.isEmpty, !isResourceLimited, modelReady {
+                if let response = try? await worker.send(HistoryRequest("search", profile: profile, query: query, days: preferences[profile]?.days ?? 90)), response.error == nil {
+                    let urls = Set(found.map { $0.record.url })
+                    found += response.hits.filter { !urls.contains($0.record.url) }
+                }
+            }
+            var seen = Set<String>()
+            return found.filter { seen.insert($0.record.url).inserted && HistoryPolicy.permits($0.record.url, exclusions: preferences[profile]?.exclusions ?? []) }.prefix(20).map { Self.item($0, profile: profile) }
+        } catch { searchError = "History could not be read. Your saved data has not been cleared."; return [] }
     }
     func search() {
+        resultLimit = 60
+        performSearch()
+    }
+    func loadMore() { resultLimit += 60; performSearch() }
+    private func performSearch() {
         queryTask?.cancel()
-        let profile = selectedProfile, query = query, generation = revision
+        let profiles = allProfiles ? self.profiles.map(\.id) : [selectedProfile]
+        let query = query, generation = revision, date = dateFilter, site = siteFilter, limit = resultLimit
         isSearching = true
+        searchError = nil
         queryTask = Task {
             do { try await Task.sleep(for: .milliseconds(250)) } catch { return }
-            let found = await search(profile: profile, query: query)
-            guard !Task.isCancelled, selectedProfile == profile, self.query == query, revision == generation else { return }
-            results = found; isSearching = false
+            let today = Calendar.current.startOfDay(for: Date())
+            let after = date == "today" ? today : date == "yesterday" ? Calendar.current.date(byAdding: .day, value: -1, to: today) : date == "week" ? Calendar.current.date(byAdding: .day, value: -7, to: today) : nil
+            let before: Date? = date == "yesterday" ? today : nil
+            var found: [HistorySearchItem] = []
+            do {
+                for profile in profiles {
+                    let (hits, stats) = try await repository.browse(profile: profile, query: query, after: after, before: before, host: site, limit: limit + 1, days: preferences[profile]?.days ?? 90)
+                    guard !Task.isCancelled, revision == generation else { return }
+                    updateStats(stats, profile: profile)
+                    found += hits.filter { HistoryPolicy.permits($0.record.url, exclusions: preferences[profile]?.exclusions ?? []) }.map { Self.item($0, profile: profile) }
+                }
+                found.sort { $0.seen > $1.seen }
+                hasMore = found.count > limit
+                results = Array(found.prefix(limit)); isSearching = false
+                // Publish ordinary search first; semantic enrichment never blocks the list.
+                if !query.isEmpty, !isResourceLimited, modelReady {
+                    for profile in profiles {
+                        guard !Task.isCancelled, !isResourceLimited else { return }
+                        guard let response = try? await worker.send(HistoryRequest("search", profile: profile, query: query, days: preferences[profile]?.days ?? 90)), response.error == nil else { continue }
+                        guard !Task.isCancelled, revision == generation else { return }
+                        let urls = Set(found.filter { $0.profile == profile }.map(\.url))
+                        let extra = response.hits.filter { hit in
+                            let host = URL(string: hit.record.url)?.host ?? ""
+                            return !urls.contains(hit.record.url) && (after == nil || hit.record.seen >= after!) && (before == nil || hit.record.seen < before!)
+                                && (site.isEmpty || host == site || host.hasSuffix("." + site))
+                                && HistoryPolicy.permits(hit.record.url, exclusions: preferences[profile]?.exclusions ?? [])
+                        }.map { Self.item($0, profile: profile) }
+                        found += extra
+                        results = Array(found.prefix(limit))
+                    }
+                }
+            } catch {
+                guard !Task.isCancelled, revision == generation else { return }
+                isSearching = false; searchError = "History could not be read. Retry to reconnect; your saved data has not been cleared."
+            }
         }
     }
     func open(_ item: HistorySearchItem) {
-        (NSApp.delegate as? AppDelegate)?.openTab(url: item.url, activate: true, profile: selectedProfile)
+        (NSApp.delegate as? AppDelegate)?.openTab(url: item.url, activate: true, profile: item.profile.isEmpty ? selectedProfile : item.profile)
     }
-    func delete(_ item: HistorySearchItem) { mutate(HistoryRequest("delete", profile: selectedProfile, key: item.id)) }
+    func delete(_ item: HistorySearchItem) { delete([item]) }
+    func delete(_ items: [HistorySearchItem]) {
+        revision += 1; worker.stop(); stopCapture(); pending.removeAll()
+        let generation = revision
+        let groups = Dictionary(grouping: items, by: { $0.profile.isEmpty ? selectedProfile : $0.profile })
+        let ids = Set(items.map(\.key))
+        for (id, visit) in visits.filter({ ids.contains($0.value.id) }) {
+            suppressedPages[id] = visit.url; visits.removeValue(forKey: id)
+        }
+        Task {
+            do {
+                for (profile, items) in groups {
+                    let stats = try await repository.delete(profile: profile, visits: items.filter(\.isVisit).map(\.key), records: items.filter { !$0.isVisit }.map(\.key), generation: generation)
+                    updateStats(stats, profile: profile)
+                }
+                search()
+            } catch { searchError = "Some selected history could not be deleted. Retry to finish." }
+        }
+    }
     func clear() {
         revision += 1; pending.removeAll { $0.0 == selectedProfile }
-        if let view = BrowserWindowController.all.first(where: { $0.profile.id == selectedProfile })?.activeTab {
-            suppressedPage = "\(view.webviewId):\(view.webView.url?.absoluteString ?? "")"
+        for view in EngineView.live.values where view.profileId == selectedProfile {
+            suppressedPages[view.webviewId] = view.webView.url?.absoluteString
         }
-        stopCapture()
-        results = []; mutate(HistoryRequest("delete", profile: selectedProfile))
+        worker.stop(); stopCapture()
+        let profile = selectedProfile, generation = revision
+        visits = visits.filter { EngineView.live[$0.key]?.profileId != profile }
+        Task {
+            do { let stats = try await repository.delete(profile: profile, all: true, generation: generation); updateStats(stats, profile: profile); search() }
+            catch { searchError = "History could not be cleared. Your saved data remains available." }
+        }
     }
     func saveExclusions() {
         let rules = HistoryPolicy.normalizedExclusions(excludedSites)
         change { $0.exclusions = rules }
+        guard settings.exclusions == rules else { return }
         excludedSites = rules.joined(separator: "\n")
-        for host in rules { mutate(HistoryRequest("exclude", profile: selectedProfile, key: host)) }
-    }
-    private func mutate(_ request: HistoryRequest) {
-        Task { do { let response = try await worker.send(request); updateStats(response.stats, profile: request.profile); if let error = response.error { status = error }; search() }
-            catch { status = "History could not be updated. Try again." } }
+        let profile = selectedProfile, generation = revision
+        Task {
+            do {
+                for host in rules { let stats = try await repository.delete(profile: profile, host: host, generation: generation); updateStats(stats, profile: profile) }
+                search()
+            } catch { searchError = "Excluded-site history could not be removed. Retry to finish." }
+        }
     }
 }

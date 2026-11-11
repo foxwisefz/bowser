@@ -541,7 +541,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     @objc func openHistory(_ sender: Any?) {
         HistoryController.shared.selectedProfile = currentController?.profile.id ?? "default"
-        SettingsWindow.shared.show(select: "history")
+        HistoryController.shared.allProfiles = false
+        if let existing = currentController?.tabs.first(where: { $0.currentURLString == EngineView.historyURL }) {
+            currentController?.activate(existing, focusPage: false)
+        } else { openTab(url: EngineView.historyURL) }
     }
 
     @objc func openWelcome(_ sender: Any?) {

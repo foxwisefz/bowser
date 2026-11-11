@@ -19,6 +19,7 @@ import BowserSurfaceKit
     var isSearching = false
     var isDownloading = false
     var modelReady = true
+    var lastSaved: Date? = Date()
     func downloadModel() {}
     func search() {}
     func open(_ item: HistorySearchItem) {}
@@ -53,6 +54,44 @@ import BowserSurfaceKit
     func testHistorySettingsRenderAtMinimumWindowSize() async throws {
         try await renderSettings(enabled: true, name: "collapsed")
         try await renderSettings(enabled: false, name: "expanded")
+    }
+    func testVisualTimelineRendersAtBrowserSizes() async throws {
+        _ = NSApplication.shared
+        let model = HistoryFixture(); model.query = ""; model.storageWarning = nil
+        let image = NSImage(size: NSSize(width: 480, height: 300), flipped: false) { rect in
+            NSColor.white.setFill(); rect.fill()
+            NSColor.systemOrange.setFill(); NSRect(x: 0, y: 245, width: 480, height: 55).fill()
+            ("Network services" as NSString).draw(at: NSPoint(x: 25, y: 190), withAttributes: [.font: NSFont.systemFont(ofSize: 26, weight: .semibold), .foregroundColor: NSColor.black])
+            ("A saved page preview" as NSString).draw(at: NSPoint(x: 25, y: 150), withAttributes: [.font: NSFont.systemFont(ofSize: 17), .foregroundColor: NSColor.gray])
+            return true
+        }
+        let cg = try XCTUnwrap(image.cgImage(forProposedRect: nil, context: nil, hints: nil))
+        let thumbnail = try XCTUnwrap(NSBitmapImageRep(cgImage: cg).representation(using: .jpeg, properties: [:]))
+        model.results = []
+        let titles = ["Network security and performance", "Designing a calmer browser", "A visit without a preview"]
+        for index in 0..<7 {
+            let title = titles[index % 3]
+            let seconds = Double(index) * (index < 4 ? 240.0 : 900.0)
+            let seen = Date().addingTimeInterval(-seconds)
+            let picture: Data? = index % 3 == 2 ? nil : thumbnail
+            let item = HistorySearchItem(id: String(index), url: "https://example.test/\(index)", title: title, snippet: "Saved page content.", seen: seen, image: picture, profile: "work", isVisit: true)
+            model.results.append(item)
+        }
+        let context = BrowserScreenContext(kind: "history", model: model)
+        let host = NSHostingView(rootView: HistoryScreen(context: context))
+        host.sizingOptions = []
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1100, height: 850), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false; window.contentView = host; window.orderBack(nil)
+        defer { window.orderOut(nil); window.contentView = nil }
+        for width in [1100, 820] {
+            window.setContentSize(NSSize(width: width, height: 850))
+            try await Task.sleep(for: .milliseconds(200))
+            host.layoutSubtreeIfNeeded()
+            XCTAssertEqual(host.bounds.width, Double(width))
+            let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: URL(fileURLWithPath: "/tmp/bowser-history-timeline-\(width).png"))
+        }
     }
     private func renderSettings(enabled: Bool, name: String) async throws {
         _ = NSApplication.shared

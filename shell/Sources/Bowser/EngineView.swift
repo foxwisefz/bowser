@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import WebKit
 
 /// Relays page messages (console.* taps and window.bowser.emit) to the brain.
@@ -92,6 +93,9 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
     /// after it loaded, and the chrome has to catch up on the spot.
     private(set) var themeColor: NSColor?
     private(set) var webView: WKWebView
+    static let historyURL = "bowser://history"
+    private var historyPage: NSView?
+    var isHistoryPage: Bool { historyPage != nil }
 
     private let pageRelay = PageRelay()
     fileprivate var didWarmMediaRecovery = false
@@ -184,6 +188,7 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
 
     override func layout() {
         super.layout()
+        historyPage?.frame = bounds
         // Element fullscreen reparents the web view into WebKit's own window.
         // Only size it while this container owns it; otherwise a background
         // layout pass overwrites the fullscreen viewport with the inline size.
@@ -273,7 +278,8 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
 
         urlObservation = webView.observe(\.url) { [weak self] view, _ in
             MainActor.assumeIsolated {
-                guard let self, self.pendingRestoreURL == nil, let url = self.failedNavigationURL ?? view.url?.absoluteString else { return }
+                guard let self, !self.isHistoryPage, self.pendingRestoreURL == nil, let url = self.failedNavigationURL ?? view.url?.absoluteString else { return }
+                HistoryController.shared.recordVisit(self)
                 self.onURLChange?(url)
                 BrainBridge.shared.send([
                     "op": "event", "event": "url_changed",
@@ -292,7 +298,8 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
         }]
         titleObservation = webView.observe(\.title) { [weak self] view, _ in
             MainActor.assumeIsolated {
-                guard let self, self.pendingRestoreURL == nil else { return }
+                guard let self, !self.isHistoryPage, self.pendingRestoreURL == nil else { return }
+                HistoryController.shared.recordVisit(self)
                 let title = view.title ?? ""
                 SiteAppBadge.shared.updateTitle(title, id: self.webviewId, url: view.url)
                 self.onTitleChange?(title)
@@ -316,7 +323,7 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
     private(set) var hasUnsavedInteraction = false
     private var hasSubmittedForm = false
     var isSleeping: Bool { sleepingInteractionState != nil }
-    var currentTitle: String { sleepingTitle ?? webView.title ?? "" }
+    var currentTitle: String { isHistoryPage ? "History" : sleepingTitle ?? webView.title ?? "" }
     private var requestedURL: String?
     private var pendingDownloadableResource: ResourceDownload?
     private var resourceNavigation = UUID()
@@ -331,7 +338,7 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
                                         profile: profileId, destination: destination)
     }
     private var failedNavigationURL: String?
-    var currentURLString: String? { pendingRestoreURL ?? failedNavigationURL ?? webView.url?.absoluteString ?? requestedURL }
+    var currentURLString: String? { isHistoryPage ? Self.historyURL : pendingRestoreURL ?? failedNavigationURL ?? webView.url?.absoluteString ?? requestedURL }
 
     /// Restored background pages keep their identity without starting a load.
     /// Mounting in a window (selection, split pane, or explicit warming) resumes it.
@@ -388,6 +395,7 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
     }
 
     func reloadPage() {
+        if isHistoryPage { HistoryController.shared.search(); return }
         if let url = failedNavigationURL { load(urlString: url) }
         else if !resumePageIfNeeded() { webView.reload() }
     }
@@ -466,7 +474,7 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
     func noteUserEdit() { hasUnsavedInteraction = true }
 
     private var canSleep: Bool {
-        guard SiteAppConfiguration.current == nil, window == nil,
+        guard !isHistoryPage, SiteAppConfiguration.current == nil, window == nil,
               !isSleeping, pendingRestoreURL == nil, !hasUnsavedInteraction, !hasSubmittedForm,
               !webView.isLoading, webView.cameraCaptureState == .none,
               webView.microphoneCaptureState == .none,
@@ -519,6 +527,26 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
         sleepingTitle = nil
         pendingRestoreURL = nil
         requestedURL = url.absoluteString
+        if url.absoluteString == Self.historyURL {
+            HistoryController.shared.selectedProfile = profileId
+            HistoryController.shared.allProfiles = false
+            webView.stopLoading(); webView.isHidden = true
+            if historyPage == nil {
+                let page = NSHostingView(rootView: LiveBrowserScreen(kind: "history", model: HistoryController.shared))
+                page.sizingOptions = []; page.frame = bounds; page.autoresizingMask = [.width, .height]
+                historyPage = page; addSubview(page)
+            }
+            loadingCover?.removeFromSuperview(); loadingCover = nil; failedNavigationURL = nil
+            hasRenderedContent = true
+            onURLChange?(Self.historyURL); onTitleChange?("History")
+            BrainBridge.shared.send(["op":"event", "event":"url_changed", "webview":webviewId, "url":Self.historyURL])
+            BrainBridge.shared.send(["op":"event", "event":"title_changed", "webview":webviewId, "title":"History"])
+            BrainBridge.shared.send(["op":"event", "event":"load_status", "webview":webviewId, "status":2])
+            HistoryController.shared.search()
+            BrowserWindowController.host(of: webviewId)?.engineDidPaint(self)
+            return
+        }
+        historyPage?.removeFromSuperview(); historyPage = nil; webView.isHidden = false
         if !hasRenderedContent { showLoadingCover() }
         failedNavigationURL = nil
         showCachedFavicon(for: url)
@@ -687,6 +715,8 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
         stopMediaCapture()
         SiteAppBadge.shared.clear(id: webviewId)
         EngineView.live.removeValue(forKey: webviewId)
+        HistoryController.shared.forget(self)
+        historyPage?.removeFromSuperview(); historyPage = nil
         BrainBridge.shared.send([
             "op": "event", "event": "webview_closed", "webview": webviewId,
         ])
@@ -959,6 +989,7 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
     }
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        guard !isHistoryPage else { return }
         pendingDownloadableResource = nil
         resourceNavigation = UUID()
         markNavigationTiming("provisional_ms")
@@ -991,6 +1022,7 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
     }
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        guard !isHistoryPage else { return }
         HistoryController.shared.navigationChanged(self)
         uncommittedPopup = false
         downloadableResource = pendingDownloadableResource
@@ -1006,6 +1038,8 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        guard !isHistoryPage else { return }
+        HistoryController.shared.recordVisit(self)
         if downloadableResource == nil && failedNavigationURL == nil {
             let generation = resourceNavigation
             webView.evaluateJavaScript(ResourceDownload.embeddedPDFScript, in: nil, in: .defaultClient) { [weak self] result in
@@ -1053,6 +1087,7 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
     }
 
     private func handleLoadFailure(_ error: Error, navigation: WKNavigation?, provisional: Bool) {
+        guard !isHistoryPage else { return }
         let nsError = error as NSError
         if navigationDiagnosticTrace.isCurrent(navigation) { navigationDiagnosticWatchdog?.cancel() }
         persistNavigationDiagnostic(navigationDiagnosticTrace.failure(navigation, error: nsError,

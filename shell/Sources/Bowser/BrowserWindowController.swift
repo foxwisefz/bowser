@@ -466,7 +466,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: capture)
         }
         // Also restore page focus when the selected tab was already active.
-        if focusPage { window?.makeFirstResponder(view.webView) }
+        if focusPage, !view.isHistoryPage { window?.makeFirstResponder(view.webView) }
         mark("responder_ms")
         BrainBridge.shared.send([
             "op": "event", "event": "tab_activated", "webview": view.webviewId,

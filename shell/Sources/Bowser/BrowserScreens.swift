@@ -65,6 +65,7 @@ struct BrowserScreenRoot: View {
         case "external-profile": ExternalProfileScreen(context: context)
         case "permissions": PermissionsScreen(context: context)
         case "settings": SettingsScreen(context: context)
+        case "history": HistoryScreen(context: context)
         case "profiles": ProfilesScreen(context: context)
         case "modsmith": ModSmithScreen(context: context)
         case "onboarding": OnboardingScreen(context: context)
@@ -996,7 +997,7 @@ struct SettingsScreen: View {
             if model.selected == "websites" {
                 PermissionsScreen(context: model.permissionsContext)
             } else if model.selected == "history" {
-                HistoryScreen(context: model.historyContext)
+                    HistorySettingsScreen(context: model.historyContext)
             } else if model.selected == "profiles" {
                 ProfilesScreen(context: model.profilesContext)
             } else if let section = model.sections.first(where: { $0.id == model.selected }) {
@@ -1021,7 +1022,310 @@ struct SettingsScreen: View {
     }
 }
 
-private struct HistoryScreen: View {
+struct HistoryScreen: View {
+    @ObservedObject var context: BrowserScreenContext
+    private var model: any HistoryPresentation { context.model as! any HistoryPresentation }
+    @State private var selection: Set<String> = []
+    @State private var preview: HistorySearchItem?
+    @State private var confirmDelete = false
+    @State private var showStatus = false
+    @State private var showTopics = true
+    @State private var collapsed: Set<String> = []
+    @FocusState private var searching: Bool
+    private var sessions: [HistorySession] { HistorySession.group(model.results) }
+    private var chosen: [HistorySearchItem] { model.results.filter { selection.contains($0.id) } }
+    private let dates = [("all", "All history"), ("today", "Today"), ("yesterday", "Yesterday"), ("week", "Last 7 days")]
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+            Divider()
+            HStack(alignment: .top, spacing: 0) {
+                sidebar
+                Divider()
+                historyContent
+            }
+        }.background(Color(nsColor: .windowBackgroundColor))
+            .onAppear {
+                model.search()
+                searching = true
+            }
+            .onChange(of: model.results.map(\.id)) { _, ids in selection.formIntersection(ids) }
+            .alert("Delete \(chosen.count) selected visits and saved pages?", isPresented: $confirmDelete) {
+                Button("Delete", role: .destructive) {
+                    model.delete(chosen)
+                    selection.removeAll()
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text(
+                    "Selected entries and their previews will be removed. Related saved page content is removed when no recorded visits remain. This cannot be undone."
+                )
+            }
+            .sheet(item: $preview) { previewSheet($0) }
+    }
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                Text("History").font(.system(size: 28, weight: .semibold))
+                Spacer()
+                Picker(
+                    "Profile",
+                    selection: Binding(
+                        get: { model.allProfiles ? "__all__" : model.selectedProfile },
+                        set: { value in
+                            if value == "__all__" {
+                                model.allProfiles = true
+                            } else {
+                                model.allProfiles = false
+                                model.selectedProfile = value
+                            }
+                        })
+                ) {
+                    ForEach(model.profiles) { Text($0.name).tag($0.id) }
+                    if model.profiles.count > 1 {
+                        Divider()
+                        Text("All profiles").tag("__all__")
+                    }
+                }.labelsHidden().frame(maxWidth: 180)
+                Button {
+                    model.showSettings()
+                } label: {
+                    Image(systemName: "gearshape")
+                }
+                .buttonStyle(.borderless).help("History settings").accessibilityLabel("History settings")
+            }
+            HStack(spacing: 10) {
+                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                TextField("Search titles, websites, or describe what you remember", text: Binding(get: { model.query }, set: { model.query = $0 }))
+                    .textFieldStyle(.plain).font(.system(size: 16)).focused($searching)
+                if model.isSearching { ProgressView().controlSize(.small) }
+                if !model.query.isEmpty {
+                    Button {
+                        model.query = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain).accessibilityLabel("Clear search")
+                }
+            }.padding(13).background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
+                .overlay(RoundedRectangle(cornerRadius: 10).stroke(.quaternary))
+            HStack {
+                Button {
+                    showStatus.toggle()
+                } label: {
+                    HStack(spacing: 7) {
+                        Image(systemName: model.recordingIssue != nil ? "exclamationmark.triangle" : model.enabled ? "checkmark.circle" : "pause.circle")
+                            .foregroundStyle(model.recordingIssue != nil ? Color.orange : model.enabled ? Color.green : Color.secondary)
+                        if model.recordingIssue != nil {
+                            Text("Visits aren’t saving")
+                        } else if !model.enabled {
+                            Text("Visit recording is off")
+                        } else if let saved = model.lastSaved {
+                            Text("Last visit saved \(saved.formatted(date: .abbreviated, time: .standard))")
+                        } else {
+                            Text(model.enabled ? "Waiting for a visit to save" : "Visit recording is off")
+                        }
+                        Image(systemName: "chevron.down").font(.caption2)
+                    }.font(.caption)
+                }.buttonStyle(.plain).foregroundStyle(.secondary)
+                    .popover(isPresented: $showStatus) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text(model.status).font(.callout)
+                            Text(model.storageText).font(.caption).foregroundStyle(.secondary)
+                            if let warning = model.storageWarning { Text(warning).font(.caption).foregroundStyle(.orange) }
+                        }.padding(18).frame(width: 340)
+                    }
+                Spacer()
+                Text("Saved on this Mac").font(.caption).foregroundStyle(.secondary)
+            }
+        }.padding(24)
+    }
+
+    private var sidebar: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            ForEach(dates, id: \.0) { id, title in
+                Button {
+                    model.dateFilter = id
+                } label: {
+                    Text(title).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 10).padding(.vertical, 8)
+                        .background(model.dateFilter == id ? Color.accentColor.opacity(0.1) : .clear, in: RoundedRectangle(cornerRadius: 7))
+                        .foregroundStyle(model.dateFilter == id ? Color.accentColor : Color.primary)
+                }.buttonStyle(.plain)
+            }
+            Spacer()
+            Toggle("Site labels", isOn: $showTopics).toggleStyle(.checkbox).font(.caption)
+            Text("Kept for \(model.retentionDays) days").font(.caption).foregroundStyle(.secondary).padding(.top, 6)
+        }.padding(14).frame(width: 148).frame(maxHeight: .infinity).background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
+    }
+
+    private var historyContent: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text(model.query.isEmpty ? "Recent browsing" : "Search results").font(.subheadline.weight(.medium))
+                Spacer()
+                TextField(
+                    "Filter by site",
+                    text: Binding(get: { model.siteFilter }, set: { model.siteFilter = $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() })
+                )
+                .textFieldStyle(.roundedBorder).frame(maxWidth: 170)
+                if !selection.isEmpty {
+                    Button("Delete \(selection.count)…", role: .destructive) { confirmDelete = true }
+                }
+            }
+            if let error = model.searchError {
+                HStack {
+                    Label(error, systemImage: "exclamationmark.triangle")
+                    Spacer()
+                    Button("Retry") { model.search() }
+                }
+                .font(.callout).padding(12).background(.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+            }
+            if let warning = model.storageWarning { Text(warning).font(.caption).foregroundStyle(.orange) }
+            if model.results.isEmpty && !model.isSearching && model.searchError == nil {
+                ContentUnavailableView(
+                    model.query.isEmpty && model.siteFilter.isEmpty ? "No saved visits in this period" : "No matching history", systemImage: "clock",
+                    description: Text(
+                        model.enabled
+                            ? "New visits appear here as you browse. Try a different date, profile, or search."
+                            : "Enable visit recording in History settings. Existing saved history remains available."))
+                if !model.enabled { Button("History settings") { model.showSettings() } }
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 26) {
+                        ForEach(sessions) { session in
+                            sessionBlock(session)
+                        }
+                        if model.hasMore { Button("Load older history") { model.loadMore() }.frame(maxWidth: .infinity).padding(.vertical, 10) }
+                    }.padding(.bottom, 24)
+                }
+            }
+        }.padding(22).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private func sessionBlock(_ session: HistorySession) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline) {
+                Button {
+                    if !collapsed.insert(session.id).inserted { collapsed.remove(session.id) }
+                } label: {
+                    HStack(spacing: 7) {
+                        Image(systemName: collapsed.contains(session.id) ? "chevron.right" : "chevron.down").font(.caption2)
+                        Text(session.latest.formatted(date: .abbreviated, time: .omitted))
+                        Text("\(session.earliest.formatted(date: .omitted, time: .shortened))–\(session.latest.formatted(date: .omitted, time: .shortened))")
+                            .foregroundStyle(.secondary)
+                    }
+                }.buttonStyle(.plain)
+                Text(
+                    "\(session.items.count) \(session.isVisit ? (session.items.count == 1 ? "visit" : "visits") : (session.items.count == 1 ? "saved page" : "saved pages"))"
+                ).foregroundStyle(.secondary)
+                Spacer()
+                Button("Select") { selection.formUnion(session.items.map(\.id)) }.buttonStyle(.borderless)
+            }.font(.caption)
+            if showTopics { Text(session.topic).font(.subheadline.weight(.medium)).lineLimit(1) }
+            if !session.isVisit { Text("Saved content · capture times shown").font(.caption).foregroundStyle(.secondary) }
+            if !collapsed.contains(session.id) {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 175, maximum: 320), spacing: 16, alignment: .top)], alignment: .leading, spacing: 18) {
+                    ForEach(session.items) { item in
+                        HistoryVisitCard(
+                            item: item, selected: selection.contains(item.id),
+                            profileName: model.allProfiles ? model.profiles.first(where: { $0.id == item.profile })?.name : nil,
+                            select: { if !selection.insert(item.id).inserted { selection.remove(item.id) } },
+                            inspect: { preview = item }, open: { model.open(item) })
+                    }
+                }
+            }
+        }.id(session.id)
+    }
+
+    private func previewSheet(_ item: HistorySearchItem) -> some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                Text(item.title.isEmpty ? item.url : item.title).font(.headline).lineLimit(2)
+                Spacer()
+                Button("Done") { preview = nil }.keyboardShortcut(.cancelAction)
+            }
+            HistoryThumbnail(item: item).frame(height: 320).clipShape(RoundedRectangle(cornerRadius: 10))
+            Text(item.url).font(.caption).foregroundStyle(.secondary).textSelection(.enabled).lineLimit(3)
+            if !item.snippet.isEmpty { Text(item.snippet).font(.callout).lineLimit(5).textSelection(.enabled) }
+            HStack {
+                Text("\(item.isVisit ? "Visited" : "Captured") \(item.seen.formatted(date: .abbreviated, time: .standard))").font(.caption).foregroundStyle(
+                    .secondary)
+                Spacer()
+                Button("Open page") {
+                    model.open(item)
+                    preview = nil
+                }.keyboardShortcut(.defaultAction)
+            }
+        }.padding(22).frame(width: 560)
+    }
+}
+
+private struct HistoryVisitCard: View {
+    let item: HistorySearchItem
+    let selected: Bool
+    let profileName: String?
+    let select: () -> Void
+    let inspect: () -> Void
+    let open: () -> Void
+    private var host: String { URL(string: item.url)?.host ?? item.url }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            Button(action: inspect) {
+                HistoryThumbnail(item: item).frame(height: 136).frame(maxWidth: .infinity)
+                    .clipShape(RoundedRectangle(cornerRadius: 9)).contentShape(Rectangle())
+            }.buttonStyle(.plain).accessibilityLabel("Preview \(item.title)")
+                .overlay(alignment: .topTrailing) {
+                    Button(action: select) {
+                        Image(systemName: selected ? "checkmark.square.fill" : "square").font(.system(size: 17)).padding(4).background(
+                            .regularMaterial, in: RoundedRectangle(cornerRadius: 5))
+                    }
+                    .buttonStyle(.plain).padding(7).accessibilityLabel("Select \(item.title)")
+                }
+                .overlay(RoundedRectangle(cornerRadius: 9).stroke(selected ? Color.accentColor : Color.primary.opacity(0.08), lineWidth: selected ? 2 : 1))
+            Button(action: open) {
+                Text(item.title.isEmpty ? host : item.title).font(.system(size: 12, weight: .medium)).lineLimit(2).frame(
+                    maxWidth: .infinity, alignment: .leading)
+            }.buttonStyle(.plain)
+            HStack {
+                Text(host).lineLimit(1)
+                Spacer(minLength: 4)
+                Text(item.seen.formatted(date: .omitted, time: .shortened))
+            }.font(.caption2).foregroundStyle(.secondary)
+            if let profileName { Text(profileName).font(.caption2).foregroundStyle(.secondary) }
+        }.contextMenu {
+            Button("Open page", action: open)
+            Button("Preview", action: inspect)
+            Button("Select", action: select)
+        }
+    }
+}
+
+private struct HistoryThumbnail: View {
+    let item: HistorySearchItem
+    @State private var image: NSImage?
+    var body: some View {
+        GeometryReader { size in
+            Group {
+                if let image {
+                    Image(nsImage: image).resizable()
+                        .frame(width: size.size.width, height: size.size.width * image.size.height / max(1, image.size.width))
+                        .frame(width: size.size.width, height: size.size.height, alignment: .top).clipped()
+                        .background(Color(nsColor: .controlBackgroundColor))
+                } else {
+                    VStack(spacing: 8) {
+                        Image(systemName: "globe").font(.system(size: 28)).foregroundStyle(.tertiary)
+                        Text(item.isVisit ? "Visit saved · no preview" : "Saved text · no image").font(.caption).foregroundStyle(.secondary)
+                    }.frame(width: size.size.width, height: size.size.height).background(Color(nsColor: .controlBackgroundColor))
+                }
+            }
+        }.onAppear { image = item.image.flatMap(NSImage.init(data:)) }
+            .onChange(of: item.image) { _, data in image = data.flatMap(NSImage.init(data:)) }
+    }
+}
+
+private struct HistorySettingsScreen: View {
     @ObservedObject var context: BrowserScreenContext
     private var model: any HistoryPresentation { context.model as! any HistoryPresentation }
     @State private var confirmClear = false
@@ -1029,14 +1333,12 @@ private struct HistoryScreen: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
-                Text("Find something you remember").font(.title2.weight(.semibold))
+                Text("History settings").font(.title2.weight(.semibold))
                 Spacer()
                 Picker("Profile", selection: Binding(get: { model.selectedProfile }, set: { model.selectedProfile = $0 })) {
                     ForEach(model.profiles) { Text($0.name).tag($0.id) }
                 }.labelsHidden().frame(maxWidth: 160)
             }
-            TextField("An orange website, a post, a picture…", text: Binding(get: { model.query }, set: { model.query = $0 }))
-                .textFieldStyle(.roundedBorder).font(.title3)
             HStack {
                 if model.isSearching || model.isDownloading { ProgressView().controlSize(.small) }
                 Text(model.status).font(.callout).foregroundStyle(.secondary)
@@ -1052,11 +1354,11 @@ private struct HistoryScreen: View {
             DisclosureGroup("Capture and storage", isExpanded: $captureExpanded) {
                 VStack(alignment: .leading, spacing: 10) {
                     Toggle("Remember pages I visit in this profile", isOn: Binding(get: { model.enabled }, set: { model.enabled = $0 }))
-                    Text("Stores visible text, page colors, and selected pictures on this Mac. Enabling downloads a 388 MB model once. Private windows and editable fields are excluded.")
+                    Text("Saves visits, visible text, page colors, and optional page previews and pictures on this Mac. Enabling downloads a 388 MB model once. Private windows and editable fields are excluded.")
                         .font(.caption).foregroundStyle(.secondary)
                     Text("Older items are permanently deleted automatically after \(model.retentionDays) days, or when this profile exceeds 128 MB or 10,000 saved items—whichever comes first.")
                         .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                    Toggle("Include pictures", isOn: Binding(get: { model.includeImages }, set: { model.includeImages = $0 }))
+                    Toggle("Include page previews and pictures", isOn: Binding(get: { model.includeImages }, set: { model.includeImages = $0 }))
                     HStack {
                         Picker("Keep history", selection: Binding(get: { model.retentionDays }, set: { model.retentionDays = $0 })) {
                             Text("30 days").tag(30); Text("90 days").tag(90); Text("1 year").tag(365)
@@ -1075,34 +1377,9 @@ private struct HistoryScreen: View {
                 }.padding(.top, 10)
             }
             Divider()
-            if model.results.isEmpty {
-                ContentUnavailableView(model.enabled ? "No matching history yet" : "History search is off", systemImage: "clock.arrow.circlepath",
-                    description: Text(model.enabled ? "Pages become searchable as you browse. Try another description or browse a few pages." : "Open Capture and storage above to enable it for this profile."))
-            } else {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(model.results) { item in
-                            HStack(alignment: .top, spacing: 12) {
-                                Button { model.open(item) } label: {
-                                    HStack(alignment: .top, spacing: 12) {
-                                        if let data = item.image, let image = NSImage(data: data) {
-                                            Image(nsImage: image).resizable().scaledToFit().frame(width: 72, height: 56).clipShape(RoundedRectangle(cornerRadius: 6))
-                                        } else { Image(systemName: "globe").font(.title2).foregroundStyle(.secondary).frame(width: 72, height: 56) }
-                                        VStack(alignment: .leading, spacing: 4) {
-                                            Text(item.title.isEmpty ? item.url : item.title).font(.headline).lineLimit(1)
-                                            Text(item.snippet).font(.callout).foregroundStyle(.secondary).lineLimit(2)
-                                            Text("\(URL(string: item.url)?.host ?? item.url) · \(item.seen.formatted(date: .abbreviated, time: .shortened))").font(.caption).foregroundStyle(.tertiary)
-                                        }.frame(maxWidth: .infinity, alignment: .leading)
-                                    }.contentShape(Rectangle())
-                                }.buttonStyle(.plain)
-                                Button { model.delete(item) } label: { Image(systemName: "xmark") }.buttonStyle(.borderless).help("Remove from history")
-                            }.padding(.vertical, 12)
-                            Divider()
-                        }
-                    }
-                }
-            }
-        }.padding(28).onAppear { captureExpanded = !model.enabled; model.search() }
+            Button("Open History") { model.showBrowser() }
+            Spacer(minLength: 0)
+        }.padding(28).onAppear { captureExpanded = true; model.search() }
         .alert("Clear this profile’s history?", isPresented: $confirmClear) {
             Button("Clear History", role: .destructive) { model.clear() }
             Button("Cancel", role: .cancel) {}

@@ -2,6 +2,26 @@ import Foundation
 import WebKit
 
 enum HistoryCapture {
+    @MainActor static func previewConfiguration(bounds: CGRect, scale: CGFloat) -> WKSnapshotConfiguration {
+        let configuration = WKSnapshotConfiguration()
+        configuration.rect = bounds
+        // WebKit measures snapshotWidth in points, including on Retina displays.
+        configuration.snapshotWidth = NSNumber(value: 480 / max(1, scale))
+        configuration.afterScreenUpdates = false
+        return configuration
+    }
+    static let validatePreview = """
+    (() => {
+      if (document.visibilityState !== 'visible') return false;
+      for (const el of document.querySelectorAll('input,textarea,[contenteditable]:not([contenteditable="false"]),[role="textbox"],[data-private],[data-sensitive],video,iframe,object,embed')) {
+        if (el.matches('input[type=password]')) return false;
+        if (el.matches('input:not([type]),input[type=text],input[type=search]') && !el.value) continue;
+        const r = el.getBoundingClientRect(), s = getComputedStyle(el);
+        if (r.width > 0 && r.height > 0 && r.bottom > 0 && r.right > 0 && r.top < innerHeight && r.left < innerWidth && s.visibility !== 'hidden' && s.display !== 'none') return false;
+      }
+      return true;
+    })()
+    """
     @MainActor static let world = WKContentWorld.world(name: "BowserHistory")
     /// Installed only in an enabled, foreground page. Observers are disconnected
     /// when it leaves the foreground. Scroll callbacks never read layout or text.

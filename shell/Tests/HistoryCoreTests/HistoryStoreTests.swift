@@ -64,7 +64,7 @@ final class HistoryStoreTests: XCTestCase {
         XCTAssertEqual(decoded.capacityState, .trimmed(cleanup))
     }
     func testCapacityCleanupPersistsIsolatedFromOtherProfilesAndResetsOnClear() throws {
-        let now = Date()
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
         let store = try HistoryStore(directory: root, profile: "work")
         for i in 0..<5 { try store.ingest(record("Post \(i)", seen: now.addingTimeInterval(Double(i)))) }
         try store.prune(days: 90, now: now, limit: 3)
