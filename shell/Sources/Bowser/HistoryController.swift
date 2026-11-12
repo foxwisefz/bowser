@@ -29,6 +29,7 @@ private struct HistoryPreferences: Codable {
         var retryAfter = Date.distantPast
     }
     private var visits: [UInt64: Visit] = [:]
+    private var urlChanges: [UInt64: Task<Void, Never>] = [:]
     private var recordingErrors: [String: String] = [:]
     private var settingsError: String?
     var recordingIssue: String? { settingsError ?? recordingErrors[selectedProfile] }
@@ -138,17 +139,35 @@ private struct HistoryPreferences: Codable {
         return HistoryPolicy.permits(url, exclusions: pref.exclusions)
     }
     func navigationChanged(_ view: EngineView) {
+        urlChanges.removeValue(forKey: view.webviewId)?.cancel()
         if captureID == view.webviewId { stopCapture() }
         suppressedPages.removeValue(forKey: view.webviewId)
         recordVisit(view, committed: true)
     }
-    func forget(_ view: EngineView) { visits.removeValue(forKey: view.webviewId); suppressedPages.removeValue(forKey: view.webviewId) }
-    func recordVisit(_ view: EngineView, committed: Bool = false) {
-        guard !view.isHistoryPage, (committed || !view.webView.isLoading), view.webView.configuration.websiteDataStore.isPersistent,
+    func urlChanged(_ view: EngineView) {
+        let id = view.webviewId
+        urlChanges.removeValue(forKey: id)?.cancel()
+        // KVO can precede isLoading/didStart. Wait for that delegate turn so
+        // a provisional URL is not mistaken for a same-document navigation.
+        urlChanges[id] = Task { [weak self, weak view] in
+            do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
+            guard let self, let view else { return }
+            self.urlChanges.removeValue(forKey: id)
+            self.recordVisit(view, allowURLChange: true)
+        }
+    }
+    func forget(_ view: EngineView) {
+        urlChanges.removeValue(forKey: view.webviewId)?.cancel()
+        visits.removeValue(forKey: view.webviewId); suppressedPages.removeValue(forKey: view.webviewId)
+    }
+    func recordVisit(_ view: EngineView, committed: Bool = false, allowURLChange: Bool = false) {
+        guard !view.isHistoryPage, (committed || (view.historyNavigationCommitted && !view.webView.isLoading)), view.webView.configuration.websiteDataStore.isPersistent,
               let url = view.webView.url?.absoluteString, permits(profile: view.profileId, url: url),
               suppressedPages[view.webviewId] != url else { return }
+        if !committed, !allowURLChange, let previous = visits[view.webviewId], previous.url != url { return }
         suppressedPages.removeValue(forKey: view.webviewId)
-        let title = String((view.webView.title ?? URL(string: url)?.host ?? url).prefix(240))
+        let loadedTitle = view.webView.title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let title = String((loadedTitle.isEmpty ? URL(string: url)?.host ?? url : loadedTitle).prefix(240))
         var visit: Visit
         if !committed, let previous = visits[view.webviewId], previous.url == url {
             guard !previous.saving, Date() >= previous.retryAfter, previous.savedTitle != title else { return }
@@ -164,6 +183,8 @@ private struct HistoryPreferences: Codable {
                 if visits[viewID]?.id == visit.id { visits[viewID]?.saving = false; visits[viewID]?.savedTitle = stats == nil ? nil : title }
                 guard revision == generation else { return }
                 recordingErrors.removeValue(forKey: profile); updateStats(stats, profile: profile); refreshStatus()
+                // The final title may arrive while the initial visit is being saved.
+                if let current = EngineView.live[viewID], visits[viewID]?.id == visit.id { recordVisit(current) }
             } catch {
                 if visits[viewID]?.id == visit.id { visits[viewID]?.saving = false; visits[viewID]?.retryAfter = Date().addingTimeInterval(30) }
                 guard revision == generation else { return }
