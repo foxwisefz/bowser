@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import XCTest
+import Darwin
 import BowserSurfaceKit
 @testable import Bowser
 
@@ -12,7 +13,7 @@ import BowserSurfaceKit
     var retentionDays = 90
     var excludedSites = ""
     var query = "orange website"
-    var results = [HistorySearchItem(id: "one", url: "https://example.test/network", title: "Network security and performance", snippet: "Protect your applications and connect your network. White background; orange accents.", seen: Date(), image: nil)]
+    @Published var results = [HistorySearchItem(id: "one", url: "https://example.test/network", title: "Network security and performance", snippet: "Protect your applications and connect your network. White background; orange accents.", seen: Date(), image: nil)]
     var status = "History stays on this Mac. New content is indexed in the background."
     var storageText = "24 items · 180 KB of 128 MB · 0 awaiting semantic indexing"
     var storageWarning: String? = "History reached its limit. 128 older items removed in total to stay within 128 MB and 10,000 items. Last removal: 19 Oct 2026 at 11:00 AM."
@@ -40,6 +41,60 @@ import BowserSurfaceKit
     var defaultContext: BrowserScreenContext { historyContext }
 }
 @MainActor final class HistoryPresentationTests: XCTestCase {
+    func testFullTimelineSettlesAfterScrollingAndResizing() async throws {
+        _ = NSApplication.shared
+        let model = HistoryFixture(); model.query = ""; model.storageWarning = nil
+        let picture = NSImage(size: NSSize(width: 480, height: 320), flipped: false) { rect in
+            NSColor.systemOrange.setFill(); rect.fill(); return true
+        }
+        let cg = try XCTUnwrap(picture.cgImage(forProposedRect: nil, context: nil, hints: nil))
+        let thumbnail = try XCTUnwrap(NSBitmapImageRep(cgImage: cg).representation(using: .jpeg, properties: [:]))
+        let full = (0..<60).map { index in
+            let age = index < 46 ? Double(index * 50) : index < 49 ? 14500 + Double(index) : 119400 + Double(index)
+            return HistorySearchItem(id: String(index), url: "https://example.test/\(index)",
+                title: index.isMultiple(of: 3) ? String(repeating: "A long page title ", count: 10) : "Page \(index)",
+                snippet: "", seen: Date().addingTimeInterval(-age), image: index.isMultiple(of: 8) ? thumbnail : nil,
+                profile: "work", isVisit: index < 46)
+        }
+        model.results = full
+        let host = NSHostingView(rootView: LiveBrowserScreen(kind: "history", model: model))
+        host.sizingOptions = []
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1404, height: 972), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false; window.contentView = host; window.orderBack(nil)
+        defer { window.orderOut(nil); window.contentView = nil }
+        for width in [1404, 820, 1100, 1404] {
+            window.setContentSize(NSSize(width: width, height: 972))
+            try await Task.sleep(for: .milliseconds(200))
+            host.layoutSubtreeIfNeeded()
+        }
+        func scrollViews(_ view: NSView) -> [NSScrollView] {
+            (view as? NSScrollView).map { [$0] } ?? view.subviews.flatMap(scrollViews)
+        }
+        let scroll = try XCTUnwrap(scrollViews(host).first)
+        for y in [800.0, 1600.0, 0.0] {
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: y)); scroll.reflectScrolledClipView(scroll.contentView)
+            try await Task.sleep(for: .milliseconds(200))
+        }
+        for _ in 0..<5 {
+            model.results = Array(full.prefix(1))
+            try await Task.sleep(for: .milliseconds(100))
+            model.results = full
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        func cpuTime() -> Double {
+            var usage = rusage()
+            getrusage(RUSAGE_SELF, &usage)
+            return Double(usage.ru_utime.tv_sec + usage.ru_stime.tv_sec)
+                + Double(usage.ru_utime.tv_usec + usage.ru_stime.tv_usec) / 1_000_000
+        }
+        let cpu = cpuTime()
+        let start = ProcessInfo.processInfo.systemUptime
+        try await Task.sleep(for: .milliseconds(500))
+        let elapsed = ProcessInfo.processInfo.systemUptime - start, usedCPU = cpuTime() - cpu
+        print("History settled: \(usedCPU) CPU seconds over \(elapsed) elapsed seconds")
+        XCTAssertLessThan(elapsed, 1, "History must let the main run loop service other browser work")
+        XCTAssertLessThan(usedCPU, 0.15, "A settled History screen must not continuously consume a CPU core")
+    }
     func testHistoryResultsRemainDistinctFromWebSearchAndUseSavedURL() {
         _ = NSApplication.shared
         let state = CommandPaletteState()

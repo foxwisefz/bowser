@@ -1192,19 +1192,41 @@ struct HistoryScreen: View {
                             : "Enable visit recording in History settings. Existing saved history remains available."))
                 if !model.enabled { Button("History settings") { model.showSettings() } }
             } else {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 26) {
-                        ForEach(sessions) { session in
-                            sessionBlock(session)
+                // One virtualized list owns scrolling. A lazy adaptive grid inside
+                // each lazy session can repeatedly invalidate its parent's height
+                // as cards appear, trapping the browser in SwiftUI layout.
+                GeometryReader { viewport in
+                    let columns = max(1, Int((viewport.size.width + 16) / 191))
+                    let cardWidth = min(320, max(1, (viewport.size.width - CGFloat(columns - 1) * 16) / CGFloat(columns)))
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 18) {
+                            ForEach(sessions) { session in
+                                sessionHeader(session).padding(.top, 8)
+                                if !collapsed.contains(session.id) {
+                                    ForEach(0..<((session.items.count + columns - 1) / columns), id: \.self) { row in
+                                        HStack(alignment: .top, spacing: 16) {
+                                            ForEach(session.items.dropFirst(row * columns).prefix(columns)) { item in
+                                                HistoryVisitCard(
+                                                    item: item, selected: selection.contains(item.id),
+                                                    profileName: model.allProfiles ? model.profiles.first(where: { $0.id == item.profile })?.name : nil,
+                                                    select: { if !selection.insert(item.id).inserted { selection.remove(item.id) } },
+                                                    inspect: { preview = item }, open: { model.open(item) })
+                                                .frame(width: cardWidth, height: model.allProfiles ? 224 : 204, alignment: .top)
+                                            }
+                                        }.frame(height: model.allProfiles ? 224 : 204, alignment: .top)
+                                    }
+                                }
+                            }
+                            if model.hasMore { Button("Load older history") { model.loadMore() }.frame(maxWidth: .infinity).padding(.vertical, 10) }
                         }
-                        if model.hasMore { Button("Load older history") { model.loadMore() }.frame(maxWidth: .infinity).padding(.vertical, 10) }
-                    }.padding(.bottom, 24)
+                        .frame(width: viewport.size.width, alignment: .leading).padding(.bottom, 24)
+                    }.frame(width: viewport.size.width, height: viewport.size.height)
                 }
             }
         }.padding(22).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
-    private func sessionBlock(_ session: HistorySession) -> some View {
+    private func sessionHeader(_ session: HistorySession) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .firstTextBaseline) {
                 Button {
@@ -1225,18 +1247,7 @@ struct HistoryScreen: View {
             }.font(.caption)
             if showTopics { Text(session.topic).font(.subheadline.weight(.medium)).lineLimit(1) }
             if !session.isVisit { Text("Saved content · capture times shown").font(.caption).foregroundStyle(.secondary) }
-            if !collapsed.contains(session.id) {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 175, maximum: 320), spacing: 16, alignment: .top)], alignment: .leading, spacing: 18) {
-                    ForEach(session.items) { item in
-                        HistoryVisitCard(
-                            item: item, selected: selection.contains(item.id),
-                            profileName: model.allProfiles ? model.profiles.first(where: { $0.id == item.profile })?.name : nil,
-                            select: { if !selection.insert(item.id).inserted { selection.remove(item.id) } },
-                            inspect: { preview = item }, open: { model.open(item) })
-                    }
-                }
-            }
-        }.id(session.id)
+        }
     }
 
     private func previewSheet(_ item: HistorySearchItem) -> some View {
@@ -1285,7 +1296,7 @@ private struct HistoryVisitCard: View {
                 }
                 .overlay(RoundedRectangle(cornerRadius: 9).stroke(selected ? Color.accentColor : Color.primary.opacity(0.08), lineWidth: selected ? 2 : 1))
             Button(action: open) {
-                Text(item.title.isEmpty ? host : item.title).font(.system(size: 12, weight: .medium)).lineLimit(2).frame(
+                Text(item.title.isEmpty ? host : item.title).font(.system(size: 12, weight: .medium)).lineLimit(2, reservesSpace: true).frame(
                     maxWidth: .infinity, alignment: .leading)
             }.buttonStyle(.plain)
             HStack {
@@ -1302,13 +1313,29 @@ private struct HistoryVisitCard: View {
     }
 }
 
+@MainActor private enum HistoryPreviewImages {
+    static let cache: NSCache<NSData, NSImage> = {
+        let cache = NSCache<NSData, NSImage>()
+        cache.countLimit = 96
+        cache.totalCostLimit = 8 * 1024 * 1024
+        return cache
+    }()
+    static func load(_ data: Data?) -> NSImage? {
+        guard let data else { return nil }
+        let key = data as NSData
+        if let image = cache.object(forKey: key) { return image }
+        guard let image = NSImage(data: data) else { return nil }
+        cache.setObject(image, forKey: key, cost: max(data.count, Int(image.size.width * image.size.height * 4)))
+        return image
+    }
+}
+
 private struct HistoryThumbnail: View {
     let item: HistorySearchItem
-    @State private var image: NSImage?
     var body: some View {
         GeometryReader { size in
             Group {
-                if let image {
+                if let image = HistoryPreviewImages.load(item.image) {
                     Image(nsImage: image).resizable()
                         .frame(width: size.size.width, height: size.size.width * image.size.height / max(1, image.size.width))
                         .frame(width: size.size.width, height: size.size.height, alignment: .top).clipped()
@@ -1320,8 +1347,7 @@ private struct HistoryThumbnail: View {
                     }.frame(width: size.size.width, height: size.size.height).background(Color(nsColor: .controlBackgroundColor))
                 }
             }
-        }.onAppear { image = item.image.flatMap(NSImage.init(data:)) }
-            .onChange(of: item.image) { _, data in image = data.flatMap(NSImage.init(data:)) }
+        }
     }
 }
 
