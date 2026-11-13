@@ -95,6 +95,13 @@ import BowserSurfaceKit
             model.results = full
             try await Task.sleep(for: .milliseconds(100))
         }
+        let headers = collection.subviews.filter { $0.identifier?.rawValue == "history-session" && !$0.isHidden }
+        XCTAssertFalse(headers.isEmpty)
+        for (index, header) in headers.enumerated() {
+            for other in headers.dropFirst(index + 1) {
+                XCTAssertFalse(header.frame.intersects(other.frame), "Recycled session headers must not leave overlapping views behind")
+            }
+        }
         func cpuTime() -> Double {
             var usage = rusage()
             getrusage(RUSAGE_SELF, &usage)

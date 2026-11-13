@@ -94,7 +94,7 @@ import BowserSurfaceKit
         func collectionView(_ collectionView: NSCollectionView, viewForSupplementaryElementOfKind kind: String, at indexPath: IndexPath) -> NSView {
             let isHeader = kind == NSCollectionView.elementKindSectionHeader
             let view = collectionView.makeSupplementaryView(ofKind: kind, withIdentifier: isHeader ? Self.headerID : Self.footerID, for: indexPath) as! HistoryCollectionSupplement
-            view.host.rootView = isHeader ? parent.header(parent.sessions[indexPath.section]) : parent.footer()
+            view.rootView = isHeader ? parent.header(parent.sessions[indexPath.section]) : parent.footer()
             return view
         }
         func collectionView(_ collectionView: NSCollectionView, layout collectionViewLayout: NSCollectionViewLayout, sizeForItemAt indexPath: IndexPath) -> NSSize {
@@ -136,12 +136,13 @@ import BowserSurfaceKit
     override func prepareForReuse() { super.prepareForReuse(); host.rootView = AnyView(EmptyView()) }
 }
 
-@MainActor private final class HistoryCollectionSupplement: NSView {
-    let host = NSHostingView(rootView: AnyView(EmptyView()))
-    override init(frame: NSRect) {
-        super.init(frame: frame)
-        host.sizingOptions = []; host.frame = bounds; host.autoresizingMask = [.width, .height]
-        addSubview(host)
+@MainActor private final class HistoryCollectionSupplement: NSHostingView<AnyView>, NSCollectionViewElement {
+    @objc init(frame: NSRect) {
+        super.init(rootView: AnyView(EmptyView()))
+        self.frame = frame
+        sizingOptions = []
     }
+    required init(rootView: AnyView) { super.init(rootView: rootView); sizingOptions = [] }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override func prepareForReuse() { super.prepareForReuse(); rootView = AnyView(EmptyView()) }
 }
