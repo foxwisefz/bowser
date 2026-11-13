@@ -110,7 +110,7 @@ import BowserSurfaceKit
             model.results = full
             try await Task.sleep(for: .milliseconds(100))
         }
-        let headers = collection.subviews.filter { $0.identifier?.rawValue == "history-session" && !$0.isHidden }
+        let headers = collection.visibleItems().filter { collection.indexPath(for: $0)?.item == 0 }.map(\.view)
         XCTAssertFalse(headers.isEmpty)
         for (index, header) in headers.enumerated() {
             for other in headers.dropFirst(index + 1) {

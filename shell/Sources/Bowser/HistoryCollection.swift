@@ -24,22 +24,15 @@ import BowserSurfaceKit
         scroll.autohidesScrollers = true
         scroll.drawsBackground = false
         let collection = NSCollectionView()
-        // Recycled supplementary views need their own compositing surface in
-        // the browser's layered tab host. Clear backing leaves retired header
-        // pixels visible after scrolling or replacing search results.
         collection.wantsLayer = true
         collection.backgroundColors = [.windowBackgroundColor]
         collection.isSelectable = false
         let layout = HistoryCollectionLayout()
-        layout.minimumInteritemSpacing = 16
-        layout.minimumLineSpacing = 18
-        layout.sectionInset = NSEdgeInsets(top: 12, left: 0, bottom: 26, right: 0)
         collection.collectionViewLayout = layout
         collection.register(HistoryCollectionItem.self, forItemWithIdentifier: Coordinator.itemID)
-        collection.register(HistoryCollectionSupplement.self, forSupplementaryViewOfKind: NSCollectionView.elementKindSectionHeader, withIdentifier: Coordinator.headerID)
-        collection.register(HistoryCollectionSupplement.self, forSupplementaryViewOfKind: NSCollectionView.elementKindSectionFooter, withIdentifier: Coordinator.footerID)
+        collection.register(HistoryCollectionItem.self, forItemWithIdentifier: Coordinator.headerID)
+        collection.register(HistoryCollectionItem.self, forItemWithIdentifier: Coordinator.footerID)
         collection.dataSource = context.coordinator
-        collection.delegate = context.coordinator
         scroll.documentView = collection
         return scroll
     }
@@ -53,7 +46,7 @@ import BowserSurfaceKit
         context.coordinator.update(self, in: collection)
     }
 
-    @MainActor final class Coordinator: NSObject, NSCollectionViewDataSource, NSCollectionViewDelegateFlowLayout {
+    @MainActor final class Coordinator: NSObject, NSCollectionViewDataSource {
         static let itemID = NSUserInterfaceItemIdentifier("history-card")
         static let headerID = NSUserInterfaceItemIdentifier("history-session")
         static let footerID = NSUserInterfaceItemIdentifier("history-more")
@@ -71,12 +64,19 @@ import BowserSurfaceKit
             parent = next
             if reload {
                 items = nextItems
+                (collection.collectionViewLayout as? HistoryCollectionLayout)?.sections = next.sessions.enumerated().map { section, session in
+                    HistoryCollectionLayout.Section(
+                        cards: cardCount(section),
+                        headerHeight: 24 + (next.showTopics ? 28 : 0) + (session.isVisit ? 0 : 26),
+                        cardHeight: next.showProfiles ? 224 : 204,
+                        footer: hasFooter(section))
+                }
                 collection.reloadData()
                 collection.collectionViewLayout?.invalidateLayout()
             } else if selectionChanged {
                 for cell in collection.visibleItems() {
                     guard let index = collection.indexPath(for: cell), let cell = cell as? HistoryCollectionItem else { continue }
-                    cell.host.rootView = parent.card(parent.sessions[index.section].items[index.item])
+                    cell.host.rootView = content(at: index)
                 }
             }
             if resetScroll, let scroll = collection.enclosingScrollView {
@@ -88,29 +88,26 @@ import BowserSurfaceKit
         func numberOfSections(in collectionView: NSCollectionView) -> Int { parent.sessions.count }
         func collectionView(_ collectionView: NSCollectionView, numberOfItemsInSection section: Int) -> Int {
             let session = parent.sessions[section]
+            return 1 + (parent.collapsed.contains(session.id) ? 0 : session.items.count) + (hasFooter(section) ? 1 : 0)
+        }
+        private func hasFooter(_ section: Int) -> Bool { parent.hasMore && section == parent.sessions.count - 1 }
+        private func cardCount(_ section: Int) -> Int {
+            let session = parent.sessions[section]
             return parent.collapsed.contains(session.id) ? 0 : session.items.count
         }
+        private func content(at index: IndexPath) -> AnyView {
+            if index.item == 0 { return parent.header(parent.sessions[index.section]) }
+            if index.item > cardCount(index.section) { return parent.footer() }
+            return parent.card(parent.sessions[index.section].items[index.item - 1])
+        }
         func collectionView(_ collectionView: NSCollectionView, itemForRepresentedObjectAt indexPath: IndexPath) -> NSCollectionViewItem {
-            let cell = collectionView.makeItem(withIdentifier: Self.itemID, for: indexPath) as! HistoryCollectionItem
-            cell.host.rootView = parent.card(parent.sessions[indexPath.section].items[indexPath.item])
+            // Full-width header/footer items share the same recycling path as
+            // cards. Supplementary SwiftUI headers leave stale drawing behind
+            // when a scrolled collection is filtered in the browser tab host.
+            let id = indexPath.item == 0 ? Self.headerID : indexPath.item > cardCount(indexPath.section) ? Self.footerID : Self.itemID
+            let cell = collectionView.makeItem(withIdentifier: id, for: indexPath) as! HistoryCollectionItem
+            cell.host.rootView = content(at: indexPath)
             return cell
-        }
-        func collectionView(_ collectionView: NSCollectionView, viewForSupplementaryElementOfKind kind: String, at indexPath: IndexPath) -> NSView {
-            let isHeader = kind == NSCollectionView.elementKindSectionHeader
-            let view = collectionView.makeSupplementaryView(ofKind: kind, withIdentifier: isHeader ? Self.headerID : Self.footerID, for: indexPath) as! HistoryCollectionSupplement
-            view.rootView = isHeader ? parent.header(parent.sessions[indexPath.section]) : parent.footer()
-            return view
-        }
-        func collectionView(_ collectionView: NSCollectionView, layout collectionViewLayout: NSCollectionViewLayout, sizeForItemAt indexPath: IndexPath) -> NSSize {
-            let width = collectionView.enclosingScrollView?.contentSize.width ?? collectionView.bounds.width
-            let columns = max(1, Int((width + 16) / 191))
-            return NSSize(width: min(320, max(1, (width - CGFloat(columns - 1) * 16) / CGFloat(columns))), height: parent.showProfiles ? 224 : 204)
-        }
-        func collectionView(_ collectionView: NSCollectionView, layout collectionViewLayout: NSCollectionViewLayout, referenceSizeForHeaderInSection section: Int) -> NSSize {
-            NSSize(width: collectionView.bounds.width, height: 24 + (parent.showTopics ? 28 : 0) + (parent.sessions[section].isVisit ? 0 : 26))
-        }
-        func collectionView(_ collectionView: NSCollectionView, layout collectionViewLayout: NSCollectionViewLayout, referenceSizeForFooterInSection section: Int) -> NSSize {
-            NSSize(width: collectionView.bounds.width, height: parent.hasMore && section == parent.sessions.count - 1 ? 44 : 0)
         }
     }
 }
@@ -128,9 +125,58 @@ import BowserSurfaceKit
     }
 }
 
-@MainActor private final class HistoryCollectionLayout: NSCollectionViewFlowLayout {
+@MainActor private final class HistoryCollectionLayout: NSCollectionViewLayout {
+    struct Section {
+        let cards: Int
+        let headerHeight: CGFloat
+        let cardHeight: CGFloat
+        let footer: Bool
+    }
+    var sections: [Section] = []
+    private var attributes: [IndexPath: NSCollectionViewLayoutAttributes] = [:]
+    private var ordered: [NSCollectionViewLayoutAttributes] = []
+    private var size: NSSize = .zero
+
+    override func prepare() {
+        super.prepare()
+        guard let collection = collectionView else { return }
+        let width = collection.enclosingScrollView?.contentSize.width ?? collection.bounds.width
+        guard width > 0 else { attributes = [:]; ordered = []; size = .zero; return }
+        let columns = max(1, Int((width + 16) / 191))
+        let cardWidth = min(320, (width - CGFloat(columns - 1) * 16) / CGFloat(columns))
+        var y: CGFloat = 12
+        attributes = [:]; ordered = []
+        func add(_ section: Int, _ item: Int, _ frame: NSRect) {
+            let path = IndexPath(item: item, section: section)
+            let value = NSCollectionViewLayoutAttributes(forItemWith: path)
+            value.frame = frame
+            attributes[path] = value; ordered.append(value)
+        }
+        for (section, info) in sections.enumerated() {
+            add(section, 0, NSRect(x: 0, y: y, width: width, height: info.headerHeight))
+            y += info.headerHeight + 18
+            for item in 0..<info.cards {
+                add(section, item + 1, NSRect(
+                    x: CGFloat(item % columns) * (cardWidth + 16),
+                    y: y + CGFloat(item / columns) * (info.cardHeight + 18),
+                    width: cardWidth, height: info.cardHeight))
+            }
+            y += CGFloat((info.cards + columns - 1) / columns) * (info.cardHeight + 18)
+            if info.footer {
+                add(section, info.cards + 1, NSRect(x: 0, y: y, width: width, height: 44))
+                y += 62
+            }
+            y += 26
+        }
+        size = NSSize(width: width, height: y)
+    }
+    override var collectionViewContentSize: NSSize { size }
+    override func layoutAttributesForElements(in rect: NSRect) -> [NSCollectionViewLayoutAttributes] {
+        ordered.filter { $0.frame.intersects(rect) }
+    }
+    override func layoutAttributesForItem(at indexPath: IndexPath) -> NSCollectionViewLayoutAttributes? { attributes[indexPath] }
     override func shouldInvalidateLayout(forBoundsChange newBounds: NSRect) -> Bool {
-        abs(newBounds.width - (collectionView?.bounds.width ?? 0)) > 0.5
+        abs(newBounds.width - size.width) > 0.5
     }
 }
 
@@ -140,13 +186,3 @@ import BowserSurfaceKit
     override func prepareForReuse() { super.prepareForReuse(); host.rootView = AnyView(EmptyView()) }
 }
 
-@MainActor private final class HistoryCollectionSupplement: NSHostingView<AnyView>, NSCollectionViewElement {
-    @objc init(frame: NSRect) {
-        super.init(rootView: AnyView(EmptyView()))
-        self.frame = frame
-        sizingOptions = []
-    }
-    required init(rootView: AnyView) { super.init(rootView: rootView); sizingOptions = [] }
-    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-    override func prepareForReuse() { super.prepareForReuse(); rootView = AnyView(EmptyView()) }
-}
