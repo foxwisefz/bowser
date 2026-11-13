@@ -1192,36 +1192,20 @@ struct HistoryScreen: View {
                             : "Enable visit recording in History settings. Existing saved history remains available."))
                 if !model.enabled { Button("History settings") { model.showSettings() } }
             } else {
-                // One virtualized list owns scrolling. A lazy adaptive grid inside
-                // each lazy session can repeatedly invalidate its parent's height
-                // as cards appear, trapping the browser in SwiftUI layout.
-                GeometryReader { viewport in
-                    let columns = max(1, Int((viewport.size.width + 16) / 191))
-                    let cardWidth = min(320, max(1, (viewport.size.width - CGFloat(columns - 1) * 16) / CGFloat(columns)))
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 18) {
-                            ForEach(sessions) { session in
-                                sessionHeader(session).padding(.top, 8)
-                                if !collapsed.contains(session.id) {
-                                    ForEach(0..<((session.items.count + columns - 1) / columns), id: \.self) { row in
-                                        HStack(alignment: .top, spacing: 16) {
-                                            ForEach(session.items.dropFirst(row * columns).prefix(columns)) { item in
-                                                HistoryVisitCard(
-                                                    item: item, selected: selection.contains(item.id),
-                                                    profileName: model.allProfiles ? model.profiles.first(where: { $0.id == item.profile })?.name : nil,
-                                                    select: { if !selection.insert(item.id).inserted { selection.remove(item.id) } },
-                                                    inspect: { preview = item }, open: { model.open(item) })
-                                                .frame(width: cardWidth, height: model.allProfiles ? 224 : 204, alignment: .top)
-                                            }
-                                        }.frame(height: model.allProfiles ? 224 : 204, alignment: .top)
-                                    }
-                                }
-                            }
-                            if model.hasMore { Button("Load older history") { model.loadMore() }.frame(maxWidth: .infinity).padding(.vertical, 10) }
-                        }
-                        .frame(width: viewport.size.width, alignment: .leading).padding(.bottom, 24)
-                    }.frame(width: viewport.size.width, height: viewport.size.height)
-                }
+                HistoryCollection(
+                    sessions: sessions, selection: selection, collapsed: collapsed,
+                    showTopics: showTopics, showProfiles: model.allProfiles, hasMore: model.hasMore,
+                    searchIdentity: [model.selectedProfile, String(model.allProfiles), model.query, model.dateFilter, model.siteFilter],
+                    card: { item in
+                        AnyView(HistoryVisitCard(
+                            item: item, selected: selection.contains(item.id),
+                            profileName: model.allProfiles ? model.profiles.first(where: { $0.id == item.profile })?.name : nil,
+                            select: { if !selection.insert(item.id).inserted { selection.remove(item.id) } },
+                            inspect: { preview = item }, open: { model.open(item) }))
+                    },
+                    header: { AnyView(sessionHeader($0)) },
+                    footer: { AnyView(Button("Load older history") { model.loadMore() }.frame(maxWidth: .infinity)) }
+                ).frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }.padding(22).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }

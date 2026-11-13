@@ -62,20 +62,34 @@ import BowserSurfaceKit
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1404, height: 972), styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false; window.contentView = host; window.orderBack(nil)
         defer { window.orderOut(nil); window.contentView = nil }
+        func scrollViews(_ view: NSView) -> [NSScrollView] {
+            (view as? NSScrollView).map { [$0] } ?? view.subviews.flatMap(scrollViews)
+        }
         for width in [1404, 820, 1100, 1404] {
             window.setContentSize(NSSize(width: width, height: 972))
             try await Task.sleep(for: .milliseconds(200))
             host.layoutSubtreeIfNeeded()
-        }
-        func scrollViews(_ view: NSView) -> [NSScrollView] {
-            (view as? NSScrollView).map { [$0] } ?? view.subviews.flatMap(scrollViews)
+            let scroll = try XCTUnwrap(scrollViews(host).first)
+            let collection = try XCTUnwrap(scroll.documentView as? NSCollectionView)
+            for cell in collection.visibleItems() {
+                let path = try XCTUnwrap(collection.indexPath(for: cell))
+                let attributes = try XCTUnwrap(collection.collectionViewLayout?.layoutAttributesForItem(at: path))
+                XCTAssertLessThanOrEqual(attributes.frame.maxX, scroll.contentSize.width + 1, "Resizing must reflow cards within the viewport")
+            }
         }
         let scroll = try XCTUnwrap(scrollViews(host).first)
-        for y in [800.0, 1600.0, 0.0] {
+        let collection = try XCTUnwrap(scroll.documentView as? NSCollectionView)
+        XCTAssertGreaterThan(collection.visibleItems().count, 0)
+        XCTAssertLessThan(collection.visibleItems().count, full.count, "Offscreen cards must be recycled rather than all mounted")
+        for y in [800.0, 1600.0] {
             scroll.contentView.scroll(to: NSPoint(x: 0, y: y)); scroll.reflectScrolledClipView(scroll.contentView)
             try await Task.sleep(for: .milliseconds(200))
         }
         for _ in 0..<5 {
+            // Filtering while deep in the timeline must safely shrink its
+            // document, including when the old visible rows no longer exist.
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: 1600)); scroll.reflectScrolledClipView(scroll.contentView)
+            try await Task.sleep(for: .milliseconds(100))
             model.results = Array(full.prefix(1))
             try await Task.sleep(for: .milliseconds(100))
             model.results = full
@@ -143,6 +157,9 @@ import BowserSurfaceKit
             try await Task.sleep(for: .milliseconds(200))
             host.layoutSubtreeIfNeeded()
             XCTAssertEqual(host.bounds.width, Double(width))
+            // Reused native cells receive their final width during AppKit layout;
+            // let their SwiftUI text drawing commit before capturing the artifact.
+            try await Task.sleep(for: .milliseconds(100))
             let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
             host.cacheDisplay(in: host.bounds, to: bitmap)
             try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: URL(fileURLWithPath: "/tmp/bowser-history-timeline-\(width).png"))

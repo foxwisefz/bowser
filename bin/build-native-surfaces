@@ -20,6 +20,7 @@ swiftc -target arm64-apple-macos15.0 -swift-version 6 -O -parse-as-library -emit
   "$repo/shell/Sources/Bowser/NativeUIRenderer.swift" \
   "$repo/shell/Sources/Bowser/CommandPaletteRenderer.swift" \
   "$repo/shell/Sources/Bowser/BrowserScreens.swift" \
+  "$repo/shell/Sources/Bowser/HistoryCollection.swift" \
   "$repo/shell/Sources/Bowser/SurfaceRenderer.swift" \
   "$repo/shell/Sources/Bowser/SurfaceTabDrag.swift" \
   "$repo/shell/Sources/Bowser/TabDustEffect.swift" \
