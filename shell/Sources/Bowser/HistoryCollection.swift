@@ -24,7 +24,11 @@ import BowserSurfaceKit
         scroll.autohidesScrollers = true
         scroll.drawsBackground = false
         let collection = NSCollectionView()
-        collection.backgroundColors = [.clear]
+        // Recycled supplementary views need their own compositing surface in
+        // the browser's layered tab host. Clear backing leaves retired header
+        // pixels visible after scrolling or replacing search results.
+        collection.wantsLayer = true
+        collection.backgroundColors = [.windowBackgroundColor]
         collection.isSelectable = false
         let layout = HistoryCollectionLayout()
         layout.minimumInteritemSpacing = 16

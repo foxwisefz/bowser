@@ -13,6 +13,7 @@ import BowserSurfaceKit
     var retentionDays = 90
     var excludedSites = ""
     var query = "orange website"
+    @Published var siteFilter = ""
     @Published var results = [HistorySearchItem(id: "one", url: "https://example.test/network", title: "Network security and performance", snippet: "Protect your applications and connect your network. White background; orange accents.", seen: Date(), image: nil)]
     var status = "History stays on this Mac. New content is indexed in the background."
     var storageText = "24 items · 180 KB of 128 MB · 0 awaiting semantic indexing"
@@ -50,11 +51,11 @@ import BowserSurfaceKit
         let cg = try XCTUnwrap(picture.cgImage(forProposedRect: nil, context: nil, hints: nil))
         let thumbnail = try XCTUnwrap(NSBitmapImageRep(cgImage: cg).representation(using: .jpeg, properties: [:]))
         let full = (0..<60).map { index in
-            let age = index < 46 ? Double(index * 50) : index < 49 ? 14500 + Double(index) : 119400 + Double(index)
+            let age = index < 4 ? Double(index * 50) : index < 50 ? 7200 + Double(index * 50) : 119400 + Double(index)
             return HistorySearchItem(id: String(index), url: "https://example.test/\(index)",
                 title: index.isMultiple(of: 3) ? String(repeating: "A long page title ", count: 10) : "Page \(index)",
                 snippet: "", seen: Date().addingTimeInterval(-age), image: index.isMultiple(of: 8) ? thumbnail : nil,
-                profile: "work", isVisit: index < 46)
+                profile: "work", isVisit: index < 50)
         }
         model.results = full
         let host = NSHostingView(rootView: LiveBrowserScreen(kind: "history", model: model))
@@ -62,6 +63,16 @@ import BowserSurfaceKit
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1404, height: 972), styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false; window.contentView = host; window.orderBack(nil)
         defer { window.orderOut(nil); window.contentView = nil }
+        if let path = ProcessInfo.processInfo.environment["BOWSER_TEST_SCREEN_MODULE"] {
+            try await Task.sleep(for: .milliseconds(100))
+            func slots(_ view: NSView) -> [NativeModuleSlot] {
+                (view as? NativeModuleSlot).map { [$0] } ?? view.subviews.flatMap(slots)
+            }
+            let slot = try XCTUnwrap(slots(host).first)
+            let library = try NativeModuleLibrary(bundle: URL(fileURLWithPath: path), team: nil, bundled: true, kind: .surfaces)
+            window.makeFirstResponder(nil)
+            XCTAssertTrue(slot.install(library))
+        }
         func scrollViews(_ view: NSView) -> [NSScrollView] {
             (view as? NSScrollView).map { [$0] } ?? view.subviews.flatMap(scrollViews)
         }
@@ -90,7 +101,11 @@ import BowserSurfaceKit
             // document, including when the old visible rows no longer exist.
             scroll.contentView.scroll(to: NSPoint(x: 0, y: 1600)); scroll.reflectScrolledClipView(scroll.contentView)
             try await Task.sleep(for: .milliseconds(100))
+            model.siteFilter = "example.test"
+            try await Task.sleep(for: .milliseconds(100))
             model.results = Array(full.prefix(1))
+            try await Task.sleep(for: .milliseconds(100))
+            model.siteFilter = ""
             try await Task.sleep(for: .milliseconds(100))
             model.results = full
             try await Task.sleep(for: .milliseconds(100))
@@ -102,6 +117,9 @@ import BowserSurfaceKit
                 XCTAssertFalse(header.frame.intersects(other.frame), "Recycled session headers must not leave overlapping views behind")
             }
         }
+        let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+        host.cacheDisplay(in: host.bounds, to: bitmap)
+        try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: URL(fileURLWithPath: "/tmp/bowser-history-after-filter.png"))
         func cpuTime() -> Double {
             var usage = rusage()
             getrusage(RUSAGE_SELF, &usage)
