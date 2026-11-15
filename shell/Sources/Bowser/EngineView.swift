@@ -177,7 +177,7 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
     })();
     """
 
-    /// Browser notches overlay the page without a full-width reserved band.
+    /// AppKit reserves the native toolbar above the content view; WebKit needs no extra inset.
     static let pageTopInset: CGFloat = 0
 
     /// Invoke an ObjC setter taking a primitive (no KVC, no NSInvocation).

@@ -12,7 +12,6 @@ final class CaptureModeTests: XCTestCase {
         defer { browser.window?.close() }
         let indicator = browser.captureChromeViews[1]
         XCTAssertTrue(indicator.isHidden)
-        browser.setProfileIndicatorVisible(true, animated: false)
         XCTAssertTrue(indicator.isHidden)
         Profile.all.append(Profile(id: "work", name: "Work", tint: nil, icon: nil, uuid: UUID().uuidString))
         browser.profileDidChange()
@@ -51,7 +50,7 @@ final class CaptureModeTests: XCTestCase {
         XCTAssertTrue(state.isEnabled) // A new sharing session can auto-enter.
     }
 
-    @MainActor func testChromeStaysHiddenAcrossHoverAndRefreshAndRestoresExactly() throws {
+    @MainActor func testChromeStaysHiddenAcrossRefreshAndRestoresExactly() throws {
         _ = NSApplication.shared
         let browser = BrowserWindowController(profile: .defaultProfile)
         defer { browser.window?.close() }
@@ -67,10 +66,6 @@ final class CaptureModeTests: XCTestCase {
         let previous = controls.map(\.isHidden)
         browser.setCaptureMode(true)
         XCTAssertTrue(controls.allSatisfy(\.isHidden))
-        browser.setToolbarIntent(visible: true, yielded: false)
-        browser.setToolbarHovered(true)
-        browser.setToolbarVisible(true)
-        browser.setProfileIndicatorVisible(true)
         browser.syncModButtons()
         browser.profileDidChange()
         XCTAssertTrue(controls.allSatisfy(\.isHidden))
@@ -80,7 +75,6 @@ final class CaptureModeTests: XCTestCase {
         browser.setCaptureMode(false)
         XCTAssertEqual(controls.map(\.isHidden), previous)
         XCTAssertFalse(browser.isCaptureMode)
-        browser.setToolbarVisible(true, animated: false)
         XCTAssertFalse(controls[0].isHidden)
     }
 

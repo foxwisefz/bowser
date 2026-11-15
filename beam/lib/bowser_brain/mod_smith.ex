@@ -326,8 +326,8 @@ defmodule BowserBrain.ModSmith do
     create a browser-wide tier-mod and call set_theme in init_mod and on
     mod_reloaded. Keys are optional; colors MUST be #rrggbb; button_style is
     "flat" or "beveled"; title_size 9..16; corner_radius 0..12; show_navigation
-    is boolean; core navigation stays visible in the compact notch regardless of this value.
-    The active favicon stays visible and the title expands on hover; the controls sit in a compact left notch and profile identity has a separate right notch. Pages have no reserved toolbar inset.
+    is boolean; core navigation stays visible in the native toolbar regardless of this value.
+    The native translucent toolbar keeps controls and the active address visible, with profile identity in the same bar when multiple profiles exist. Pages begin below the toolbar.
     No arbitrary native CSS or layout changes. There is no native
     tab strip: tab UI is a separate mod Surface. Do not claim to have styled
     tabs with set_theme. Chrome.theme() reads the effective map;

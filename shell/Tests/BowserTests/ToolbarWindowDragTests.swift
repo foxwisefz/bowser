@@ -30,8 +30,8 @@ import XCTest
     func testFallbackDragsAcrossControlsAndPreservesClicks() async throws {
         _ = NSApplication.shared
         var commands = 0
-        let toolbar = CmdCluster(profileID: "default", reveal: ChromeReveal(), tint: nil,
-            openBar: { commands += 1 }, goBack: {}, goForward: {}, reload: {}, modClick: { _ in }, onHoverChanged: { _ in })
+        let toolbar = CmdCluster(profileID: "default", tint: nil,
+            openBar: { commands += 1 }, goBack: {}, goForward: {}, reload: {}, modClick: { _ in })
         try await checkDragRegions(NSHostingView(rootView: toolbar), commands: { commands })
     }
 

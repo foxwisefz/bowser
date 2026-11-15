@@ -61,41 +61,20 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     private let container = ToolbarContainerView()
     private(set) var websiteLayout: WebsiteLayout?
     private var paneFocusMonitor: Any?
-    private var band: BandScrimView!
     private var clusterHosting: NSHostingView<AnyView>?
     private var nativeToolbar: NativeModuleSlot?
+    private var browserToolbar: BrowserToolbar?
     private var lastToolbarSnapshot: Data?
-    private let titleLabel = NSTextField(labelWithString: "")
-    private let titleViewport = NSView()
-    private var titleTextWidth: NSLayoutConstraint?
-    private let notch = ToolbarNotchView()
-    private let profileNotch = ToolbarNotchView()
-    private let toolbarFavicon = NSImageView()
+    private var controlsWidth: CGFloat = 202
     let loadingLine = ToolbarLoadingLine()
     private let profileIdentity = NSStackView()
-    private var notchTitleWidth: NSLayoutConstraint?
-    private var clusterWidth: NSLayoutConstraint?
-    private var toolbarTop: NSLayoutConstraint?
-    private var profileTop: NSLayoutConstraint?
-    private var profileSpacing: NSLayoutConstraint?
-    private var singleProfileSpacing: NSLayoutConstraint?
-    private var toolbarIntentObserver: ToolbarIntentObserver?
-    private var profileIntentObserver: ToolbarIntentObserver?
     private(set) var isCaptureMode = false
     private var captureHiddenViews: [ObjectIdentifier: (view: NSView, hidden: Bool)] = [:]
-    private var toolbarYielded = false
-    private var toolbarIsVisible = true
-    var toolbarHiddenFraction: CGFloat = 0.5 {
-        didSet { setToolbarVisible(toolbarIsVisible, animated: false) }
-    }
     /// The profile every tab of this window belongs to. Set once, right
     /// after the window exists and before its first tab is born.
     private(set) var profile: Profile = .defaultProfile
     private let profileBadge = NSTextField(labelWithString: "")
     private let profilePortrait = NSImageView()
-    /// Hover reveals secondary toolbar actions; native window buttons stay put.
-    private let reveal = ChromeReveal()
-    private var revealHide: DispatchWorkItem?
 
     /// Windows of different profiles remember their frames separately (the
     /// default keeps the pre-profiles key).
@@ -108,7 +87,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         let isSiteApp = SiteAppConfiguration.current != nil
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1200, height: 800),
-            styleMask: isSiteApp ? [.titled, .closable, .miniaturizable, .resizable] : [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
         )
@@ -122,13 +101,10 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         // Without this, ⌘T/window-merge hands us a tab bar we then have to
         // fight — the whack-a-mole this bead exists to end.
         window.tabbingMode = .disallowed
-        if !isSiteApp {
-            window.toolbarStyle = .unifiedCompact
-            // Let AppKit provide a taller titlebar and position its native buttons.
-            // The transparent toolbar leaves the page visible between our two islands.
-            window.toolbar = NSToolbar(identifier: "BrowserChromeSpacing")
-        }
-        window.titlebarAppearsTransparent = true
+        window.toolbarStyle = .unifiedCompact
+        // Native titlebar material spans the whole window. Content starts below
+        // it, so website headers never compete with browser controls for clicks.
+        window.titlebarAppearsTransparent = isSiteApp
         window.titlebarSeparatorStyle = .none
         window.titleVisibility = isSiteApp ? .visible : .hidden
         self.init(window: window)
@@ -138,47 +114,14 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         container.autoresizingMask = [.width, .height]
         window.contentView = container
 
-        // Browser chrome overlays the page; there is no full-width toolbar band.
-        let band = BandScrimView()
-        band.isHidden = true
-        self.band = band
-
-        // The notch lives in the real titlebar, keeping native window controls
-        // in place while its title expands to the right.
         if !isSiteApp {
-        let fallback = NSHostingView(rootView: AnyView(clusterView()))
-        let hosting = NativeModuleSlot(fallback: fallback)
-        hosting.identifier = ToolbarWindowDragView.regionIdentifier
-        hosting.interactionInProgress = { TabDragPreview.shared.source != nil }
-        hosting.onAction = { [weak self] event in self?.nativeToolbarAction(event) }
-        nativeToolbar = hosting
-        hosting.translatesAutoresizingMaskIntoConstraints = false
-        if let titlebar = window.standardWindowButton(.closeButton)?.superview {
-            notch.translatesAutoresizingMaskIntoConstraints = false
-            notch.onHover = { [weak self] inside in self?.setToolbarHovered(inside) }
-            titlebar.addSubview(notch, positioned: .below, relativeTo: nil)
-            titlebar.addSubview(hosting)
-            hosting.appearance = NSAppearance(named: .darkAqua)
-            titleLabel.font = .systemFont(ofSize: 12, weight: .medium)
-            titleLabel.textColor = .white.withAlphaComponent(0.85)
-            titleLabel.lineBreakMode = .byTruncatingTail
-            titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-            titleLabel.alignment = .left
-            titleLabel.translatesAutoresizingMaskIntoConstraints = false
-            titleLabel.wantsLayer = true
-            titleLabel.layer?.masksToBounds = true
-            titleLabel.alphaValue = 0
-            titleViewport.identifier = NSUserInterfaceItemIdentifier("toolbarTitleViewport")
-            titleViewport.translatesAutoresizingMaskIntoConstraints = false
-            titleViewport.wantsLayer = true
-            titleViewport.layer?.masksToBounds = true
-            notch.addSubview(titleViewport)
-            titleViewport.addSubview(titleLabel)
-            toolbarFavicon.translatesAutoresizingMaskIntoConstraints = false
-            toolbarFavicon.imageScaling = .scaleProportionallyUpOrDown
-            toolbarFavicon.contentTintColor = .white
-            toolbarFavicon.setAccessibilityLabel("Active tab icon")
-            notch.addSubview(toolbarFavicon)
+            let fallback = NSHostingView(rootView: AnyView(clusterView()))
+            let hosting = NativeModuleSlot(fallback: fallback)
+            hosting.identifier = ToolbarWindowDragView.regionIdentifier
+            hosting.interactionInProgress = { TabDragPreview.shared.source != nil }
+            hosting.onAction = { [weak self] event in self?.nativeToolbarAction(event) }
+            nativeToolbar = hosting
+            clusterHosting = fallback
             profileBadge.font = .systemFont(ofSize: 11, weight: .semibold)
             profileBadge.lineBreakMode = .byTruncatingTail
             profileBadge.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
@@ -188,93 +131,15 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
             profileIdentity.spacing = 4
             profileIdentity.addArrangedSubview(profilePortrait)
             profileIdentity.addArrangedSubview(profileBadge)
-            profileIdentity.translatesAutoresizingMaskIntoConstraints = false
-            profileNotch.acceptsPointer = false
-            profileNotch.translatesAutoresizingMaskIntoConstraints = false
-            titlebar.addSubview(profileNotch, positioned: .below, relativeTo: nil)
-            profileNotch.addSubview(profileIdentity)
-            let titleWidth = titleViewport.widthAnchor.constraint(equalToConstant: 0)
-            let textWidth = titleLabel.widthAnchor.constraint(equalToConstant: 220)
-            titleTextWidth = textWidth
-            let controlsWidth = hosting.widthAnchor.constraint(equalToConstant: 202)
-            titleWidth.priority = .defaultHigh
-            notchTitleWidth = titleWidth; clusterWidth = controlsWidth
-            let lights = window.standardWindowButton(.zoomButton)!
-            // Retain the reference button spacing inside concentric window insets.
-            let scale = lights.frame.height / 29
-            for (index, kind) in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton].enumerated() {
-                guard let button = window.standardWindowButton(kind) else { continue }
-                button.translatesAutoresizingMaskIntoConstraints = false
-                NSLayoutConstraint.activate([
-                    button.leadingAnchor.constraint(equalTo: titlebar.leadingAnchor, constant: ToolbarCornerGeometry.inset + (15 + CGFloat(index) * 46) * scale + 4),
-                    button.topAnchor.constraint(equalTo: notch.topAnchor, constant: (ToolbarCornerGeometry.height - lights.frame.height) / 2),
-                    button.widthAnchor.constraint(equalToConstant: 29 * scale),
-                    button.heightAnchor.constraint(equalToConstant: 29 * scale),
-                ])
-            }
-            loadingLine.translatesAutoresizingMaskIntoConstraints = false
-            notch.addSubview(loadingLine)
             NSLayoutConstraint.activate([
-                loadingLine.leadingAnchor.constraint(equalTo: notch.leadingAnchor, constant: 12),
-                loadingLine.trailingAnchor.constraint(equalTo: notch.trailingAnchor, constant: -12),
-                loadingLine.bottomAnchor.constraint(equalTo: notch.bottomAnchor, constant: -2),
-                loadingLine.heightAnchor.constraint(equalToConstant: 2),
-                hosting.leadingAnchor.constraint(equalTo: lights.trailingAnchor, constant: 12),
-                hosting.centerYAnchor.constraint(equalTo: lights.centerYAnchor),
-                hosting.heightAnchor.constraint(equalToConstant: 24), controlsWidth,
-                profileIdentity.trailingAnchor.constraint(equalTo: titlebar.trailingAnchor, constant: -24),
-                profileIdentity.leadingAnchor.constraint(equalTo: profileNotch.leadingAnchor, constant: 18),
-                profileNotch.trailingAnchor.constraint(equalTo: titlebar.trailingAnchor, constant: -ToolbarCornerGeometry.inset),
-                profileNotch.heightAnchor.constraint(equalToConstant: ToolbarCornerGeometry.height),
-                profileIdentity.centerYAnchor.constraint(equalTo: profileNotch.centerYAnchor),
-                profileIdentity.widthAnchor.constraint(lessThanOrEqualToConstant: 110),
                 profilePortrait.widthAnchor.constraint(equalToConstant: 20),
-                profilePortrait.heightAnchor.constraint(equalToConstant: 20),
-                toolbarFavicon.leadingAnchor.constraint(equalTo: hosting.trailingAnchor, constant: 8),
-                toolbarFavicon.centerYAnchor.constraint(equalTo: lights.centerYAnchor),
-                toolbarFavicon.widthAnchor.constraint(equalToConstant: 16),
-                toolbarFavicon.heightAnchor.constraint(equalToConstant: 16),
-                titleViewport.leadingAnchor.constraint(equalTo: toolbarFavicon.trailingAnchor, constant: 8),
-                titleViewport.centerYAnchor.constraint(equalTo: lights.centerYAnchor),
-                titleViewport.heightAnchor.constraint(equalToConstant: 24), titleWidth,
-                titleLabel.leadingAnchor.constraint(equalTo: titleViewport.leadingAnchor),
-                titleLabel.centerYAnchor.constraint(equalTo: titleViewport.centerYAnchor), textWidth,
-                notch.leadingAnchor.constraint(equalTo: titlebar.leadingAnchor, constant: ToolbarCornerGeometry.inset),
-                notch.heightAnchor.constraint(equalToConstant: ToolbarCornerGeometry.height),
-                notch.trailingAnchor.constraint(equalTo: titleViewport.trailingAnchor, constant: 12),
-                titleViewport.widthAnchor.constraint(greaterThanOrEqualToConstant: 0),
-            ])
-            profileSpacing = notch.trailingAnchor.constraint(lessThanOrEqualTo: profileNotch.leadingAnchor, constant: -8)
-            singleProfileSpacing = notch.trailingAnchor.constraint(lessThanOrEqualTo: titlebar.trailingAnchor, constant: -ToolbarCornerGeometry.inset)
-            let top = notch.topAnchor.constraint(equalTo: titlebar.topAnchor, constant: ToolbarCornerGeometry.inset)
-            toolbarTop = top
-            top.isActive = true
-            let identityTop = profileNotch.topAnchor.constraint(equalTo: titlebar.topAnchor, constant: ToolbarCornerGeometry.inset)
-            profileTop = identityTop
-            identityTop.isActive = true
-            toolbarIntentObserver = ToolbarIntentObserver(window: window, target: { [weak self, weak window] in
-                guard let self, let window else { return .zero }
-                return NSRect(x: window.frame.minX + ToolbarCornerGeometry.inset,
-                              y: window.frame.maxY - ToolbarCornerGeometry.inset - ToolbarCornerGeometry.height,
-                              width: self.notch.frame.width, height: ToolbarCornerGeometry.height + ToolbarCornerGeometry.inset)
-            }, interacting: { SurfaceServices.shared.hasInteractions }, changed: { [weak self] visible, yielded in
-                self?.setToolbarIntent(visible: visible, yielded: yielded)
-            })
-            profileIntentObserver = ToolbarIntentObserver(window: window, mode: .reference, target: { [weak self, weak window] in
-                guard let self, let window else { return .zero }
-                guard !self.profileNotch.isHidden else { return .zero }
-                let frame = window.convertToScreen(self.profileNotch.convert(self.profileNotch.bounds, to: nil))
-                return NSRect(x: frame.minX,
-                              y: window.frame.maxY - ToolbarCornerGeometry.inset - ToolbarCornerGeometry.height,
-                              width: frame.width, height: ToolbarCornerGeometry.height)
-            }, interacting: { false }, changed: { [weak self] visible, _ in
-                self?.setProfileIndicatorVisible(visible)
-            })
-            band.isHidden = true
-
-        }
-        clusterHosting = fallback
-
+                profilePortrait.heightAnchor.constraint(equalToConstant: 20)])
+            let toolbar = BrowserToolbar(controls: hosting, profile: profileIdentity, loading: loadingLine) { [weak self] in
+                guard let self else { return }
+                CommandBar.shared.show(for: self, showCurrentURL: true)
+            }
+            browserToolbar = toolbar
+            window.toolbar = toolbar.toolbar
         }
         refreshProfileBadge()
 
@@ -307,7 +172,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         overlay.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
         overlay.autoresizingMask = [.width, .height]
         overlay.onDismiss = { [weak self] in self?.dismissResurrectOverlay() }
-        container.addSubview(overlay, positioned: .above, relativeTo: band)
+        container.addSubview(overlay, positioned: .above, relativeTo: nil)
         resurrectOverlay = overlay
         // The frame must never outstay its welcome: if the restore is slow
         // or the paint signal is missed, drop it anyway.
@@ -704,7 +569,6 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         }
         view.onURLChange = { [weak self, weak view] url in
             guard let self, self.activeTab === view else { return }
-            self.titleLabel.toolTip = url.isEmpty ? self.titleLabel.stringValue : url
             self.refreshToolbarFavicon()
             self.syncModButtons()
         }
@@ -720,13 +584,12 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
 
     private func refreshProfileBadge() {
         let hidden = Profile.all.count <= 1 || SiteAppConfiguration.current != nil
-        profileNotch.isHidden = hidden || isCaptureMode
-        if isCaptureMode { captureHiddenViews[ObjectIdentifier(profileNotch)] = (profileNotch, hidden) }
-        profileSpacing?.isActive = !hidden
-        singleProfileSpacing?.isActive = hidden
+        profileIdentity.isHidden = hidden || isCaptureMode
+        if isCaptureMode { captureHiddenViews[ObjectIdentifier(profileIdentity)] = (profileIdentity, hidden) }
+        browserToolbar?.setProfileVisible(!hidden)
         profileBadge.stringValue = profile.label
-        profileBadge.textColor = profile.color ?? .white
-        profileBadge.isHidden = SiteAppConfiguration.current != nil || (profile.id == "default" && profile.icon == nil && profile.tint == nil && profile.avatar == nil)
+        profileBadge.textColor = profile.color ?? .secondaryLabelColor
+        profileBadge.isHidden = hidden
         profilePortrait.image = profile.avatar?.image
         profilePortrait.isHidden = profileBadge.isHidden || profilePortrait.image == nil
         profilePortrait.toolTip = profile.avatar?.title
@@ -743,77 +606,24 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         applyThemeColor(activeTab?.themeColor)
     }
 
-    /// Hover changes only local toolbar appearance, never window ordering.
-    /// Hide the native chrome only: never resize, reload or unmount the page.
+    /// Capture mode keeps the page geometry and native titlebar height stable.
     var captureChromeViews: [NSView] {
-        [notch, profileNotch, nativeToolbar].compactMap { $0 } +
+        [browserToolbar?.location, profileIdentity, nativeToolbar].compactMap { $0 } +
             [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton].compactMap { window?.standardWindowButton($0) }
     }
 
     func setCaptureMode(_ enabled: Bool) {
         guard SiteAppConfiguration.current == nil else { return }
-        let wasEnabled = isCaptureMode
         isCaptureMode = enabled
         if enabled {
-            revealHide?.cancel()
             for view in captureChromeViews {
                 let id = ObjectIdentifier(view)
                 if captureHiddenViews[id] == nil { captureHiddenViews[id] = (view, view.isHidden) }
-                // Immediate removal also removes hit targets and accessibility
-                // controls; pointer activity cannot bring them back mid-capture.
                 view.isHidden = true
             }
         } else {
             for entry in captureHiddenViews.values { entry.view.isHidden = entry.hidden }
             captureHiddenViews.removeAll()
-            if wasEnabled {
-                toolbarIntentObserver?.invalidatePresentation()
-                profileIntentObserver?.invalidatePresentation()
-            }
-        }
-    }
-
-    func setToolbarHovered(_ shown: Bool) {
-        guard !isCaptureMode else { return }
-        if toolbarYielded { return }
-        if !shown, notch.containsPointer { return }
-        revealHide?.cancel()
-        if shown { setToolbarVisible(true); reveal.lights = true; syncModButtons(animated: true) }
-        else {
-            let work = DispatchWorkItem { [weak self] in self?.reveal.lights = false; self?.syncModButtons(animated: true) }
-            revealHide = work
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: work)
-        }
-    }
-
-    func setToolbarIntent(visible: Bool, yielded: Bool) {
-        guard !isCaptureMode else { return }
-        toolbarYielded = yielded
-        setToolbarVisible(visible)
-    }
-
-    func setToolbarVisible(_ visible: Bool, animated: Bool = true) {
-        guard !isCaptureMode else { return }
-        let visible = (visible || activeTab?.webView.isLoading == true) && !toolbarYielded
-        toolbarIsVisible = visible
-        let buttons = [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton].compactMap { window?.standardWindowButton($0) }
-        let offset = visible ? ToolbarCornerGeometry.inset : -ToolbarCornerGeometry.height * min(0.75, max(0, toolbarHiddenFraction))
-        guard toolbarTop?.constant != offset else { return }
-        ToolbarRevealAnimation.perform(views: [notch, nativeToolbar].compactMap { $0 } + buttons,
-            animated: animated && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion && window?.inLiveResize != true) {
-            toolbarTop?.constant = offset
-            notch.superview?.layoutSubtreeIfNeeded()
-        }
-    }
-
-    func setProfileIndicatorVisible(_ visible: Bool, animated: Bool = true) {
-        guard !isCaptureMode, !profileNotch.isHidden else { return }
-        let offset = visible ? ToolbarCornerGeometry.inset : -ToolbarCornerGeometry.height * 0.5
-        guard profileTop?.constant != offset else { return }
-        ToolbarRevealAnimation.perform(views: [profileNotch],
-            animated: animated && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion && window?.inLiveResize != true) {
-            profileTop?.constant = offset
-            profileNotch.superview?.layoutSubtreeIfNeeded()
         }
     }
 
@@ -826,26 +636,23 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     private func refreshToolbarFavicon() {
         let image = activeTab?.faviconPath.flatMap { NSImage(contentsOfFile: $0) }
         refreshToolbarLoading()
-        toolbarFavicon.image = image ?? NSImage(systemSymbolName: "globe", accessibilityDescription: "Website")
-        toolbarFavicon.contentTintColor = image == nil ? .labelColor : nil
+        browserToolbar?.updateLocation(url: activeTab?.currentURLString, title: activeTab?.currentTitle ?? "", icon: image)
     }
 
     func refreshToolbarLoading() {
         loadingLine.loading = activeTab?.webView.isLoading == true
-        if loadingLine.loading { setToolbarVisible(true) }
     }
 
     private func applyTitle(_ title: String) {
         let shown = title.isEmpty ? "Bowser" : title
         window?.title = profile.icon.map { "\($0) \(shown)" } ?? shown
-        titleLabel.stringValue = title.isEmpty ? (activeTab?.currentURLString.flatMap(URL.init(string:))?.host ?? "New tab") : title
-        titleLabel.toolTip = activeTab?.currentURLString ?? titleLabel.stringValue
+        refreshToolbarFavicon()
     }
 
     private func applyThemeColor(_ pageColor: NSColor?) {
         guard let window else { return }
-        // The band shows the PAGE's theme color through its scrim — the
-        // profile tint lives on the ⌘K keycap only (owner's call).
+        // Native material follows the page appearance; profile tint remains
+        // on its identity and command button.
         let color = ChromeSurface.theme(for: profile.id).color("background") ?? pageColor
         window.backgroundColor = color ?? .windowBackgroundColor
         if let color, let rgb = color.usingColorSpace(.sRGB) {
@@ -863,8 +670,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         CmdCluster(
             profileID: profile.id,
             siteMods: currentSiteMods,
-            reveal: reveal,
-            modWidth: max(0, (clusterWidth?.constant ?? 202) - 202 - (activeTab?.downloadableResource == nil ? 0 : 27)),
+            modWidth: max(0, controlsWidth - 202 - (activeTab?.downloadableResource == nil ? 0 : 27)),
             tint: profile.color.map { Color(nsColor: $0) },
             openBar: { [weak self] in
                 guard let self else { return }
@@ -874,8 +680,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
             goForward: { [weak self] in self?.activeTab?.webView.goForward() },
             reload: { [weak self] in self?.activeTab?.reloadPage() },
             downloadResource: activeTab?.downloadableResource == nil ? nil : { [weak self] in self?.activeTab?.saveResource() },
-            modClick: { [weak self] id in self?.nativeToolbarAction("mod:" + id) },
-            onHoverChanged: { [weak self] inside in self?.setToolbarHovered(inside) }
+            modClick: { [weak self] id in self?.nativeToolbarAction("mod:" + id) }
         )
     }
 
@@ -897,31 +702,17 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         ChromeSurface.siteMods(for: profile.id, url: activeTab?.currentURLString)
     }
     /// Site mods are listed in a persistent toolbar dropdown.
-    func syncModButtons(animated: Bool = false) {
+    func syncModButtons() {
         if isCaptureMode { setCaptureMode(true) }
-        let expanded = reveal.lights
         let resourceWidth: CGFloat = activeTab?.downloadableResource == nil ? 0 : 27
         let modCount = ChromeSurface.buttons(for: profile.id).count
-        let modWidth = expanded ? min(CGFloat(modCount) * 27, min(135, max(0, (window?.frame.width ?? 800) - 520))) : 0
-        let availableTitle = min(220, max(0, (window?.frame.width ?? 800) - 484 - modWidth - resourceWidth))
-        let targetWidth = expanded ? availableTitle : 0
-        if notchTitleWidth?.constant != targetWidth || clusterWidth?.constant != 202 + modWidth + resourceWidth || titleTextWidth?.constant != availableTitle {
-            ToolbarRevealAnimation.perform(
-                views: [notch, titleViewport, titleLabel, toolbarFavicon, nativeToolbar].compactMap { $0 },
-                animated: animated && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion && window?.inLiveResize != true
-            ) {
-                clusterWidth?.constant = 202 + modWidth + resourceWidth
-                notchTitleWidth?.constant = targetWidth
-                // A fixed text width lets the viewport reveal text without reflow.
-                titleTextWidth?.constant = availableTitle
-                titleLabel.alphaValue = expanded ? 1 : 0
-                notch.superview?.layoutSubtreeIfNeeded()
-            }
-        }
+        let modWidth = min(CGFloat(modCount) * 27, min(135, max(0, (window?.frame.width ?? 800) - 640)))
+        controlsWidth = 202 + modWidth + resourceWidth
+        browserToolbar?.setControlsWidth(controlsWidth)
         let theme = ChromeSurface.theme(for: profile.id)
         let tint = profile.color?.usingColorSpace(.sRGB)
         let payload: [String: Any] = [
-            "revealed": reveal.lights, "modWidth": modWidth, "colors": theme.colors,
+            "revealed": true, "modWidth": modWidth, "colors": theme.colors,
             "siteMods": currentSiteMods.prefix(128).map { ["id": $0.id, "title": $0.title, "on": $0.on] as [String: Any] },
             "tint": tint.map { [$0.redComponent, $0.greenComponent, $0.blueComponent, $0.alphaComponent] } as Any? ?? NSNull(),
             "buttonStyle": theme.buttonStyle, "cornerRadius": theme.cornerRadius,
@@ -950,8 +741,6 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         case "forward": activeTab?.webView.goForward()
         case "reload": activeTab?.reloadPage()
         case "download-resource": activeTab?.saveResource()
-        case "hover:1": setToolbarHovered(true)
-        case "hover:0": setToolbarHovered(false)
         default:
             guard event.hasPrefix("mod:") else { return }
             let id = String(event.dropFirst(4))
@@ -976,11 +765,9 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
 
     func syncShellTheme() {
         let theme = ChromeSurface.theme(for: profile.id)
-        band?.theme = theme
         container.theme = theme
-        titleLabel.textColor = .white.withAlphaComponent(0.85)
-        titleLabel.font = .systemFont(ofSize: theme.titleSize,
-                                     weight: theme.buttonStyle == "beveled" ? .bold : .medium)
+        browserToolbar?.location.font = .systemFont(ofSize: theme.titleSize,
+            weight: theme.buttonStyle == "beveled" ? .bold : .regular)
         applyThemeColor(activeTab?.themeColor)
         syncModButtons()
     }
@@ -1007,8 +794,6 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     func windowWillClose(_ notification: Notification) {
         pendingTabPreviewCapture?.cancel()
         pendingTabPreviewCapture = nil
-        toolbarIntentObserver?.stop()
-        profileIntentObserver?.stop()
         nativeToolbar?.retire()
         container.releaseLocalState()
         detachWebsiteLayout()
@@ -1071,16 +856,10 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     }
 }
 
-/// Shared hover state for the notch title and additional mod actions.
-final class ChromeReveal: ObservableObject {
-    @Published var lights = false
-}
-
 struct CmdCluster: View {
     let profileID: String
     var siteMods: [ChromeSurface.SiteMod] = []
     private var theme: ShellTheme { ChromeSurface.theme(for: profileID) }
-    @ObservedObject var reveal: ChromeReveal
     var modWidth: CGFloat = 135
     /// The window's profile tint — painted on the ⌘K keycap only (the
     /// owner's call: not the whole bar, not the command palette).
@@ -1091,7 +870,6 @@ struct CmdCluster: View {
     let reload: () -> Void
     var downloadResource: (() -> Void)? = nil
     let modClick: (String) -> Void
-    let onHoverChanged: (Bool) -> Void
 
     var body: some View {
         HStack(spacing: 7) {
@@ -1145,7 +923,6 @@ struct CmdCluster: View {
             .fixedSize()
             .help("Mods for this site")
             .accessibilityLabel("Mods for this site")
-            // Revealed together with the window lights, same grace/fade.
             Group {
                 clusterButton("chevron.left", action: goBack)
                 clusterButton("chevron.right", action: goForward)
@@ -1156,7 +933,7 @@ struct CmdCluster: View {
                         .help("Download file")
                         .accessibilityLabel("Download file")
                 }
-                if reveal.lights && !ChromeSurface.buttons(for: profileID).isEmpty {
+                if !ChromeSurface.buttons(for: profileID).isEmpty {
                     ScrollView(.horizontal) {
                         HStack(spacing: 7) {
                 ForEach(ChromeSurface.buttons(for: profileID), id: \.id) { button in
@@ -1172,11 +949,9 @@ struct CmdCluster: View {
             }
             Spacer(minLength: 0)
         }
-        .animation(.easeOut(duration: 0.15), value: reveal.lights)
         .frame(maxHeight: .infinity)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(ToolbarWindowDragHandle())
-        .onHover { onHoverChanged($0) }
     }
 
     private func clusterButton(_ symbol: String, action: @escaping () -> Void) -> some View {

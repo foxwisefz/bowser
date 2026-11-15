@@ -351,7 +351,7 @@ let toolCatalogJSON = #"""
   },
   {
     "name": "shell_theme",
-    "description": "Read the effective native browser theme recorded by the brain. Empty means native defaults. The compact notch keeps core navigation and the favicon visible, reveals the title on hover, and places profile identity in its own right notch. The page has no reserved toolbar inset. This confirms theme state, not visual rendering.",
+    "description": "Read the effective native browser theme recorded by the brain. Empty means native defaults. The native translucent toolbar keeps navigation, the favicon and address visible, with profile identity in the same bar when multiple profiles exist. The page begins below the toolbar. This confirms theme state, not visual rendering.",
     "inputSchema": {
       "type": "object",
       "properties": {}

@@ -77,7 +77,6 @@ struct ToolbarTheme {
     private var pendingSnapshot: ToolbarSnapshot?
     private var controls: [NSView] = []
     private let drag = ToolbarWindowDragView()
-    private var tracking: NSTrackingArea?
     private var modsMenu = NSMenu()
     private var widths: [CGFloat] = []
 
@@ -88,14 +87,6 @@ struct ToolbarTheme {
     }
     required init?(coder: NSCoder) { fatalError("init(generation:)") }
     override var mouseDownCanMoveWindow: Bool { false }
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        if let tracking { removeTrackingArea(tracking) }
-        let area = NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self)
-        addTrackingArea(area); tracking = area
-    }
-    override func mouseEntered(with event: NSEvent) { emit("hover:1") }
-    override func mouseExited(with event: NSEvent) { emit("hover:0") }
     override func layout() {
         if let snapshot = pendingSnapshot {
             pendingSnapshot = nil
