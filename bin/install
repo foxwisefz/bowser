@@ -85,10 +85,11 @@ say "checking icon crash isolation before replacing the installed app"
 "$REPO/bin/check-icon-isolation"
 
 # Native helpers are required even for brain-only builds. Customers never need Python.
-say "runtime: compiling native helpers"
-(cd "$REPO/shell" && swift build --product BowserBackendHost && swift build --product BowserRuntimeTool)
-RUNTIME_TOOL="$REPO/shell/.build/debug/BowserRuntimeTool"
-BACKEND_HOST="$REPO/shell/.build/debug/BowserBackendHost"
+CONF="$BOWSER_NATIVE_CONFIGURATION"
+say "runtime: compiling $CONF native helpers"
+(cd "$REPO/shell" && swift build -c "$CONF" --product BowserBackendHost && swift build -c "$CONF" --product BowserRuntimeTool)
+RUNTIME_TOOL="$REPO/shell/.build/$CONF/BowserRuntimeTool"
+BACKEND_HOST="$REPO/shell/.build/$CONF/BowserBackendHost"
 
 # Stage the bundle/runtime so file watchers cannot restart an active browser.
 DEST_APP_DIR="$APP_DIR"
@@ -119,7 +120,6 @@ rm -f "$APP_DIR/bin/backend-host.before-loop-fix" "$APP_DIR/bin/install"
 
 # ---------------------------------------------------------------- shell
 if [ "$BRAIN_ONLY" = 0 ]; then
-  CONF=release; [ "$DEBUG" = 1 ] && CONF=debug
   say "shell: swift build -c $CONF"
   (cd "$REPO/shell" && swift build -c "$CONF")
   BIN="$REPO/shell/.build/$CONF/Bowser"
@@ -179,7 +179,8 @@ for helper in detach apply-update bowser-mcp-bridge; do
   codesign --force --sign - "$APP_DIR/bin/$helper"
 done
 codesign --force --sign - "$APP_DIR/bin/backend-host"
-WORKER="$REPO/shell/.build/${CONF:-debug}/BowserIconWorker"
+if [ "$BRAIN_ONLY" = 1 ]; then (cd "$REPO/shell" && swift build -c "$CONF" --product BowserIconWorker); fi
+WORKER="$REPO/shell/.build/$CONF/BowserIconWorker"
 [ -x "$WORKER" ] || { echo "missing icon worker: $WORKER" >&2; exit 1; }
 cp -f "$WORKER" "$APP_DIR/bin/BowserIconWorker.new"
 codesign --force --sign - "$APP_DIR/bin/BowserIconWorker.new"
