@@ -49,6 +49,7 @@ final class WindowControlActionTests: XCTestCase {
             XCTAssertTrue(button.isEnabled)
         }
         let front = NSWindow(contentRect: .zero, styleMask: [.titled], backing: .buffered, defer: false)
+        front.isReleasedWhenClosed = false
         front.makeKeyAndOrderFront(nil)
         defer { front.close() }
         let keyBefore = NSApp.keyWindow

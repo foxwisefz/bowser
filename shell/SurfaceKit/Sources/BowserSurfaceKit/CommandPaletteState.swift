@@ -36,6 +36,7 @@ public struct Result: Equatable {
     public var query = ""
     public var placeholder = "Search, address, or :command"
     public var selected = 0
+    public var opensInCurrentTab = false
     public var profile = "default"
     public var active: UInt64?
     public var tabs: () -> [TabCandidate] = { [] }

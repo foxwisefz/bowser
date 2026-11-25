@@ -38,14 +38,10 @@ import XCTest
             XCTAssertEqual([.closeButton, .miniaturizeButton, .zoomButton].compactMap { window.standardWindowButton($0)?.frame }, lights)
         }
         if ProcessInfo.processInfo.environment["BOWSER_TOOLBAR_PREVIEWS"] == "1" {
-            let frame = try XCTUnwrap(window.contentView?.superview)
             for (name, appearance) in [("light", NSAppearance.Name.aqua), ("dark", .darkAqua)] {
                 window.appearance = NSAppearance(named: appearance)
-                frame.layoutSubtreeIfNeeded()
-                let bitmap = try XCTUnwrap(frame.bitmapImageRepForCachingDisplay(in: frame.bounds))
-                frame.cacheDisplay(in: frame.bounds, to: bitmap)
-                try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
-                    .write(to: URL(fileURLWithPath: "/tmp/bowser-toolbar-\(name).png"))
+                try await Task.sleep(for: .milliseconds(180))
+                try await writeWindowPreview(window, to: URL(fileURLWithPath: "/tmp/bowser-toolbar-\(name).png"))
             }
         }
     }
@@ -66,6 +62,18 @@ import XCTest
         XCTAssertEqual(presentation.location.accessibilityValue() as? String, "https://example.com/a?b=2")
         presentation.location.performClick(nil)
         XCTAssertEqual(clicks, 1)
+        for (address, expected) in [
+            ("https://example.com:8443/path", "example.com:8443"),
+            ("http://localhost:4000/path", "http://localhost:4000"),
+            ("file:///tmp/Field%20Notes.pdf", "Field Notes.pdf"),
+            (EngineView.historyURL, "History"),
+            ("data:text/plain,hello", "Data URL"),
+            ("about:blank", "Search or enter an address")
+        ] {
+            presentation.updateLocation(url: address, title: "Page", icon: nil)
+            XCTAssertEqual(presentation.location.title, expected)
+            XCTAssertEqual(presentation.location.accessibilityValue() as? String, address == "about:blank" ? "" : address)
+        }
         for visible in [true, false, true, true, false] {
             presentation.setProfileVisible(visible)
             XCTAssertEqual(presentation.toolbar.items.filter { $0.itemIdentifier == BrowserToolbar.profileID }.count, visible ? 1 : 0)

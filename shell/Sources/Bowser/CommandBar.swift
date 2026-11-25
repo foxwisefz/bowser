@@ -2,6 +2,9 @@ import AppKit
 import BowserSurfaceKit
 
 @MainActor final class CommandBar: NSObject {
+    enum Invocation {
+        case commands, location, newTab(EngineView)
+    }
     static let shared = CommandBar()
     typealias TabCandidate = CommandPaletteState.TabCandidate
     typealias Result = CommandPaletteState.Result
@@ -13,25 +16,41 @@ import BowserSurfaceKit
     private var context: BrowserScreenContext?
     private var panel: CommandBarPanel?
     private weak var target: BrowserWindowController?
+    private weak var destinationTab: EngineView?
     private var targetURL = ""
     private var historyQuery = ""
     private var historyTask: Task<Void, Never>?
-    func show(for controller: BrowserWindowController, showCurrentURL: Bool = false) {
-        guard SiteAppConfiguration.current == nil else { return }
+    func show(for controller: BrowserWindowController, invocation: Invocation = .commands) {
+        guard SiteAppConfiguration.current == nil, let window = controller.window else { return }
         target = controller
         let panel = ensurePanel()
         panel.browserOwner = controller
-        targetURL = controller.activeTab?.currentURLString ?? ""
-        state.modScope.reset(url: targetURL, faviconPath: controller.activeTab?.faviconPath)
-        state.query = showCurrentURL ? targetURL : ""; state.selected = 0
-        state.profile = controller.profile.id; state.active = controller.activeTab?.webviewId
+        let source: EngineView?
+        switch invocation {
+        case .commands:
+            source = controller.activeTab
+            destinationTab = nil
+            state.query = ""
+        case .location:
+            source = controller.activeTab
+            destinationTab = source
+            let location = source?.currentURLString ?? ""
+            state.query = location == "about:blank" ? "" : location
+        case .newTab(let tab):
+            source = tab
+            destinationTab = tab
+            state.query = ""
+        }
+        targetURL = source?.currentURLString ?? ""
+        state.modScope.reset(url: targetURL, faviconPath: source?.faviconPath)
+        state.opensInCurrentTab = destinationTab != nil
+        state.selected = 0
+        state.results = []
+        state.profile = controller.profile.id; state.active = source?.webviewId
         historyQuery = ""; state.historyResults = []; historyTask?.cancel()
-        state.placeholder = "Search the web, your history, or open tabs"
+        state.placeholder = state.opensInCurrentTab ? "Search or enter an address" : "Search tabs, history, or the web"
+        panel.fit(to: window, height: panel.frame.height)
         state.refresh()
-        guard let window = controller.window else { return }
-        let size = panel.frame.size
-        panel.setFrameOrigin(NSPoint(x: window.frame.midX - size.width / 2,
-            y: max(window.screen?.visibleFrame.minY ?? 0, window.frame.maxY - 100 - size.height)))
         panel.makeKeyAndOrderFront(nil)
         state.focus()
     }
@@ -94,8 +113,8 @@ import BowserSurfaceKit
             } }
         }
         state.resize = { [weak panel] height in
-            guard let panel else { return }; let frame = panel.frame
-            panel.setFrame(NSRect(x: frame.minX, y: frame.maxY - height, width: frame.width, height: height), display: true)
+            guard let panel, let window = panel.browserOwner?.window else { return }
+            panel.fit(to: window, height: height)
         }
         let context = BrowserScreenContext(kind: "palette", model: state)
         self.context = context; BrowserScreenContext.contexts[context.id] = context
@@ -107,11 +126,6 @@ import BowserSurfaceKit
     }
   func choose(_ result: Result) {
     guard let target else { return hide() }
-    if let history = result.history {
-      hide()
-      (NSApp.delegate as? AppDelegate)?.openTab(url: history.url, activate: true, profile: target.profile.id)
-      return
-    }
     if let tab = result.tab {
       guard let controller = BrowserWindowController.host(of: tab.id),
         controller.profile.id == target.profile.id
@@ -124,9 +138,14 @@ import BowserSurfaceKit
       controller.window?.makeKeyAndOrderFront(nil)
     } else {
       hide()
-      (NSApp.delegate as? AppDelegate)?.openTab(
-        url: BrowserWindowController.normalize(result.query), activate: true,
-        profile: target.profile.id)
+      guard BrowserWindowController.all.contains(where: { $0 === target }) else { return }
+      let url = result.history?.url ?? BrowserWindowController.normalize(result.query)
+      if let destinationTab, target.tabs.contains(where: { $0 === destinationTab }) {
+        if target.activeTab !== destinationTab { target.activate(destinationTab) }
+        destinationTab.load(urlString: url)
+      } else {
+        target.openTab().load(urlString: url)
+      }
     }
   }
 
@@ -149,6 +168,15 @@ private final class CommandBarPanel: NSPanel, BrowserOwnedPanel {
   weak var browserOwner: BrowserWindowController?
   var onDismiss: (() -> Void)?
   override var canBecomeKey: Bool { true }
+  func fit(to owner: NSWindow, height: CGFloat) {
+    let screen = owner.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? owner.frame
+    let area = screen.insetBy(dx: 8, dy: 8)
+    let width = min(640, area.width, max(320, owner.frame.width - 32))
+    let height = min(height, area.height)
+    let x = min(max(area.minX, owner.frame.midX - width / 2), area.maxX - width)
+    let top = min(area.maxY, owner.frame.maxY - min(90, owner.frame.height * 0.14))
+    setFrame(NSRect(x: x, y: max(area.minY, top - height), width: width, height: height), display: true)
+  }
   override func resignKey() {
     super.resignKey()
     onDismiss?()

@@ -125,7 +125,7 @@ import BowserSurfaceKit
 
         if context.siteHost == nil {
             goMenu.addItem(withTitle: "Command Bar", action: NSSelectorFromString("focusOmnibarAction:"), keyEquivalent: "k")
-            goMenu.addItem(withTitle: "Open Location", action: NSSelectorFromString("focusOmnibarAction:"), keyEquivalent: "l")
+            goMenu.addItem(withTitle: "Open Location", action: NSSelectorFromString("openLocationAction:"), keyEquivalent: "l")
             let history = goMenu.addItem(withTitle: "Search History…", action: NSSelectorFromString("openHistory:"), keyEquivalent: "y")
             history.target = context.target
         }

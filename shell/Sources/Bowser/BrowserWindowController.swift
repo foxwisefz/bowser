@@ -65,6 +65,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     private var nativeToolbar: NativeModuleSlot?
     private var browserToolbar: BrowserToolbar?
     private var lastToolbarSnapshot: Data?
+    private var lastNavigationState: ToolbarNavigationState?
     private var controlsWidth: CGFloat = 202
     let loadingLine = ToolbarLoadingLine()
     private let profileIdentity = NSStackView()
@@ -136,7 +137,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
                 profilePortrait.heightAnchor.constraint(equalToConstant: 20)])
             let toolbar = BrowserToolbar(controls: hosting, profile: profileIdentity, loading: loadingLine) { [weak self] in
                 guard let self else { return }
-                CommandBar.shared.show(for: self, showCurrentURL: true)
+                self.openLocationAction(nil)
             }
             browserToolbar = toolbar
             window.toolbar = toolbar.toolbar
@@ -563,6 +564,11 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     /// Window chrome follows the mounted tab only — background tabs are free
     /// to retitle and repaint themselves without touching what's on screen.
     private func wire(_ view: EngineView) {
+        view.onNavigationChange = { [weak self, weak view] in
+            guard let self, let view, self.activeTab === view else { return }
+            if self.loadingLine.loading != view.webView.isLoading { self.refreshToolbarLoading() }
+            if self.navigationState != self.lastNavigationState { self.syncModButtons() }
+        }
         view.onTitleChange = { [weak self, weak view] title in
             guard let self, let view, self.activeTab === view else { return }
             self.applyTitle(title)
@@ -629,7 +635,6 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
 
     private func adoptChrome(from view: EngineView) {
         applyTitle(view.currentTitle)
-        refreshToolbarFavicon()
         applyThemeColor(view.themeColor)
     }
 
@@ -666,10 +671,19 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
 
     // MARK: - Chrome
 
+    private var navigationState: ToolbarNavigationState {
+        let page = activeTab?.isHistoryPage == false ? activeTab?.webView : nil
+        return ToolbarNavigationState(canGoBack: page?.canGoBack == true,
+                                      canGoForward: page?.canGoForward == true,
+                                      canReload: activeTab?.currentURLString != nil,
+                                      isLoading: page?.isLoading == true)
+    }
+
     private func clusterView() -> some View {
         CmdCluster(
             profileID: profile.id,
             siteMods: currentSiteMods,
+            navigation: navigationState,
             modWidth: max(0, controlsWidth - 202 - (activeTab?.downloadableResource == nil ? 0 : 27)),
             tint: profile.color.map { Color(nsColor: $0) },
             openBar: { [weak self] in
@@ -679,6 +693,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
             goBack: { [weak self] in self?.activeTab?.webView.goBack() },
             goForward: { [weak self] in self?.activeTab?.webView.goForward() },
             reload: { [weak self] in self?.activeTab?.reloadPage() },
+            stop: { [weak self] in self?.activeTab?.webView.stopLoading() },
             downloadResource: activeTab?.downloadableResource == nil ? nil : { [weak self] in self?.activeTab?.saveResource() },
             modClick: { [weak self] id in self?.nativeToolbarAction("mod:" + id) }
         )
@@ -694,6 +709,10 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         focusOmnibar()
     }
 
+    @objc func openLocationAction(_ sender: Any?) {
+        CommandBar.shared.show(for: self, invocation: .location)
+    }
+
     func loadURL(_ url: String) {
         activeTab?.load(urlString: url)
     }
@@ -704,6 +723,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     /// Site mods are listed in a persistent toolbar dropdown.
     func syncModButtons() {
         if isCaptureMode { setCaptureMode(true) }
+        let navigation = navigationState
+        lastNavigationState = navigation
         let resourceWidth: CGFloat = activeTab?.downloadableResource == nil ? 0 : 27
         let modCount = ChromeSurface.buttons(for: profile.id).count
         let modWidth = min(CGFloat(modCount) * 27, min(135, max(0, (window?.frame.width ?? 800) - 640)))
@@ -713,6 +734,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         let tint = profile.color?.usingColorSpace(.sRGB)
         let payload: [String: Any] = [
             "revealed": true, "modWidth": modWidth, "colors": theme.colors,
+            "navigation": navigation.snapshot,
             "siteMods": currentSiteMods.prefix(128).map { ["id": $0.id, "title": $0.title, "on": $0.on] as [String: Any] },
             "tint": tint.map { [$0.redComponent, $0.greenComponent, $0.blueComponent, $0.alphaComponent] } as Any? ?? NSNull(),
             "buttonStyle": theme.buttonStyle, "cornerRadius": theme.cornerRadius,
@@ -740,6 +762,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         case "back": activeTab?.webView.goBack()
         case "forward": activeTab?.webView.goForward()
         case "reload": activeTab?.reloadPage()
+        case "stop": activeTab?.webView.stopLoading()
         case "download-resource": activeTab?.saveResource()
         default:
             guard event.hasPrefix("mod:") else { return }
@@ -859,6 +882,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
 struct CmdCluster: View {
     let profileID: String
     var siteMods: [ChromeSurface.SiteMod] = []
+    var navigation = ToolbarNavigationState(canGoBack: false, canGoForward: false, canReload: false, isLoading: false)
     private var theme: ShellTheme { ChromeSurface.theme(for: profileID) }
     var modWidth: CGFloat = 135
     /// The window's profile tint — painted on the ⌘K keycap only (the
@@ -868,31 +892,27 @@ struct CmdCluster: View {
     let goBack: () -> Void
     let goForward: () -> Void
     let reload: () -> Void
+    var stop: () -> Void = {}
     var downloadResource: (() -> Void)? = nil
     let modClick: (String) -> Void
 
     var body: some View {
-        HStack(spacing: 7) {
+        HStack(spacing: 3) {
             Button(action: openBar) {
-                // Keycap-style badge: outlined, rounded face, like a
-                // keyboard shortcut printed on the chrome.
-                Text("⌘+K")
-                    .font(.system(size: 10.5, weight: .bold, design: .rounded))
-                    .kerning(0.8)
+                Text("⌘K")
+                    .font(.system(size: 12, weight: .medium))
                     .fixedSize(horizontal: true, vertical: false)
-                    .foregroundStyle(theme.color("button_foreground").map { AnyShapeStyle(Color(nsColor: $0)) }
-                        ?? (tint == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(.white.opacity(0.95))))
-                    .frame(width: 50, height: 22)
+                    .foregroundStyle(Color(nsColor: theme.color("button_foreground") ?? .labelColor))
+                    .frame(width: 50, height: 26)
                     .background(
                         RoundedRectangle(cornerRadius: theme.cornerRadius)
                             .fill(theme.color("button_background").map { Color(nsColor: $0) }
-                                  ?? tint ?? Color(nsColor: .controlBackgroundColor))
+                                  ?? tint?.opacity(0.22) ?? Color(nsColor: .quaternaryLabelColor))
                     )
                     .overlay(
                         RoundedRectangle(cornerRadius: theme.cornerRadius)
                             .strokeBorder(
-                                theme.color("accent").map { Color(nsColor: $0) }
-                                    ?? Color(red: 0.83, green: 0.65, blue: 0.13).opacity(0.95),
+                                Color(nsColor: theme.color("accent") ?? .separatorColor),
                                 lineWidth: 1.2
                             )
                     )
@@ -900,6 +920,7 @@ struct CmdCluster: View {
             }
             .buttonStyle(.plain)
             .help("Command bar (⌘K)")
+            .accessibilityLabel("Command bar")
             Menu {
                 if siteMods.isEmpty {
                     Text("No mods for this site")
@@ -920,14 +941,24 @@ struct CmdCluster: View {
                     .font(.system(size: 12, weight: .semibold))
             }
             .menuStyle(.borderlessButton)
-            .fixedSize()
+            .menuIndicator(.hidden)
+            .frame(width: 24, height: 26)
             .help("Mods for this site")
             .accessibilityLabel("Mods for this site")
             Group {
-                clusterButton("chevron.left", action: goBack)
-                clusterButton("chevron.right", action: goForward)
-                clusterButton("arrow.clockwise", action: reload)
-                    .help("Reload this tab (⌘R)")
+                clusterButton("chevron.left", width: 28, action: goBack)
+                    .disabled(!navigation.canGoBack)
+                    .help("Back (⌘[)")
+                    .accessibilityLabel("Back")
+                clusterButton("chevron.right", width: 28, action: goForward)
+                    .disabled(!navigation.canGoForward)
+                    .help("Forward (⌘])")
+                    .accessibilityLabel("Forward")
+                clusterButton(navigation.isLoading ? "xmark" : "arrow.clockwise", width: 28,
+                              action: navigation.isLoading ? stop : reload)
+                    .disabled(!navigation.isLoading && !navigation.canReload)
+                    .help(navigation.isLoading ? "Stop loading" : "Reload this tab (⌘R)")
+                    .accessibilityLabel(navigation.isLoading ? "Stop loading" : "Reload this tab")
                 if let downloadResource {
                     clusterButton("arrow.down.to.line", action: downloadResource)
                         .help("Download file")
@@ -935,16 +966,17 @@ struct CmdCluster: View {
                 }
                 if !ChromeSurface.buttons(for: profileID).isEmpty {
                     ScrollView(.horizontal) {
-                        HStack(spacing: 7) {
+                        HStack(spacing: 3) {
                 ForEach(ChromeSurface.buttons(for: profileID), id: \.id) { button in
                     clusterButton(button.symbol ?? "puzzlepiece.extension") {
                         modClick(button.id)
                     }
                     .help(button.title)
+                    .accessibilityLabel(button.title)
                 }
                         }
                     }.scrollIndicators(.hidden)
-                        .frame(width: modWidth, height: 22)
+                        .frame(width: modWidth, height: 26)
                 }
             }
             Spacer(minLength: 0)
@@ -954,13 +986,12 @@ struct CmdCluster: View {
         .background(ToolbarWindowDragHandle())
     }
 
-    private func clusterButton(_ symbol: String, action: @escaping () -> Void) -> some View {
+    private func clusterButton(_ symbol: String, width: CGFloat = 24, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: symbol)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(theme.color("button_foreground").map { Color(nsColor: $0) } ?? .secondary)
-                .frame(width: 20,
-                       height: theme.buttonStyle == "beveled" ? 22 : 20)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(theme.color("button_foreground").map { Color(nsColor: $0) } ?? .primary)
+                .frame(width: width, height: 26)
                 .background {
                     RoundedRectangle(cornerRadius: theme.cornerRadius)
                         .fill(theme.color("button_background").map { Color(nsColor: $0) } ?? .clear)

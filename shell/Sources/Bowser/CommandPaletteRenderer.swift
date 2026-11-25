@@ -89,132 +89,145 @@ struct PaletteRequest {
     typealias Result = CommandPaletteState.Result
     let model: CommandPaletteState
     private let field = NSTextField()
-    private let hint = NSTextField(labelWithString: "")
+    private let searchIcon = NSImageView()
+    private let dismissButton = NSButton()
     private let table = NSTableView()
     private let createMod = NSButton(title: "Create a mod…", target: nil, action: nil)
     private let runTask = NSButton(title: "Run a task…", target: nil, action: nil)
-    private let footer = NSTextField(labelWithString: "↑ ↓  Navigate      ↵  Open      esc  Dismiss")
+    private let footer = NSTextField(labelWithString: "")
     private let scroll = NSScrollView()
+    private let rule = NSBox()
     private var scopeCards: NSHostingView<ModScopeCards>!
     private var results: [Result] = []
     private var inputHeight: NSLayoutConstraint!
-    private var resultsTop: NSLayoutConstraint!
+    private var footerTrailing: NSLayoutConstraint!
+    private static let rowHeight: CGFloat = 46
+
     init(state: CommandPaletteState) {
         self.model = state
         super.init(frame: .zero)
-    let effect = self
-    effect.material = .popover
-    effect.state = .active
-    effect.blendingMode = .behindWindow
-    effect.maskImage = Self.roundedMask(radius: 14)
-    effect.autoresizingMask = [.width, .height]
+        material = .popover
+        self.state = .active
+        blendingMode = .behindWindow
+        maskImage = Self.roundedMask(radius: 16)
+        autoresizingMask = [.width, .height]
 
-    field.cell?.wraps = true
-    field.cell?.isScrollable = false
-    field.lineBreakMode = .byWordWrapping
-    field.maximumNumberOfLines = 0
-    field.isBezeled = false
-    field.drawsBackground = false
-    field.focusRingType = .none
-    field.font = .systemFont(ofSize: 17)
-    field.placeholderString = "Search the web, enter a URL, or find a tab"
-    field.delegate = self
-    field.target = self
-    field.action = #selector(submitted)
-    field.translatesAutoresizingMaskIntoConstraints = false
+        searchIcon.contentTintColor = .secondaryLabelColor
+        searchIcon.symbolConfiguration = .init(pointSize: 18, weight: .regular)
+        searchIcon.setAccessibilityElement(false)
+        field.cell?.wraps = true
+        field.cell?.isScrollable = false
+        field.lineBreakMode = .byWordWrapping
+        field.maximumNumberOfLines = 0
+        field.isBezeled = false
+        field.drawsBackground = false
+        field.focusRingType = .none
+        field.font = .systemFont(ofSize: 18)
+        field.setAccessibilityHelp("Use the arrow keys to select a result and Return to open it.")
+        field.delegate = self
+        field.target = self
+        field.action = #selector(submitted)
 
-    hint.stringValue = "esc"
-    hint.font = .systemFont(ofSize: 11, weight: .medium)
-    hint.textColor = .secondaryLabelColor
-    hint.translatesAutoresizingMaskIntoConstraints = false
+        dismissButton.title = ""
+        dismissButton.isBordered = false
+        dismissButton.image = NSImage(systemSymbolName: "xmark.circle.fill", accessibilityDescription: nil)
+        dismissButton.contentTintColor = .secondaryLabelColor
+        dismissButton.target = self
+        dismissButton.action = #selector(dismissClicked)
+        dismissButton.toolTip = "Dismiss (Esc)"
+        dismissButton.setAccessibilityLabel("Dismiss command bar")
 
-    inputHeight = field.heightAnchor.constraint(equalToConstant: 24)
-    inputHeight.isActive = true
-    effect.addSubview(field)
-    effect.addSubview(hint)
-    NSLayoutConstraint.activate([
-      field.leadingAnchor.constraint(equalTo: effect.leadingAnchor, constant: 18),
-      field.trailingAnchor.constraint(equalTo: hint.leadingAnchor, constant: -10),
-      hint.widthAnchor.constraint(equalToConstant: 28),
-      field.topAnchor.constraint(equalTo: effect.topAnchor, constant: 18),
-      hint.trailingAnchor.constraint(equalTo: effect.trailingAnchor, constant: -14),
-      hint.centerYAnchor.constraint(equalTo: field.centerYAnchor),
-    ])
-    table.addTableColumn(NSTableColumn(identifier: NSUserInterfaceItemIdentifier("result")))
-    table.headerView = nil
-    table.columnAutoresizingStyle = .noColumnAutoresizing
-    table.rowHeight = 52
-    table.intercellSpacing = .zero
-    table.backgroundColor = .clear
-    table.selectionHighlightStyle = .regular
-    table.dataSource = self
-    table.delegate = self
-    table.target = self
-    table.action = #selector(resultClicked)
-    table.setAccessibilityLabel("Search, tabs and actions")
-    scroll.documentView = table
-    scroll.drawsBackground = false
-    scroll.hasVerticalScroller = true
-    scroll.translatesAutoresizingMaskIntoConstraints = false
-    effect.addSubview(scroll)
-    scopeCards = NSHostingView(rootView: ModScopeCards(choice: model.modScope, compact: true, onChoose: { [weak self] in
-        guard let self else { return }
-        self.window?.makeFirstResponder(self.field)
-        self.updateFooter()
-    }))
-    scopeCards.translatesAutoresizingMaskIntoConstraints = false
-    scopeCards.isHidden = true
-    effect.addSubview(scopeCards)
-    NSLayoutConstraint.activate([
-        scopeCards.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 18),
-        scopeCards.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -18),
-        scopeCards.topAnchor.constraint(equalTo: field.bottomAnchor, constant: 14),
-        scopeCards.heightAnchor.constraint(equalToConstant: 100)
-    ])
-    resultsTop = scroll.topAnchor.constraint(equalTo: field.bottomAnchor, constant: 16)
-    NSLayoutConstraint.activate([
-      scroll.leadingAnchor.constraint(equalTo: effect.leadingAnchor, constant: 8),
-      scroll.trailingAnchor.constraint(equalTo: effect.trailingAnchor, constant: -8),
-      resultsTop,
-      scroll.bottomAnchor.constraint(equalTo: effect.bottomAnchor, constant: -36),
-    ])
+        table.addTableColumn(NSTableColumn(identifier: NSUserInterfaceItemIdentifier("result")))
+        table.headerView = nil
+        table.style = .plain
+        table.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
+        table.rowHeight = Self.rowHeight
+        table.intercellSpacing = .zero
+        table.backgroundColor = .clear
+        table.selectionHighlightStyle = .regular
+        table.dataSource = self
+        table.delegate = self
+        table.target = self
+        table.action = #selector(resultClicked)
+        table.setAccessibilityLabel("Search results")
+        scroll.documentView = table
+        scroll.drawsBackground = false
+        scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = true
 
-        footer.font = .systemFont(ofSize: 11)
+        scopeCards = NSHostingView(rootView: ModScopeCards(choice: model.modScope, compact: true, onChoose: { [weak self] in
+            guard let self else { return }
+            self.window?.makeFirstResponder(self.field)
+            self.updateFooter()
+        }))
+        scopeCards.isHidden = true
+
+        footer.font = .systemFont(ofSize: 11, weight: .medium)
         footer.textColor = .secondaryLabelColor
-        footer.translatesAutoresizingMaskIntoConstraints = false
-        effect.addSubview(footer)
-        createMod.bezelStyle = .inline
-        createMod.image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: nil)
-        createMod.imagePosition = .imageLeading
-        createMod.target = self
-        createMod.action = #selector(createModClicked)
-        createMod.translatesAutoresizingMaskIntoConstraints = false
-        createMod.setAccessibilityIdentifier("palette-create-mod")
-        effect.addSubview(createMod)
-        runTask.bezelStyle = .inline
-        runTask.image = NSImage(systemSymbolName: "play.circle", accessibilityDescription: nil)
-        runTask.imagePosition = .imageLeading
-        runTask.target = self
-        runTask.action = #selector(runTaskClicked)
-        runTask.translatesAutoresizingMaskIntoConstraints = false
-        runTask.setAccessibilityIdentifier("palette-run-task")
-        runTask.toolTip = "Run once on this page. You can also type :task followed by your request."
-        effect.addSubview(runTask)
+        footer.lineBreakMode = .byTruncatingTail
+        footer.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        for (button, symbol, action, identifier) in [
+            (createMod, "sparkles", #selector(createModClicked), "palette-create-mod"),
+            (runTask, "play.circle", #selector(runTaskClicked), "palette-run-task")
+        ] {
+            button.bezelStyle = .push
+            button.controlSize = .small
+            button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+            button.symbolConfiguration = .init(pointSize: 11, weight: .medium)
+            button.imagePosition = .imageLeading
+            button.target = self
+            button.action = action
+            button.setAccessibilityIdentifier(identifier)
+        }
+        createMod.toolTip = "Build a reusable mod from this request"
+        runTask.toolTip = "Run this request once on the current page"
+        rule.boxType = .separator
+        let headerRule = NSBox()
+        headerRule.boxType = .separator
+        for view: NSView in [field, searchIcon, dismissButton, scroll, scopeCards, footer, createMod, runTask, rule, headerRule] {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(view)
+        }
+
+        inputHeight = field.heightAnchor.constraint(equalToConstant: 26)
+        footerTrailing = footer.trailingAnchor.constraint(lessThanOrEqualTo: runTask.leadingAnchor, constant: -8)
         NSLayoutConstraint.activate([
-            createMod.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
+            searchIcon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 18),
+            searchIcon.widthAnchor.constraint(equalToConstant: 22),
+            searchIcon.centerYAnchor.constraint(equalTo: field.centerYAnchor),
+            field.leadingAnchor.constraint(equalTo: searchIcon.trailingAnchor, constant: 10),
+            field.trailingAnchor.constraint(equalTo: dismissButton.leadingAnchor, constant: -8),
+            field.topAnchor.constraint(equalTo: topAnchor, constant: 14),
+            inputHeight,
+            dismissButton.widthAnchor.constraint(equalToConstant: 26),
+            dismissButton.heightAnchor.constraint(equalToConstant: 26),
+            dismissButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            dismissButton.centerYAnchor.constraint(equalTo: field.centerYAnchor),
+            headerRule.topAnchor.constraint(equalTo: field.bottomAnchor, constant: 12),
+            headerRule.leadingAnchor.constraint(equalTo: leadingAnchor),
+            headerRule.trailingAnchor.constraint(equalTo: trailingAnchor),
+            scroll.topAnchor.constraint(equalTo: headerRule.bottomAnchor, constant: 6),
+            scroll.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6),
+            scroll.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
+            scroll.bottomAnchor.constraint(equalTo: rule.topAnchor, constant: -6),
+            scopeCards.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
+            scopeCards.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14),
+            scopeCards.topAnchor.constraint(equalTo: headerRule.bottomAnchor, constant: 8),
+            scopeCards.heightAnchor.constraint(equalToConstant: 100),
+            rule.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -38),
+            rule.leadingAnchor.constraint(equalTo: leadingAnchor),
+            rule.trailingAnchor.constraint(equalTo: trailingAnchor),
+            createMod.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
             createMod.centerYAnchor.constraint(equalTo: footer.centerYAnchor),
-            runTask.trailingAnchor.constraint(equalTo: createMod.leadingAnchor, constant: -12),
+            runTask.trailingAnchor.constraint(equalTo: createMod.leadingAnchor, constant: -10),
             runTask.centerYAnchor.constraint(equalTo: footer.centerYAnchor),
-            footer.trailingAnchor.constraint(lessThanOrEqualTo: runTask.leadingAnchor, constant: -16),
-            footer.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 18),
-            footer.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -11),
+            footerTrailing,
+            footer.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -12),
+            footer.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
+            footer.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -12)
         ])
     }
     required init?(coder: NSCoder) { fatalError("init(state:)") }
-    override func layout() {
-        super.layout()
-        table.tableColumns.first?.width = max(0, scroll.contentSize.width - 20)
-    }
     func activateScreen() {
         model.refresh = { [weak self] in self?.refresh() }
         model.focus = { [weak self] in
@@ -230,6 +243,7 @@ struct PaletteRequest {
         updateMode()
     }
     private func hide() { model.dismiss() }
+    @objc private func dismissClicked() { hide() }
     private func choose(_ result: Result) {
         if result.tab == nil, result.query.hasPrefix(":") {
             hide(); model.command(String(result.query.dropFirst()))
@@ -250,6 +264,7 @@ struct PaletteRequest {
 
   func controlTextDidChange(_ obj: Notification) {
     model.selected = 0
+    model.results = []
     if let prompt = modPrompt { model.modScope.update(prompt) } else { model.modScope.cancel() }
     updateMode()
   }
@@ -280,37 +295,55 @@ struct PaletteRequest {
   }
 
   private func updateMode() {
-    refreshResults()
     model.query = field.stringValue
-    field.font = .systemFont(ofSize: 17)
-    field.textColor = .textColor
-    styleEditor(font: .systemFont(ofSize: 17), color: .textColor)
-    hint.stringValue = "esc"
-
+    field.setAccessibilityLabel(model.placeholder)
+    let symbol: String
+    if request?.kind == "task" { symbol = "play.circle" }
+    else if modPrompt != nil { symbol = "sparkles" }
+    else { symbol = model.opensInCurrentTab ? "globe" : "magnifyingglass" }
+    searchIcon.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+    refreshResults()
   }
 
-
     private func refreshResults() {
-        if modPrompt == nil && !field.stringValue.hasPrefix(":") { model.searchHistory(field.stringValue) }
-        results = request != nil ? [] : PaletteSuggestions.results(query: field.stringValue, tabs: model.tabs(), profile: model.profile, active: model.active, commands: model.commands())
-        if modPrompt == nil && !field.stringValue.hasPrefix(":") {
+        let query = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        // History arrives after the first keystroke results. Keep Return attached to
+        // the same destination even when a new match moves its row farther down.
+        let previous = model.results.indices.contains(model.selected) ? model.results[model.selected] : nil
+        if !query.hasPrefix(":") { model.searchHistory(field.stringValue) }
+        results = request != nil ? [] : PaletteSuggestions.results(query: query, tabs: model.tabs(), profile: model.profile, active: model.active, commands: model.commands())
+        if !query.hasPrefix(":") {
             let openURLs = Set(results.compactMap { $0.tab?.url })
-            let history = model.historyResults.filter { !openURLs.contains($0.url) }.prefix(3).map { Result(history: $0, query: field.stringValue) }
-            results.insert(contentsOf: history, at: results.firstIndex(where: { $0.tab == nil }) ?? results.endIndex)
+            let history = model.historyResults.filter { !openURLs.contains($0.url) }.prefix(3).map { Result(history: $0, query: query) }
+            let insertion = results.firstIndex { $0.tab == nil && !$0.query.hasPrefix(":") } ?? results.endIndex
+            results.insert(contentsOf: history, at: insertion)
+            if model.opensInCurrentTab, let direct = results.firstIndex(where: { $0.tab == nil && $0.history == nil && $0.query == query }) {
+                let result = results.remove(at: direct)
+                results.insert(result, at: 0)
+            }
         }
+        let selection = previous.flatMap { results.firstIndex(of: $0) } ?? model.selected
         model.results = results
         table.reloadData()
-        if !results.isEmpty { table.selectRowIndexes(IndexSet(integer: min(model.selected, results.count - 1)), byExtendingSelection: false) }
+        if !results.isEmpty {
+            let row = min(max(0, selection), results.count - 1)
+            model.selected = row
+            table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+            table.scrollRowToVisible(row)
+        }
         scroll.isHidden = results.isEmpty
         scopeCards.isHidden = modPrompt == nil
         createMod.isHidden = request != nil
         runTask.isHidden = request != nil
-        let width = max(200, bounds.width > 0 ? bounds.width - 70 : 570)
+        footerTrailing.isActive = request == nil
+        rule.isHidden = results.isEmpty && modPrompt == nil
+        let width = max(120, bounds.width > 0 ? bounds.width - 98 : 542)
         let text = field.stringValue.isEmpty ? " " : field.stringValue
-        let measured = (text as NSString).boundingRect(with: NSSize(width: width, height: .greatestFiniteMagnitude), options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: [.font: NSFont.systemFont(ofSize: 17)])
-        let height = max(24, min(240, ceil(measured.height) + 6))
+        let measured = (text as NSString).boundingRect(with: NSSize(width: width, height: .greatestFiniteMagnitude), options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: [.font: field.font ?? NSFont.systemFont(ofSize: 18)])
+        let height = max(26, min(240, ceil(measured.height) + 6))
         inputHeight.constant = height
-        model.resize(70 + height + (modPrompt != nil ? 110 : CGFloat(min(results.count, 8)) * 52))
+        let contentHeight = modPrompt != nil ? 116 : CGFloat(min(results.count, 8)) * Self.rowHeight
+        model.resize(78 + height + contentHeight)
         updateFooter()
         needsLayout = true
     }
@@ -320,7 +353,7 @@ struct PaletteRequest {
     }
     private func updateFooter() {
         let selected = results.indices.contains(table.selectedRow) ? results[table.selectedRow] : nil
-        let action = selected?.tab != nil ? "Switch tab" : selected?.query.hasPrefix(":") == true ? "Run action" : "Open"
+        let action = selected?.tab != nil ? "Switch tab" : (selected?.query ?? field.stringValue).hasPrefix(":") ? "Run command" : "Open"
         if request?.kind == "task" {
             footer.stringValue = model.modScope.host != nil ? "This page only · ↵ Run once" : "Open a website to run a task"
             return
@@ -329,7 +362,7 @@ struct PaletteRequest {
             footer.stringValue = model.modScope.valid ? "Choose where it applies · ↵ Create mod" : "Choose Across Bowser, or open a website"
             return
         }
-        footer.stringValue = "↑ ↓  Navigate      ↵  \(action)      esc  Dismiss"
+        footer.stringValue = bounds.width >= 520 ? "↑↓  Select      ↵  \(action)" : "↵  \(action)"
     }
     @objc private func createModClicked() {
         let draft = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -355,55 +388,71 @@ struct PaletteRequest {
   {
     let result = results[row]
     let cell = NSTableCellView()
-    let command = result.tab == nil && result.query.hasPrefix(":") ? String(result.query.dropFirst()) : nil
-    let navigating = result.query.contains("://") || (result.query.contains(".") && !result.query.contains(" ")) || result.query.hasPrefix("/")
-    let label = result.history?.title ?? command.flatMap { PaletteSuggestions.commandLabels(model.commands())[$0] } ?? (result.tab != nil ? result.title : navigating ? "Go to \(result.query)" : "Search \(SearchEngine.selected().title) for “\(result.query)”")
-    let title = NSTextField(labelWithString: label)
-    title.font = .systemFont(ofSize: 13, weight: .medium)
+    let command = result.tab == nil && result.history == nil && result.query.hasPrefix(":") ? String(result.query.dropFirst()) : nil
+    let titleText: String
+    let detailText: String
+    let symbol: String
+    if let tab = result.tab {
+        symbol = "macwindow.on.rectangle"
+        titleText = result.title
+        detailText = tab.url.isEmpty ? "Open tab" : "Open tab · \(Self.displayAddress(tab.url))"
+    } else if let history = result.history {
+        symbol = "clock.arrow.circlepath"
+        titleText = result.title
+        let site = URL(string: history.url)?.host ?? Self.displayAddress(history.url)
+        detailText = ["History", site, history.snippet].filter { !$0.isEmpty }.joined(separator: " · ")
+    } else if let command {
+        symbol = "command"
+        titleText = PaletteSuggestions.commandLabels(model.commands())[command] ?? command
+        detailText = "Command · :\(command)"
+    } else {
+        let value = result.query
+        let file = value.hasPrefix("/") || value.hasPrefix("~/") || value.lowercased().hasPrefix("file://")
+        let address = file || value.contains("://") || (value.contains(".") && !value.contains(" "))
+        symbol = file ? "doc" : address ? "globe" : "magnifyingglass"
+        titleText = value
+        let destination = model.opensInCurrentTab ? "this tab" : "a new tab"
+        detailText = address ? "Open in \(destination)" : "Search \(SearchEngine.selected().title) in \(destination)"
+    }
+    let title = NSTextField(labelWithString: titleText)
+    title.font = .systemFont(ofSize: 13, weight: .semibold)
     title.lineBreakMode = .byTruncatingTail
-    let detail = NSTextField(labelWithString: result.history.map { "\(URL(string: $0.url)?.host ?? $0.url) · \($0.snippet)" } ?? command.map { ":" + $0 } ?? (result.tab?.url ?? "Open in a new tab"))
-    let badge = NSTextField(labelWithString: result.history != nil ? "History" : command != nil ? "Action" : result.tab != nil ? "Open tab" : navigating ? "Website" : "Search")
-    badge.font = .systemFont(ofSize: 10, weight: .medium)
-    badge.textColor = .secondaryLabelColor
-    badge.setContentCompressionResistancePriority(.required, for: .horizontal)
-    badge.setContentHuggingPriority(.required, for: .horizontal)
+    let detail = NSTextField(labelWithString: detailText)
     detail.font = .systemFont(ofSize: 11)
     detail.textColor = .secondaryLabelColor
-    detail.lineBreakMode = .byTruncatingMiddle
+    detail.lineBreakMode = .byTruncatingTail
     let icon = NSImageView()
-    icon.image =
-      result.history?.image.flatMap { NSImage(data: $0) } ?? result.tab?.favicon.flatMap { NSImage(contentsOfFile: $0) }
-      ?? NSImage(
-        systemSymbolName: command != nil ? "command" : result.tab == nil ? (navigating ? "arrow.up.right" : "magnifyingglass") : "globe",
-        accessibilityDescription: nil)
+    icon.symbolConfiguration = .init(pointSize: 15, weight: .medium)
+    icon.image = result.history?.image.flatMap { NSImage(data: $0) }
+        ?? result.tab?.favicon.flatMap { NSImage(contentsOfFile: $0) }
+        ?? NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
     icon.imageScaling = .scaleProportionallyUpOrDown
-    for view in [icon, title, detail, badge] {
-      view.translatesAutoresizingMaskIntoConstraints = false
-      cell.addSubview(view)
+    for view in [icon, title, detail] {
+        view.translatesAutoresizingMaskIntoConstraints = false
+        cell.addSubview(view)
     }
     NSLayoutConstraint.activate([
-      icon.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 8),
-      icon.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
-      icon.widthAnchor.constraint(equalToConstant: 24),
-      icon.heightAnchor.constraint(equalToConstant: 24),
-      title.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 12),
-      title.topAnchor.constraint(equalTo: cell.topAnchor, constant: 6),
-      title.trailingAnchor.constraint(equalTo: badge.leadingAnchor, constant: -12),
-      badge.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -12),
-      badge.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
-      detail.leadingAnchor.constraint(equalTo: title.leadingAnchor),
-      detail.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 2),
-      detail.trailingAnchor.constraint(equalTo: title.trailingAnchor),
+        icon.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 12),
+        icon.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+        icon.widthAnchor.constraint(equalToConstant: 20),
+        icon.heightAnchor.constraint(equalToConstant: 20),
+        title.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 12),
+        title.bottomAnchor.constraint(equalTo: cell.centerYAnchor),
+        title.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -12),
+        detail.leadingAnchor.constraint(equalTo: title.leadingAnchor),
+        detail.topAnchor.constraint(equalTo: cell.centerYAnchor, constant: 2),
+        detail.trailingAnchor.constraint(equalTo: title.trailingAnchor)
     ])
     cell.textField = title
     cell.imageView = icon
+    cell.setAccessibilityLabel("\(titleText), \(detailText)")
     return cell
   }
 
-  private func styleEditor(font: NSFont, color: NSColor) {
-    guard let editor = field.currentEditor() as? NSTextView else { return }
-    editor.font = font
-    editor.textColor = color
+  private static func displayAddress(_ url: String) -> String {
+    if url.hasPrefix("https://") { return String(url.dropFirst(8)) }
+    if url.hasPrefix("http://") { return String(url.dropFirst(7)) }
+    return url
   }
 
   private static func roundedMask(radius: CGFloat) -> NSImage {
@@ -421,7 +470,12 @@ struct PaletteRequest {
 
 private final class CommandResultRow: NSTableRowView {
   override func drawSelection(in dirtyRect: NSRect) {
-    NSColor.controlAccentColor.withAlphaComponent(0.18).setFill()
-    NSBezierPath(roundedRect: bounds.insetBy(dx: 2, dy: 1), xRadius: 7, yRadius: 7).fill()
+    let outline = NSBezierPath(roundedRect: bounds.insetBy(dx: 2, dy: 1), xRadius: 8, yRadius: 8)
+    NSColor.controlAccentColor.withAlphaComponent(0.14).setFill()
+    outline.fill()
+    if NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast {
+        NSColor.controlAccentColor.setStroke()
+        outline.stroke()
+    }
   }
 }

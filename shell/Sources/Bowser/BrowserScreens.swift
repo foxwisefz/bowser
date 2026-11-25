@@ -77,183 +77,213 @@ struct BrowserScreenRoot: View {
 struct OnboardingScreen: View {
     @ObservedObject var context: BrowserScreenContext
     private var model: any OnboardingPresentation { context.model as! any OnboardingPresentation }
-    private let mint = Color(red: 0.65, green: 0.97, blue: 0.79)
+    @Environment(\.colorScheme) private var appearance
 
     var body: some View {
-        HStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 24) {
-                HStack(spacing: 12) {
-                    Image(nsImage: NSImage(named: "BowserWelcome") ?? NSImage(systemSymbolName: "sparkles", accessibilityDescription: "Bowser")!)
-                        .resizable().frame(width: 46, height: 46)
-                    Text("Bowser").font(.system(size: 23, weight: .bold, design: .rounded))
+        GeometryReader { geometry in
+            let wide = geometry.size.width >= 660
+            HStack(spacing: 0) {
+                if wide {
+                    brand
+                        .padding(28)
+                        .frame(width: min(276, geometry.size.width * 0.35))
+                        .frame(maxHeight: .infinity)
+                        .background(brandBackground)
+                    Divider()
                 }
-                Spacer(minLength: 24)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Your web.").foregroundStyle(.white)
-                    Text("Your rules.").foregroundStyle(mint)
-                }.font(.system(size: 49, weight: .semibold, design: .rounded)).tracking(-2)
-                Text("The browser that builds itself.")
-                    .font(.system(size: 18, weight: .medium)).foregroundStyle(.white.opacity(0.85))
-                Text("Describe what you want.\nBowser makes it happen.")
-                    .font(.system(size: 16)).lineSpacing(5).foregroundStyle(.white.opacity(0.65))
-                Spacer(minLength: 24)
-                HStack(spacing: 8) {
-                    Image(systemName: "sparkle")
-                    Text("MADE FOR YOUR MAC. MADE TO BE YOURS.")
-                        .font(.system(size: 10, weight: .semibold)).tracking(1)
-                }.foregroundStyle(mint.opacity(0.85))
-            }.padding(.vertical, 44).padding(.leading, 38).padding(.trailing, 24)
-                .frame(width: 394, alignment: .leading)
-            VStack(alignment: .leading, spacing: 14) {
-            VStack(alignment: .leading, spacing: 22) {
-                if model.step != .invitation && model.step != .thanks {
-                HStack {
-                    Text(model.step == .thanks ? "YOU’RE ON THE LIST" : "YOUR BOWSER STARTS HERE")
-                        .font(.system(size: 11, weight: .semibold)).tracking(1.6).foregroundStyle(mint)
-                    Spacer()
-                    Text(model.step == .email ? "01" : model.step == .invitation ? "02" : "03")
-                        .font(.system(size: 12, weight: .medium, design: .monospaced)).foregroundStyle(.white.opacity(0.45))
-                }
-                }
-                if model.completed {
-                    title("You’re in.", detail: "A browser that feels like you starts with your first idea.")
-                    primary("Open Bowser", enabled: true, action: model.finish)
-                } else {
-                    stepContent
-                    if let error = model.error {
-                        Label(error, systemImage: "exclamationmark.circle")
-                            .font(.system(size: 13)).foregroundStyle(Color(red: 1, green: 0.72, blue: 0.65))
-                            .fixedSize(horizontal: false, vertical: true)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: wide ? 20 : 14) {
+                        if !wide {
+                            HStack(spacing: 10) {
+                                artwork.frame(width: 38, height: 38)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Bowser").font(.headline)
+                                    Text("The browser that builds itself.").font(.subheadline).foregroundStyle(.secondary)
+                                }
+                            }
+                            Divider()
+                        }
+                        if model.completed {
+                            heading("You’re ready to browse")
+                            primary("Open Bowser", enabled: true, action: model.finish)
+                        } else {
+                            stepContent
+                            if let error = model.error {
+                                Label(error, systemImage: "exclamationmark.circle")
+                                    .font(.callout).foregroundStyle(.primary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            if model.submitting {
+                                HStack(spacing: 8) {
+                                    ProgressView().controlSize(.small)
+                                    Text(activity.wrappedValue).font(.callout).foregroundStyle(.secondary)
+                                }
+                            }
+                        }
                     }
+                    .frame(maxWidth: 360, alignment: .leading)
+                    .padding(.horizontal, wide ? 36 : 28)
+                    .padding(.top, 36).padding(.bottom, 24)
+                    .frame(maxWidth: .infinity, minHeight: geometry.size.height)
                 }
             }
-            .padding(28).frame(width: 394, alignment: .leading)
-            .background(.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 26))
-            .overlay(RoundedRectangle(cornerRadius: 26).strokeBorder(.white.opacity(0.1)))
-            if model.step == .thanks && !model.completed { earlyAccessNote }
-            }
-            .padding(.trailing, 36)
+            .background(Color(nsColor: .windowBackgroundColor))
         }
-        .frame(width: 860, height: 600)
-        .foregroundStyle(.white)
-        .background {
-            ZStack {
-                Color(red: 0.035, green: 0.065, blue: 0.075)
-                RadialGradient(colors: [mint.opacity(0.16), .clear], center: .topLeading, startRadius: 10, endRadius: 580)
-                RadialGradient(colors: [Color.cyan.opacity(0.07), .clear], center: .bottomTrailing, startRadius: 0, endRadius: 460)
-            }.ignoresSafeArea()
-        }
-        .environment(\.colorScheme, .dark)
+        .ignoresSafeArea(.container, edges: .top)
         .sheet(isPresented: context.binding("showTerms", default: false)) {
             OnboardingTermsSheet(url: model.termsURL)
+        }
+    }
+
+    private var artwork: some View {
+        Group {
+            if let image = NSImage(named: "BowserWelcome") {
+                Image(nsImage: image).resizable().interpolation(.high).scaledToFit()
+            } else {
+                Image(systemName: "globe").resizable().scaledToFit().foregroundStyle(.secondary)
+            }
+        }
+        .accessibilityHidden(true)
+    }
+
+    private var brand: some View {
+        VStack(spacing: 0) {
+            artwork.frame(width: 152, height: 152).padding(.bottom, 14)
+            Text("Bowser").font(.system(size: 36, weight: .semibold, design: .rounded)).tracking(-1)
+            Text("The browser that builds itself.")
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center).padding(.top, 6)
+        }
+    }
+
+    private var brandBackground: some View {
+        let green = Color(red: 0.26, green: 0.55, blue: 0.44)
+        return ZStack {
+            Color(nsColor: .windowBackgroundColor)
+            LinearGradient(colors: [green.opacity(appearance == .dark ? 0.23 : 0.14), green.opacity(0.02)],
+                           startPoint: .topLeading, endPoint: .bottomTrailing)
         }
     }
 
     @ViewBuilder private var stepContent: some View {
         switch model.step {
         case .email:
-            title("Make yourself\nat home.", detail: "Start with your email. We’re letting people in a few at a time.")
+            heading("Get started", detail: "Enter your email to use an invite, request one, or restore access.")
             WelcomeInput(label: "Email address", placeholder: "you@example.com",
                          text: Binding(get: { model.email }, set: { model.email = $0 }),
                          enabled: !model.submitting, initiallyFocused: true, submit: model.continueWithEmail)
-            primary("Let’s go", enabled: model.canContinue, action: model.continueWithEmail)
+            primary("Continue", enabled: model.canContinue, action: model.continueWithEmail)
         case .invitation:
-            title("Got an invite?", detail: nil)
+            heading("Your invitation")
             emailSummary
-            primary("I have an invite", enabled: !model.submitting, action: model.enterInvite)
-            Button { Task { await model.joinWaitlist() } } label: {
-                HStack { Text(model.submitting ? "Saving your place…" : "Request an invite"); Spacer(); Image(systemName: "arrow.up.right") }
-                    .font(.system(size: 15, weight: .medium)).padding(.vertical, 8)
-            }.buttonStyle(.plain).disabled(!model.canJoinWaitlist)
-            Button("Restore existing access") { Task { await model.requestRecovery() } }
-                .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(.white.opacity(0.65)).disabled(model.submitting)
+            VStack(spacing: 8) {
+                primary("Enter invite code", enabled: !model.submitting, action: model.enterInvite)
+                Button {
+                    perform("Requesting your invite…") { await model.joinWaitlist() }
+                } label: {
+                    Text("Request an invite").frame(maxWidth: .infinity)
+                }.buttonStyle(.bordered).controlSize(.large).disabled(!model.canJoinWaitlist)
+            }
+            Button("Restore existing access") {
+                perform("Sending a verification code…") { await model.requestRecovery() }
+            }.buttonStyle(.link).disabled(model.submitting)
         case .code:
-            title("Your invite.\nYour way in.", detail: nil)
+            heading("Enter your invite code")
             emailSummary
             WelcomeInput(label: "Invite code", placeholder: "Paste your code",
                          text: Binding(get: { model.inviteCode }, set: { model.inviteCode = $0 }),
-                         enabled: !model.submitting, initiallyFocused: true) { Task { await model.submit() } }
+                         enabled: !model.submitting, initiallyFocused: true, submit: activate)
             HStack(spacing: 4) {
                 Toggle("I agree to the", isOn: Binding(get: { model.acceptedTerms }, set: { model.acceptedTerms = $0 }))
                     .toggleStyle(.checkbox).disabled(model.submitting)
+                    .accessibilityLabel("I agree to the Terms of Service")
                 Button("Terms of Service") { context.binding("showTerms", default: false).wrappedValue = true }
-                    .buttonStyle(.link).tint(mint)
-            }.font(.system(size: 13))
+                    .buttonStyle(.link)
+            }
             if let status = model.setupMessage {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(status).font(.system(size: 12)).foregroundStyle(.white.opacity(0.7)).fixedSize(horizontal: false, vertical: true)
-                    Button("Check again") { Task { await model.refreshSetup() } }.buttonStyle(.link).tint(mint).disabled(model.submitting)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(status).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    Button("Check again") { Task { await model.refreshSetup() } }.buttonStyle(.link).disabled(model.submitting)
                 }
             }
-            primary("Open my Bowser", enabled: model.canSubmit) { Task { await model.submit() } }
-            Button("Back", action: model.backToInvitation).buttonStyle(.plain).foregroundStyle(.white.opacity(0.65)).disabled(model.submitting)
+            primary("Activate Bowser", enabled: model.canSubmit, action: activate)
+            back
         case .recovery:
-            title("Check your inbox.", detail: "Enter the 8-digit code we sent to verify your email and restore access.")
+            heading("Check your inbox", detail: "Enter the 8-digit verification code we sent to this address.")
             emailSummary
             WelcomeInput(label: "Verification code", placeholder: "8-digit code",
                          text: Binding(get: { model.recoveryCode }, set: { model.recoveryCode = $0 }),
-                         enabled: !model.submitting, initiallyFocused: true) { Task { await model.verifyRecovery() } }
-            primary("Restore my Bowser", enabled: model.canVerify) { Task { await model.verifyRecovery() } }
-            Button("Send another code") { Task { await model.requestRecovery() } }.buttonStyle(.plain).foregroundStyle(mint).disabled(model.submitting)
-            Button("Back", action: model.backToInvitation).buttonStyle(.plain).foregroundStyle(.white.opacity(0.65)).disabled(model.submitting)
+                         enabled: !model.submitting, initiallyFocused: true, submit: restore)
+            primary("Restore access", enabled: model.canVerify, action: restore)
+            HStack {
+                back
+                Spacer()
+                Button("Send another code") {
+                    perform("Sending a verification code…") { await model.requestRecovery() }
+                }.buttonStyle(.link).disabled(model.submitting)
+            }
         case .thanks:
-            Image(systemName: "checkmark.circle.fill").font(.system(size: 30, weight: .light)).foregroundStyle(mint)
-            title("You’re on the list.", detail: nil)
-            VStack(alignment: .leading, spacing: 6) {
-                Text("We’ll send your invite to")
-                    .foregroundStyle(.white.opacity(0.7))
-                Text(model.email).fontWeight(.medium).textSelection(.enabled)
-                    .lineLimit(2).truncationMode(.middle)
-            }.font(.system(size: 15))
-            HStack(spacing: 20) {
-                Button("Use invite code", action: model.enterInvite)
-                Button("Change email", action: model.editEmail)
-            }.buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(.white.opacity(0.65))
+            heading("You’re on the waitlist")
+            VStack(alignment: .leading, spacing: 4) {
+                Text("We’ll send your invite to").foregroundStyle(.secondary)
+                Text(model.email).fontWeight(.medium).textSelection(.enabled).lineLimit(2).truncationMode(.middle)
+            }
+            primary("Use an invite code", enabled: true, action: model.enterInvite)
+            Button("Change email", action: model.editEmail).buttonStyle(.link)
+            Divider()
+            Link("Want in sooner? Say hi to @tealtoronto ↗", destination: URL(string: "https://x.com/tealtoronto")!)
+                .font(.callout)
         }
     }
 
-    private var earlyAccessNote: some View {
-        HStack(spacing: 14) {
-            Image(systemName: "bubble.left").font(.system(size: 18)).foregroundStyle(mint)
-            VStack(alignment: .leading, spacing: 5) {
-                Text("Want in sooner?").font(.system(size: 12)).foregroundStyle(.white.opacity(0.7))
-                Link(destination: URL(string: "https://x.com/tealtoronto")!) {
-                    HStack(spacing: 6) {
-                        Text("Say hi to @tealtoronto")
-                        Image(systemName: "arrow.up.right")
-                    }.font(.system(size: 13, weight: .medium)).foregroundStyle(mint)
-                }
-            }
-            Spacer(minLength: 0)
-        }.padding(18).frame(width: 394, alignment: .leading)
-            .background(.white.opacity(0.025), in: RoundedRectangle(cornerRadius: 18))
-            .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(.white.opacity(0.07)))
+    private var activity: Binding<String> { context.binding("welcomeActivity", default: "Working…") }
+
+    private func perform(_ status: String, operation: @escaping @MainActor () async -> Void) {
+        guard !model.submitting else { return }
+        activity.wrappedValue = status
+        Task { await operation() }
+    }
+
+    private func activate() {
+        guard model.canSubmit else { return }
+        perform("Activating Bowser…") { await model.submit() }
+    }
+
+    private func restore() {
+        guard model.canVerify else { return }
+        perform("Restoring access…") { await model.verifyRecovery() }
+    }
+
+    private var back: some View {
+        Button(action: model.backToInvitation) { Label("Back", systemImage: "chevron.left") }
+            .buttonStyle(.link).disabled(model.submitting)
     }
 
     private var emailSummary: some View {
         HStack(spacing: 8) {
-            Text(model.email).lineLimit(1).truncationMode(.middle)
-            Spacer(minLength: 0)
-            Button("Edit", action: model.editEmail).buttonStyle(.plain).foregroundStyle(mint).disabled(model.submitting)
-        }.font(.system(size: 13)).foregroundStyle(.white.opacity(0.7))
-    }
-    private func title(_ heading: String, detail: String?) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text(heading).font(.system(size: 32, weight: .semibold, design: .rounded)).tracking(-1).fixedSize(horizontal: false, vertical: true)
-            if let detail { Text(detail).font(.system(size: 15)).lineSpacing(4).foregroundStyle(.white.opacity(0.7)).fixedSize(horizontal: false, vertical: true) }
+            Image(systemName: "envelope").foregroundStyle(.secondary).accessibilityHidden(true)
+            Text(model.email).lineLimit(1).truncationMode(.middle).textSelection(.enabled)
+            Spacer(minLength: 4)
+            Button("Edit", action: model.editEmail).buttonStyle(.link).disabled(model.submitting)
+                .accessibilityLabel("Edit email address")
         }
     }
+
+    private func heading(_ title: String, detail: String? = nil) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title).font(.system(size: 26, weight: .semibold)).tracking(-0.5)
+                .accessibilityAddTraits(.isHeader)
+            if let detail { Text(detail).font(.body).foregroundStyle(.secondary).lineSpacing(2) }
+        }.fixedSize(horizontal: false, vertical: true)
+    }
+
     private func primary(_ label: String, enabled: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            HStack {
-                Text(model.submitting ? "One moment…" : label)
-                Spacer()
-                if model.submitting { ProgressView().controlSize(.small) }
-                else { Image(systemName: "arrow.right") }
-            }.font(.system(size: 15, weight: .semibold)).padding(.horizontal, 18).frame(height: 48)
-                .foregroundStyle(Color(red: 0.035, green: 0.1, blue: 0.09))
-                .background(mint.opacity(enabled ? 1 : 0.35), in: RoundedRectangle(cornerRadius: 14))
-        }.buttonStyle(.plain).disabled(!enabled).keyboardShortcut(.defaultAction)
+            Text(label).frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.borderedProminent).controlSize(.large).disabled(!enabled)
+        .keyboardShortcut(.defaultAction)
     }
 }
 
@@ -265,22 +295,23 @@ private struct WelcomeInput: View {
     var initiallyFocused = false
     let submit: () -> Void
     @State private var focused = false
+    @Environment(\.colorSchemeContrast) private var contrast
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 7) {
             Text(label).font(.callout.weight(.medium))
             WelcomeTextInput(text: $text, focused: $focused, enabled: enabled,
                              placeholder: placeholder, label: label,
                              initiallyFocused: initiallyFocused, submit: submit)
                 .frame(height: 20)
-                .padding(.horizontal, 14).frame(height: 46)
-                .background(.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 12))
+                .padding(.horizontal, 10).frame(height: 36)
+                .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 7))
                 .overlay {
-                    RoundedRectangle(cornerRadius: 10)
-                        .strokeBorder(focused ? Color(red: 0.65, green: 0.97, blue: 0.79) : Color.white.opacity(0.18),
+                    RoundedRectangle(cornerRadius: 7)
+                        .strokeBorder(focused ? Color.accentColor : Color(nsColor: contrast == .increased ? .secondaryLabelColor : .separatorColor),
                                       lineWidth: focused ? 2 : 1)
+                        .allowsHitTesting(false)
                 }
-                .accessibilityLabel(label)
         }
     }
 }

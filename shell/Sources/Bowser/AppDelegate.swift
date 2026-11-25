@@ -172,7 +172,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                     guard !event.isARepeat else { return nil }
                     if CommandBar.shared.handShortcutToPage(event, for: controller) { return nil }
                 }
-                CommandBar.shared.show(for: controller, showCurrentURL: key == "l")
+                CommandBar.shared.show(for: controller, invocation: key == "l" ? .location : .commands)
             }
             return nil
         case "f":
@@ -308,7 +308,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         // resurrecting window is about to display the restored session and
         // the palette popping over the freeze-frame breaks the illusion
         // (bowser-browser-xl8).
-        if !controller.isResurrecting { controller.focusOmnibar() }
+        if !controller.isResurrecting, let tab = controller.activeTab {
+            CommandBar.shared.show(for: controller, invocation: .newTab(tab))
+        }
         if isFirstWindowForProfile { controller.restoreFullscreen() }
         return controller
     }
@@ -370,8 +372,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             openWindow()
             return
         }
-        controller.openTab(opener: controller.activeTab?.webviewId, activate: true)
-        controller.focusOmnibar()
+        let tab = controller.openTab(opener: controller.activeTab?.webviewId, activate: true)
+        CommandBar.shared.show(for: controller, invocation: .newTab(tab))
     }
 
     /// ⌘N: another window of the CURRENT profile.

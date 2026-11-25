@@ -5,6 +5,87 @@ import BowserSurfaceKit
 @testable import Bowser
 
 final class CommandBarTests: XCTestCase {
+  @MainActor func testLocationAndNewTabUseTheirCapturedTabWhileCommandSearchUsesItsWindow() throws {
+    let owner = BrowserWindowController(profile: .defaultProfile)
+    let otherWindow = BrowserWindowController(profile: .defaultProfile)
+    defer { CommandBar.shared.hide(); otherWindow.window?.close(); owner.window?.close() }
+    let bar = CommandBar.shared
+    let page = try XCTUnwrap(owner.activeTab)
+    let url = EngineView.historyURL
+    owner.openLocationAction(nil)
+    bar.choose(.init(tab: nil, query: url))
+    XCTAssertTrue(owner.activeTab === page)
+    XCTAssertEqual(page.currentURLString, url)
+    XCTAssertEqual(owner.tabs.count, 1)
+
+    let blank = owner.openTab(activate: false)
+    bar.show(for: owner, invocation: .newTab(blank))
+    bar.choose(.init(history: .init(id: "visit", url: url, title: "History", snippet: "", seen: Date(), image: nil), query: "visit"))
+    XCTAssertTrue(owner.activeTab === blank)
+    XCTAssertEqual(blank.currentURLString, url)
+    XCTAssertEqual(owner.tabs.count, 2)
+
+    bar.show(for: owner)
+    bar.choose(.init(tab: nil, query: url))
+    XCTAssertEqual(owner.tabs.count, 3)
+    XCTAssertEqual(owner.activeTab?.currentURLString, url)
+    XCTAssertEqual(otherWindow.tabs.count, 1)
+  }
+
+  @MainActor func testHistoryArrivalPreservesReturnTargetAndLocationPrioritizesTypedAddress() async throws {
+    let state = CommandPaletteState()
+    state.query = "studio"
+    state.tabs = { [.init(id: 42, title: "Studio notes", url: "https://notes.example/studio", profile: "default")] }
+    var chosen: CommandPaletteState.Result?
+    state.choose = { chosen = $0 }
+    let renderer = CommandPaletteRenderer(state: state)
+    renderer.activateScreen()
+    let field = try XCTUnwrap(renderer.subviews.compactMap { $0 as? NSTextField }.first { $0.isEditable })
+    XCTAssertTrue(renderer.control(field, textView: NSTextView(), doCommandBy: #selector(NSResponder.moveDown(_:))))
+    let original = state.results[state.selected]
+    XCTAssertNil(original.tab)
+    state.historyResults = [.init(id: "archive", url: "https://archive.example/studio", title: "Studio archive", snippet: "", seen: Date(), image: nil)]
+    state.refresh()
+    XCTAssertEqual(state.results[state.selected], original)
+    XCTAssertTrue(field.sendAction(field.action, to: field.target))
+    XCTAssertEqual(chosen, original)
+
+    state.opensInCurrentTab = true
+    state.selected = 0
+    state.results = []
+    state.refresh()
+    XCTAssertEqual(state.results.first, original)
+    XCTAssertEqual(state.selected, 0)
+
+    for width: CGFloat in [360, 640] {
+      let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: width, height: 300), styleMask: [.borderless], backing: .buffered, defer: false)
+      window.isReleasedWhenClosed = false
+      window.contentView = renderer
+      state.resize = { [weak window] height in window?.setContentSize(NSSize(width: width, height: height)) }
+      state.refresh()
+      renderer.layoutSubtreeIfNeeded()
+      let table = try XCTUnwrap(renderer.subviews.compactMap { $0 as? NSScrollView }.first?.documentView as? NSTableView)
+      XCTAssertGreaterThan(table.tableColumns[0].width, width - 52)
+      if let directory = ProcessInfo.processInfo.environment["BOWSER_PALETTE_RENDER_DIR"] {
+        let backdrop = NSWindow(contentRect: window.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        backdrop.isReleasedWhenClosed = false
+        window.center()
+        backdrop.setFrame(window.frame.insetBy(dx: -40, dy: -40), display: false)
+        backdrop.orderFront(nil)
+        window.order(.above, relativeTo: backdrop.windowNumber)
+        defer { window.orderOut(nil); backdrop.orderOut(nil) }
+        for (name, appearance) in [("light", NSAppearance.Name.aqua), ("dark", NSAppearance.Name.darkAqua)] {
+          window.appearance = NSAppearance(named: appearance)
+          backdrop.backgroundColor = name == "light" ? .white : .darkGray
+          backdrop.display()
+          let output = URL(fileURLWithPath: directory).appendingPathComponent("palette-\(Int(width))-\(name).png")
+          try await writeWindowPreview(window, to: output)
+        }
+      }
+      window.contentView = nil
+    }
+  }
+
   @MainActor func testLocationShortcutSelectsCurrentURLAndSearchStartsEmpty() throws {
     let controller = BrowserWindowController(profile: .defaultProfile)
     defer { CommandBar.shared.hide(); controller.window?.close() }
@@ -31,6 +112,10 @@ final class CommandBarTests: XCTestCase {
     let next = controller.openTab()
     next.restore(urlString: "https://other.test/new-path")
     XCTAssertEqual(try press("l", code: 37).string, "https://other.test/new-path")
+    CommandBar.shared.hide()
+    let blank = controller.openTab()
+    blank.restore(urlString: "about:blank")
+    XCTAssertEqual(try press("l", code: 37).string, "")
   }
 
   @MainActor func testDefaultResultsContainSwitchableTabsFromOnlyThisProfile() {
@@ -117,6 +202,22 @@ final class CommandBarTests: XCTestCase {
     renderer.activateScreen()
     XCTAssertEqual(state.results.first?.query, ":settings")
     let field = try XCTUnwrap(renderer.subviews.compactMap { $0 as? NSTextField }.first { $0.isEditable })
+    XCTAssertTrue(field.sendAction(field.action, to: field.target))
+    XCTAssertEqual(command, "settings")
+    state.opensInCurrentTab = true
+    state.results = []
+    state.selected = 0
+    var search: String?
+    state.choose = { search = $0.query }
+    command = nil
+    state.refresh()
+    XCTAssertEqual(state.results.first?.query, "settings")
+    XCTAssertTrue(field.sendAction(field.action, to: field.target))
+    XCTAssertNil(command)
+    XCTAssertEqual(search, "settings")
+    state.query = ":settings"
+    state.refresh()
+    XCTAssertEqual(state.results.first?.query, ":settings")
     XCTAssertTrue(field.sendAction(field.action, to: field.target))
     XCTAssertEqual(command, "settings")
     XCTAssertTrue(PaletteSuggestions.actions(query: ":settings custom value", commands: state.commands()).isEmpty)

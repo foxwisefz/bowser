@@ -81,6 +81,7 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
 
     var onTitleChange: ((String) -> Void)?
     var onURLChange: ((String) -> Void)?
+    var onNavigationChange: (() -> Void)?
     var onThemeColor: ((NSColor?) -> Void)?
 
     private(set) var webviewId: UInt64 = 0
@@ -290,11 +291,12 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
                 ])
             }
         }
-        mediaObservations = [webView.observe(\.isLoading) { [weak self] _, _ in
-            MainActor.assumeIsolated {
-                if let self { BrowserWindowController.host(of: self.webviewId)?.refreshToolbarLoading() }
+        let navigationKeys = [\WKWebView.isLoading, \.canGoBack, \.canGoForward]
+        mediaObservations = navigationKeys.map { key in
+            webView.observe(key) { [weak self] _, _ in
+                MainActor.assumeIsolated { self?.onNavigationChange?() }
             }
-        }, webView.observe(\.cameraCaptureState) { [weak self] _, _ in
+        } + [webView.observe(\.cameraCaptureState) { [weak self] _, _ in
             Task { @MainActor in if let self { BrowserWindowController.host(of: self.webviewId)?.syncModButtons() }; self?.historyController.refresh() }
         }, webView.observe(\.microphoneCaptureState) { [weak self] _, _ in
             Task { @MainActor in if let self { BrowserWindowController.host(of: self.webviewId)?.syncModButtons() }; self?.historyController.refresh() }
@@ -399,8 +401,16 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
 
     func reloadPage() {
         if isHistoryPage { historyController.search(); return }
-        if let url = failedNavigationURL { load(urlString: url) }
-        else if !resumePageIfNeeded() { webView.reload() }
+        if let url = failedNavigationURL { load(urlString: url); return }
+        if resumePageIfNeeded() { return }
+        // Stopping the very first response leaves WebKit with no history item
+        // to reload. Retry the intended address unless it was a form submission.
+        if webView.url == nil, webView.backForwardList.currentItem == nil,
+           !hasSubmittedForm, let requestedURL {
+            load(urlString: requestedURL)
+        } else {
+            webView.reload()
+        }
     }
 
     var inspectionUnavailableReason: String? {

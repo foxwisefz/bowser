@@ -70,12 +70,15 @@ website data separate from an installed Bowser. The API server, marketing
 website and production deployment are maintained in a separate private project;
 they are not required for this source-build workflow.
 
-A browser window appears. `⌘K` opens the command bar: type a URL, or a
-`:command`. Useful ones out of the box: `:settings`, `:panels`, `:do`.
+A browser window appears. Type an address or search term to start browsing in
+its first tab. `⌘T` opens a fresh tab with the address field focused.
+Use `⌘K` to switch to an open tab, open a search or website in a new tab,
+or run a command such as `:settings`, `:panels`, or `:do`.
 For a one-off page task, type `:task <request>` and press Return. Or type your
 request and click **Run a task…** to review it in **Tasks & Mods** first.
 Press `⌘K` again while Bowser’s command bar is open to send `⌘K` to the webpage and open its own command menu, when supported.
-Use `⌘L` to view the current URL, selected for copying or editing, or `⌘⇧C` to copy it directly. Hover over the page title to see the URL.
+Use `⌘L` to select the current URL. Enter an address and press Return to navigate
+in that tab, or use `⌘⇧C` to copy its URL directly.
 
 Use `⌘Y` for History: a visual timeline in its own browser tab, with page previews,
 search, profile/site/date filters, and deletion. Visit recording is opt-in through
