@@ -2,12 +2,13 @@ import AppKit
 import SwiftUI
 import BowserSurfaceKit
 
-/// AppKit owns document sizing and reuse. SwiftUI renders only fixed-size cards
+/// AppKit owns document sizing and reuse. SwiftUI renders only visible entries
 /// and headers, so shrinking a scrolled search cannot re-enter a lazy layout.
 @MainActor struct HistoryCollection: NSViewRepresentable {
     let sessions: [HistorySession]
     let selection: Set<String>
     let collapsed: Set<String>
+    let gallery: Bool
     let showTopics: Bool
     let showProfiles: Bool
     let hasMore: Bool
@@ -23,9 +24,10 @@ import BowserSurfaceKit
         scroll.hasVerticalScroller = true
         scroll.autohidesScrollers = true
         scroll.drawsBackground = false
+        scroll.contentView.drawsBackground = false
         let collection = NSCollectionView()
         collection.wantsLayer = true
-        collection.backgroundColors = [.windowBackgroundColor]
+        collection.backgroundColors = [.clear]
         collection.isSelectable = false
         let layout = HistoryCollectionLayout()
         collection.collectionViewLayout = layout
@@ -57,18 +59,28 @@ import BowserSurfaceKit
         func update(_ next: HistoryCollection, in collection: NSCollectionView) {
             let nextItems = next.sessions.flatMap(\.items)
             let resetScroll = parent.searchIdentity != next.searchIdentity
+            let layoutChanged = parent.gallery != next.gallery
             let reload = items != nextItems || parent.collapsed != next.collapsed
                 || parent.showTopics != next.showTopics || parent.showProfiles != next.showProfiles
-                || parent.hasMore != next.hasMore
+                || parent.hasMore != next.hasMore || layoutChanged
             let selectionChanged = parent.selection != next.selection
+            // Preserve the entry at the top of the viewport when changing view.
+            // A gallery row can contain several entries; anchor its leading one.
+            let anchor: (IndexPath, CGFloat)? = if layoutChanged && !resetScroll && items == nextItems {
+                collection.visibleItems()
+                    .filter { $0.view.frame.intersects(collection.visibleRect) }
+                    .min { ($0.view.frame.minY, $0.view.frame.minX) < ($1.view.frame.minY, $1.view.frame.minX) }
+                    .flatMap { cell in collection.indexPath(for: cell).map { ($0, collection.visibleRect.minY - cell.view.frame.minY) } }
+            } else { nil }
             parent = next
             if reload {
                 items = nextItems
-                (collection.collectionViewLayout as? HistoryCollectionLayout)?.sections = next.sessions.enumerated().map { section, session in
+                let layout = collection.collectionViewLayout as? HistoryCollectionLayout
+                layout?.gallery = next.gallery
+                layout?.sections = next.sessions.enumerated().map { section, session in
                     HistoryCollectionLayout.Section(
                         cards: cardCount(section),
-                        headerHeight: 24 + (next.showTopics ? 28 : 0) + (session.isVisit ? 0 : 26),
-                        cardHeight: next.showProfiles ? 224 : 204,
+                        headerHeight: next.showTopics && !session.topic.isEmpty ? 52 : 32,
                         footer: hasFooter(section))
                 }
                 collection.reloadData()
@@ -82,6 +94,14 @@ import BowserSurfaceKit
             if resetScroll, let scroll = collection.enclosingScrollView {
                 scroll.contentView.scroll(to: .zero)
                 scroll.reflectScrolledClipView(scroll.contentView)
+            } else if let (index, offset) = anchor, let scroll = collection.enclosingScrollView {
+                collection.layoutSubtreeIfNeeded()
+                if let frame = collection.collectionViewLayout?.layoutAttributesForItem(at: index)?.frame {
+                    let y = frame.minY + min(offset, frame.height - 1)
+                    let limit = max(0, collection.frame.height - scroll.contentSize.height)
+                    scroll.contentView.scroll(to: NSPoint(x: 0, y: min(max(0, y), limit)))
+                    scroll.reflectScrolledClipView(scroll.contentView)
+                }
             }
         }
 
@@ -129,9 +149,9 @@ import BowserSurfaceKit
     struct Section {
         let cards: Int
         let headerHeight: CGFloat
-        let cardHeight: CGFloat
         let footer: Bool
     }
+    var gallery = false
     var sections: [Section] = []
     private var attributes: [IndexPath: NSCollectionViewLayoutAttributes] = [:]
     private var ordered: [NSCollectionViewLayoutAttributes] = []
@@ -142,9 +162,12 @@ import BowserSurfaceKit
         guard let collection = collectionView else { return }
         let width = collection.enclosingScrollView?.contentSize.width ?? collection.bounds.width
         guard width > 0 else { attributes = [:]; ordered = []; size = .zero; return }
-        let columns = max(1, Int((width + 16) / 191))
-        let cardWidth = min(320, (width - CGFloat(columns - 1) * 16) / CGFloat(columns))
-        var y: CGFloat = 12
+        let columnGap: CGFloat = 14
+        let columns = gallery ? max(1, Int((width + columnGap) / (208 + columnGap))) : 1
+        let cardWidth = (width - CGFloat(columns - 1) * columnGap) / CGFloat(columns)
+        let cardHeight: CGFloat = gallery ? 198 : 60
+        let rowGap: CGFloat = gallery ? 14 : 0
+        var y: CGFloat = 4
         attributes = [:]; ordered = []
         func add(_ section: Int, _ item: Int, _ frame: NSRect) {
             let path = IndexPath(item: item, section: section)
@@ -154,19 +177,21 @@ import BowserSurfaceKit
         }
         for (section, info) in sections.enumerated() {
             add(section, 0, NSRect(x: 0, y: y, width: width, height: info.headerHeight))
-            y += info.headerHeight + 18
+            y += info.headerHeight + 6
             for item in 0..<info.cards {
                 add(section, item + 1, NSRect(
-                    x: CGFloat(item % columns) * (cardWidth + 16),
-                    y: y + CGFloat(item / columns) * (info.cardHeight + 18),
-                    width: cardWidth, height: info.cardHeight))
+                    x: CGFloat(item % columns) * (cardWidth + columnGap),
+                    y: y + CGFloat(item / columns) * (cardHeight + rowGap),
+                    width: cardWidth, height: cardHeight))
             }
-            y += CGFloat((info.cards + columns - 1) / columns) * (info.cardHeight + 18)
+            let rows = (info.cards + columns - 1) / columns
+            y += CGFloat(rows) * cardHeight + CGFloat(max(0, rows - 1)) * rowGap
             if info.footer {
+                y += 12
                 add(section, info.cards + 1, NSRect(x: 0, y: y, width: width, height: 44))
-                y += 62
+                y += 44
             }
-            y += 26
+            y += 20
         }
         size = NSSize(width: width, height: y)
     }

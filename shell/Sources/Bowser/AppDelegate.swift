@@ -542,11 +542,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     @objc func openHistory(_ sender: Any?) {
-        HistoryController.shared.selectedProfile = currentController?.profile.id ?? "default"
-        HistoryController.shared.allProfiles = false
-        if let existing = currentController?.tabs.first(where: { $0.currentURLString == EngineView.historyURL }) {
-            currentController?.activate(existing, focusPage: false)
-        } else { openTab(url: EngineView.historyURL) }
+        showHistory(in: currentController)
+    }
+
+    func openHistory(forProfile profile: String) {
+        let candidates = BrowserWindowController.all.filter { $0.profile.id == profile }
+        let owner = candidates.last { $0.tabs.contains { $0.currentURLString == EngineView.historyURL } } ?? candidates.last
+        showHistory(in: owner, profile: profile)
+    }
+
+    private func showHistory(in owner: BrowserWindowController?, profile: String? = nil) {
+        let tab: EngineView
+        if let owner, let existing = owner.tabs.first(where: { $0.currentURLString == EngineView.historyURL }) {
+            HistoryController.shared.selectedProfile = owner.profile.id
+            HistoryController.shared.allProfiles = false
+            owner.activate(existing, focusPage: false)
+            tab = existing
+        } else if let owner {
+            tab = owner.openTab()
+            tab.load(urlString: EngineView.historyURL)
+        } else {
+            tab = openTab(url: EngineView.historyURL, profile: profile)
+        }
+        revealHistoryDestination(tab)
+        tab.focusHistorySearch()
+    }
+
+    func reopenHistoryPage(_ url: String, profile: String) {
+        revealHistoryDestination(openTab(url: url, profile: profile))
+    }
+
+    private func revealHistoryDestination(_ tab: EngineView) {
+        let window = BrowserWindowController.host(of: tab.webviewId)?.window
+        window?.deminiaturize(nil)
+        window?.makeKeyAndOrderFront(nil)
+        CommandBar.shared.hide()
     }
 
     @objc func openWelcome(_ sender: Any?) {

@@ -33,7 +33,13 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     private(set) var pageFindBar: PageFindBar?
 
     func showFindInPage() {
-        guard let page = activeTab?.webView, let root = window?.contentView else { return }
+        guard let activeTab, let root = window?.contentView else { return }
+        if activeTab.isHistoryPage {
+            if pageFindBar?.isHidden == false { pageFindBar?.dismiss() }
+            activeTab.focusHistorySearch()
+            return
+        }
+        let page = activeTab.webView
         if pageFindBar == nil {
             let bar = PageFindBar(frame: .zero)
             bar.isHidden = true
@@ -53,7 +59,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     }
 
     func findNext(backwards: Bool = false) {
-        if pageFindBar?.isHidden != false { showFindInPage() }
+        if activeTab?.isHistoryPage == true || pageFindBar?.isHidden != false { showFindInPage() }
         else { pageFindBar?.search(backwards: backwards) }
     }
 

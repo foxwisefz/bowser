@@ -52,12 +52,19 @@ private struct HistoryPreferences: Codable {
     private var lastWork = Date.distantPast
     private var queryTask: Task<Void, Never>?
     private var revision = 0
-    @Published var selectedProfile = "default" { didSet { excludedSites = settings.exclusions.joined(separator: "\n"); presentStats(); refreshStatus(); search() } }
+    @Published var selectedProfile = "default" {
+        didSet {
+            excludedSites = settings.exclusions.joined(separator: "\n")
+            presentStats()
+            refreshStatus()
+            search(clearResults: oldValue != selectedProfile)
+        }
+    }
     @Published var excludedSites = ""
-    @Published var query = "" { didSet { search() } }
-    @Published var allProfiles = false { didSet { search() } }
-    @Published var dateFilter = "all" { didSet { search() } }
-    @Published var siteFilter = "" { didSet { search() } }
+    @Published var query = "" { didSet { search(clearResults: oldValue != query) } }
+    @Published var allProfiles = false { didSet { search(clearResults: oldValue != allProfiles) } }
+    @Published var dateFilter = "all" { didSet { search(clearResults: oldValue != dateFilter) } }
+    @Published var siteFilter = "" { didSet { search(clearResults: oldValue != siteFilter) } }
     @Published private(set) var hasMore = false
     @Published private(set) var lastSaved: Date?
     @Published private(set) var searchError: String?
@@ -127,7 +134,7 @@ private struct HistoryPreferences: Codable {
     }
     func downloadModel() { HistoryModelDownload.shared.download() }
     func showSettings() { SettingsWindow.shared.show(select: "history") }
-    func showBrowser() { (NSApp.delegate as? AppDelegate)?.openHistory(nil) }
+    func showBrowser() { (NSApp.delegate as? AppDelegate)?.openHistory(forProfile: selectedProfile) }
     var isResourceLimited: Bool {
         memoryLimited || ProcessInfo.processInfo.thermalState == .serious || ProcessInfo.processInfo.thermalState == .critical
         || CaptureMode.shared.isEnabled || EngineView.live.values.contains {
@@ -379,8 +386,15 @@ private struct HistoryPreferences: Codable {
         } catch { searchError = "History could not be read. Your saved data has not been cleared."; return [] }
     }
     func search() {
+        search(clearResults: false)
+    }
+    private func search(clearResults: Bool) {
         resultLimit = 60
         performSearch()
+        if clearResults {
+            results = []
+            hasMore = false
+        }
     }
     func loadMore() { resultLimit += 60; performSearch() }
     private func performSearch() {
@@ -391,8 +405,15 @@ private struct HistoryPreferences: Codable {
         searchError = nil
         queryTask = Task {
             do { try await Task.sleep(for: .milliseconds(250)) } catch { return }
-            let today = Calendar.current.startOfDay(for: Date())
-            let after = date == "today" ? today : date == "yesterday" ? Calendar.current.date(byAdding: .day, value: -1, to: today) : date == "week" ? Calendar.current.date(byAdding: .day, value: -7, to: today) : nil
+            let calendar = Calendar.current
+            let today = calendar.startOfDay(for: Date())
+            let after: Date?
+            switch date {
+            case "today": after = today
+            case "yesterday": after = calendar.date(byAdding: .day, value: -1, to: today)
+            case "week": after = calendar.date(byAdding: .day, value: -6, to: today)
+            default: after = nil
+            }
             let before: Date? = date == "yesterday" ? today : nil
             var found: [HistorySearchItem] = []
             do {
@@ -429,7 +450,7 @@ private struct HistoryPreferences: Codable {
         }
     }
     func open(_ item: HistorySearchItem) {
-        (NSApp.delegate as? AppDelegate)?.openTab(url: item.url, activate: true, profile: item.profile.isEmpty ? selectedProfile : item.profile)
+        (NSApp.delegate as? AppDelegate)?.reopenHistoryPage(item.url, profile: item.profile.isEmpty ? selectedProfile : item.profile)
     }
     func delete(_ item: HistorySearchItem) { delete([item]) }
     func delete(_ items: [HistorySearchItem]) {

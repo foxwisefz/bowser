@@ -1,4 +1,5 @@
 import AppKit
+import BowserSurfaceKit
 import SwiftUI
 import WebKit
 
@@ -98,7 +99,12 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
     private(set) var historyNavigationCommitted = false
     static let historyURL = "bowser://history"
     private var historyPage: NSView?
+    private weak var historyScreenContext: BrowserScreenContext?
     var isHistoryPage: Bool { historyPage != nil }
+
+    func focusHistorySearch() {
+        historyScreenContext?.focusSearchRequests.send()
+    }
 
     private let pageRelay = PageRelay()
     fileprivate var didWarmMediaRecovery = false
@@ -546,7 +552,10 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
             historyController.allProfiles = false
             webView.stopLoading(); webView.isHidden = true
             if historyPage == nil {
-                let page = NSHostingView(rootView: LiveBrowserScreen(kind: "history", model: historyController))
+                let screen = LiveBrowserScreen(kind: "history", model: historyController) { [weak self] context in
+                    self?.historyScreenContext = context
+                }
+                let page = NSHostingView(rootView: screen)
                 page.sizingOptions = []; page.frame = bounds; page.autoresizingMask = [.width, .height]
                 historyPage = page; addSubview(page)
             }

@@ -58,6 +58,25 @@ import XCTest
         XCTAssertTrue(try XCTUnwrap(first.pageFindBar).isHidden)
     }
 
+    func testFindInHistoryFocusesItsSearchField() async throws {
+        let host = BrowserWindowController(profile: .defaultProfile)
+        let window = try XCTUnwrap(host.window)
+        defer { window.close() }
+        let tab = try XCTUnwrap(host.activeTab)
+        tab.load(urlString: EngineView.historyURL)
+        window.makeKeyAndOrderFront(nil)
+        try await wait { window.firstResponder is NSTextView }
+        window.makeFirstResponder(nil)
+        try await wait { !(window.firstResponder is NSTextView) }
+        let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .command,
+            timestamp: 0, windowNumber: window.windowNumber, context: nil, characters: "f",
+            charactersIgnoringModifiers: "f", isARepeat: false, keyCode: 3))
+        XCTAssertNil(AppDelegate().handleShortcut(event))
+        try await wait { window.firstResponder is NSTextView }
+        XCTAssertNil(host.pageFindBar)
+        XCTAssertTrue(tab.webView.isHidden)
+    }
+
     func testRenderFindBar() throws {
         guard let path = ProcessInfo.processInfo.environment["BOWSER_FIND_RENDER"] else { return }
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 100),

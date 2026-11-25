@@ -108,11 +108,15 @@ import AppKit
         XCTAssertTrue(slot.install(library))
         defer { slot.retire() }
         slot.layoutSubtreeIfNeeded()
-        if let path = ProcessInfo.processInfo.environment["BOWSER_TOOLBAR_PREVIEW"],
-           let bitmap = slot.bitmapImageRepForCachingDisplay(in: slot.bounds) {
+        func writePreview(_ phase: String? = nil) throws {
+            guard let path = ProcessInfo.processInfo.environment["BOWSER_TOOLBAR_PREVIEW"] else { return }
+            let original = URL(fileURLWithPath: path)
+            let output = phase.map { original.deletingPathExtension().appendingPathExtension("\($0).png") } ?? original
+            let bitmap = try XCTUnwrap(slot.bitmapImageRepForCachingDisplay(in: slot.bounds))
             slot.cacheDisplay(in: slot.bounds, to: bitmap)
-            try bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+            try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: output)
         }
+        try writePreview()
         func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
         func control(_ id: String) throws -> NSButton {
             try XCTUnwrap(descendants(slot).compactMap { $0 as? NSButton }.first { $0.accessibilityIdentifier() == id })
@@ -139,15 +143,26 @@ import AppKit
         XCTAssertFalse(back.isEnabled)
         XCTAssertTrue(forward.isEnabled)
         XCTAssertTrue(try control("stop") === transport)
+        XCTAssertEqual(transport.imagePosition, .imageOnly)
+        XCTAssertNotNil(transport.image)
         XCTAssertEqual(transport.accessibilityLabel(), "Stop loading")
+        try writePreview("stop")
         transport.performClick(nil)
         XCTAssertEqual(actions.last, "stop")
-        state["navigation"] = ["canGoBack": true, "canGoForward": false, "canReload": false, "isLoading": false]
+        state["navigation"] = ["canGoBack": true, "canGoForward": false, "canReload": true, "isLoading": false]
         slot.setSnapshot(try JSONSerialization.data(withJSONObject: state))
         slot.layoutSubtreeIfNeeded()
         XCTAssertTrue(back.isEnabled)
         XCTAssertFalse(forward.isEnabled)
         XCTAssertTrue(try control("reload") === transport)
+        XCTAssertTrue(transport.isEnabled)
+        XCTAssertEqual(transport.imagePosition, .imageOnly)
+        XCTAssertNotNil(transport.image)
+        XCTAssertEqual(transport.accessibilityLabel(), "Reload this tab")
+        try writePreview("reload")
+        state["navigation"] = ["canReload": false, "isLoading": false, "canGoBack": true, "canGoForward": false]
+        slot.setSnapshot(try JSONSerialization.data(withJSONObject: state))
+        slot.layoutSubtreeIfNeeded()
         XCTAssertFalse(transport.isEnabled)
         state["revealed"] = false; state["capturing"] = false; state["resourceAvailable"] = false
         slot.setSnapshot(try JSONSerialization.data(withJSONObject: state))

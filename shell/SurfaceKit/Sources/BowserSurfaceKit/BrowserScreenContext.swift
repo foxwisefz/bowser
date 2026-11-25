@@ -8,6 +8,7 @@ import Combine
     public let id = UUID().uuidString
     public let kind: String
     public let model: AnyObject
+    public let focusSearchRequests = PassthroughSubject<Void, Never>()
     @Published public var values: [String: Any] = [:]
     private var observation: AnyCancellable?
     public init<Model: ObservableObject>(kind: String, model: Model) where Model.ObjectWillChangePublisher == ObservableObjectPublisher {

@@ -80,8 +80,9 @@ Press `⌘K` again while Bowser’s command bar is open to send `⌘K` to the we
 Use `⌘L` to select the current URL. Enter an address and press Return to navigate
 in that tab, or use `⌘⇧C` to copy its URL directly.
 
-Use `⌘Y` for History: a visual timeline in its own browser tab, with page previews,
-search, profile/site/date filters, and deletion. Visit recording is opt-in through
+Use `⌘Y` to open History. Scan visits by title and website, switch to Gallery
+for previews, or press `⌘F` to search within the current profile and filters.
+Visit recording is opt-in through
 History’s settings button. Lightweight visits keep saving while content capture
 pauses during calls. See [local history search](docs/history-search.md) for capture,
 privacy, and storage details.

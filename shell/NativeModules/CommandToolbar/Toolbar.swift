@@ -50,7 +50,7 @@ struct ToolbarTheme {
     init(title: String, symbol: String? = nil, action: @escaping () -> Void) {
         invoke = action
         super.init(frame: .zero)
-        self.title = title
+        self.title = symbol == nil ? title : ""
         isBordered = false
         setButtonType(.momentaryChange)
         if let symbol {
@@ -238,7 +238,6 @@ struct ToolbarTheme {
         guard showingStop != isLoading, let reload else { return }
         showingStop = isLoading
         let title = isLoading ? "Stop loading" : "Reload this tab"
-        reload.title = title
         reload.image = NSImage(systemSymbolName: isLoading ? "xmark" : "arrow.clockwise", accessibilityDescription: nil)?
             .withSymbolConfiguration(.init(pointSize: 13, weight: .medium))
         reload.setAccessibilityLabel(title)

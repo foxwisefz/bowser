@@ -6,6 +6,92 @@ import BowserSurfaceKit
 @testable import Bowser
 
 @MainActor final class HistoryBrowserTests: XCTestCase {
+    func testSettingsReusesAndRevealsHistoryInItsSelectedProfile() throws {
+        _ = NSApplication.shared
+        let app = AppDelegate()
+        let originalDelegate = NSApp.delegate
+        NSApp.delegate = app
+        let profiles = Profile.all
+        let model = HistoryController.shared
+        let originalProfile = model.selectedProfile, originalScope = model.allProfiles
+        defer {
+            model.selectedProfile = originalProfile
+            model.allProfiles = originalScope
+            Profile.all = profiles
+            NSApp.delegate = originalDelegate
+        }
+        let work = Profile(id: UUID().uuidString, name: "Work", tint: nil, icon: nil, uuid: UUID().uuidString)
+        Profile.all = [.defaultProfile, work]
+        let workBrowser = BrowserWindowController(profile: work)
+        let personalBrowser = BrowserWindowController(profile: .defaultProfile)
+        defer { workBrowser.window?.close(); personalBrowser.window?.close() }
+        let workWindow = try XCTUnwrap(workBrowser.window)
+        let personalWindow = try XCTUnwrap(personalBrowser.window)
+        let historyTab = try XCTUnwrap(workBrowser.activeTab)
+        historyTab.load(urlString: EngineView.historyURL)
+        _ = workBrowser.openTab()
+        let existingTabCount = workBrowser.tabs.count
+        personalWindow.makeKeyAndOrderFront(nil)
+        workWindow.orderOut(nil)
+
+        model.selectedProfile = work.id
+        model.allProfiles = true
+        model.showBrowser()
+        XCTAssertTrue(workWindow.isVisible)
+        XCTAssertTrue(workBrowser.activeTab === historyTab)
+        XCTAssertEqual(workBrowser.tabs.count, existingTabCount)
+        XCTAssertEqual(personalBrowser.tabs.count, 1)
+        XCTAssertEqual(model.selectedProfile, work.id)
+        XCTAssertFalse(model.allProfiles)
+
+        personalWindow.orderOut(nil)
+        model.open(HistorySearchItem(id: "fixture", url: "about:blank", title: "", snippet: "", seen: Date(), image: nil, profile: "default"))
+        XCTAssertTrue(personalWindow.isVisible)
+        XCTAssertEqual(personalBrowser.tabs.count, 2)
+        XCTAssertEqual(personalBrowser.activeTab.profileId, "default")
+        XCTAssertTrue(workBrowser.activeTab === historyTab)
+    }
+
+    func testFilteringRetiresPreviousResultsAndWeekIncludesTodayAndSixPriorDates() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try HistoryStore(directory: root, profile: "default")
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        for age in [0, 6, 7] {
+            let date = try XCTUnwrap(calendar.date(byAdding: .day, value: -age, to: today))
+            let url = "https://day\(age).example.test"
+            try store.visit(id: UUID().uuidString, record: HistoryRecord(url: url, title: "Day \(age)", text: "", seen: date))
+        }
+        let model = HistoryController(directory: root)
+        func waitForResults() async throws {
+            let deadline = Date().addingTimeInterval(5)
+            while model.isSearching && Date() < deadline { try await Task.sleep(for: .milliseconds(20)) }
+            XCTAssertFalse(model.isSearching)
+            XCTAssertNil(model.searchError)
+        }
+        model.search()
+        try await waitForResults()
+        XCTAssertEqual(model.results.map(\.title), ["Day 0", "Day 6", "Day 7"])
+        model.dateFilter = "week"
+        XCTAssertTrue(model.results.isEmpty)
+        try await waitForResults()
+        XCTAssertEqual(model.results.map(\.title), ["Day 0", "Day 6"])
+        model.siteFilter = "day6.example.test"
+        XCTAssertTrue(model.results.isEmpty)
+        try await waitForResults()
+        XCTAssertEqual(model.results.map(\.title), ["Day 6"])
+        model.query = "missing"
+        XCTAssertTrue(model.results.isEmpty)
+        model.query = "Day 6"
+        try await waitForResults()
+        XCTAssertEqual(model.results.map(\.title), ["Day 6"])
+        model.selectedProfile = "other"
+        XCTAssertTrue(model.results.isEmpty)
+        try await waitForResults()
+        XCTAssertTrue(model.results.isEmpty)
+    }
+
     func testTimelineGroupsTimeBlocksIndependentlyForEachProfile() {
         var calendar = Calendar(identifier: .gregorian); calendar.timeZone = TimeZone(secondsFromGMT: 0)!
         let day = Date(timeIntervalSince1970: 1_800_000_000)

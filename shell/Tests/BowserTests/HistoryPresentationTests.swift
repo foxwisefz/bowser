@@ -34,7 +34,12 @@ import BowserSurfaceKit
     var selected: String? = "history"
     let historyContext: BrowserScreenContext
     init(enabled: Bool = true) {
-        let history = HistoryFixture(); history.enabled = enabled
+        let history = HistoryFixture()
+        history.enabled = enabled
+        if !enabled {
+            history.modelReady = false
+            history.status = "Visit recording is off for this profile. Saved history is still available."
+        }
         historyContext = BrowserScreenContext(kind: "history", model: history)
     }
     var permissionsContext: BrowserScreenContext { historyContext }
@@ -58,7 +63,8 @@ import BowserSurfaceKit
                 profile: "work", isVisit: index < 50)
         }
         model.results = full
-        let host = NSHostingView(rootView: LiveBrowserScreen(kind: "history", model: model))
+        var screenContext: BrowserScreenContext?
+        let host = NSHostingView(rootView: LiveBrowserScreen(kind: "history", model: model, onCreateContext: { screenContext = $0 }))
         host.sizingOptions = []
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1404, height: 972), styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false; window.contentView = host; window.orderBack(nil)
@@ -96,6 +102,16 @@ import BowserSurfaceKit
             scroll.contentView.scroll(to: NSPoint(x: 0, y: y)); scroll.reflectScrolledClipView(scroll.contentView)
             try await Task.sleep(for: .milliseconds(200))
         }
+        let context = try XCTUnwrap(screenContext)
+        for gallery in [true, false] {
+            let firstCell = try XCTUnwrap(collection.visibleItems().filter { $0.view.frame.intersects(collection.visibleRect) }
+                .min { ($0.view.frame.minY, $0.view.frame.minX) < ($1.view.frame.minY, $1.view.frame.minX) })
+            let anchor = try XCTUnwrap(collection.indexPath(for: firstCell))
+            context.values["historyGallery"] = gallery
+            try await Task.sleep(for: .milliseconds(180))
+            let newFrame = try XCTUnwrap(collection.collectionViewLayout?.layoutAttributesForItem(at: anchor)).frame
+            XCTAssertTrue(newFrame.intersects(collection.visibleRect), "Changing layout should keep the entry being read on screen")
+        }
         for _ in 0..<5 {
             // Filtering while deep in the timeline must safely shrink its
             // document, including when the old visible rows no longer exist.
@@ -117,9 +133,7 @@ import BowserSurfaceKit
                 XCTAssertFalse(header.frame.intersects(other.frame), "Recycled session headers must not leave overlapping views behind")
             }
         }
-        let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
-        host.cacheDisplay(in: host.bounds, to: bitmap)
-        try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: URL(fileURLWithPath: "/tmp/bowser-history-after-filter.png"))
+        try await savePreview(window, name: "after-filter")
         func cpuTime() -> Double {
             var usage = rusage()
             getrusage(RUSAGE_SELF, &usage)
@@ -151,43 +165,95 @@ import BowserSurfaceKit
     }
     func testVisualTimelineRendersAtBrowserSizes() async throws {
         _ = NSApplication.shared
-        let model = HistoryFixture(); model.query = ""; model.storageWarning = nil
-        let image = NSImage(size: NSSize(width: 480, height: 300), flipped: false) { rect in
-            NSColor.white.setFill(); rect.fill()
-            NSColor.systemOrange.setFill(); NSRect(x: 0, y: 245, width: 480, height: 55).fill()
-            ("Network services" as NSString).draw(at: NSPoint(x: 25, y: 190), withAttributes: [.font: NSFont.systemFont(ofSize: 26, weight: .semibold), .foregroundColor: NSColor.black])
-            ("A saved page preview" as NSString).draw(at: NSPoint(x: 25, y: 150), withAttributes: [.font: NSFont.systemFont(ofSize: 17), .foregroundColor: NSColor.gray])
-            return true
+        let model = HistoryFixture()
+        model.storageWarning = nil
+        model.query = ""
+        let lastVisit = Date.now.addingTimeInterval(-180)
+        let pages: [(site: String, title: String, snippet: String, minutes: Int, color: NSColor?)] = [
+            ("fieldnotes.example", "Walking the West Highland Way", "A field guide to the trail from Milngavie to Fort William.", 0, .systemGreen),
+            ("maps.example", "Loch Lomond and the Trossachs", "Walking routes, ferry crossings and viewpoints.", 6, nil),
+            ("rail.example", "Glasgow to Fort William by train", "The West Highland Line follows the shore of Loch Long.", 17, .systemIndigo),
+            ("museum.example", "The collection in focus", "Studies in paper, colour and form.", 88, .systemOrange),
+            ("archive.example", "A pocket guide to letterpress", "A printer’s notes on setting the first line of type.", 94, nil),
+            ("library.example", "Books on type and lettering", "From the design reading room.", 111, nil),
+            ("journal.example", "A weekend on the west coast", "Notes from the road.", 1410, nil)
+        ]
+        model.results = try pages.enumerated().map { index, page in
+            let picture = try page.color.map { try thumbnail(title: page.title, site: page.site, accent: $0) }
+            return HistorySearchItem(id: String(index), url: "https://" + page.site + "/read/\(index)",
+                title: page.title, snippet: page.snippet, seen: lastVisit.addingTimeInterval(Double(-page.minutes * 60)),
+                image: picture, profile: "work", isVisit: index < 6)
         }
-        let cg = try XCTUnwrap(image.cgImage(forProposedRect: nil, context: nil, hints: nil))
-        let thumbnail = try XCTUnwrap(NSBitmapImageRep(cgImage: cg).representation(using: .jpeg, properties: [:]))
-        model.results = []
-        let titles = ["Network security and performance", "Designing a calmer browser", "A visit without a preview"]
-        for index in 0..<7 {
-            let title = titles[index % 3]
-            let seconds = Double(index) * (index < 4 ? 240.0 : 900.0)
-            let seen = Date().addingTimeInterval(-seconds)
-            let picture: Data? = index % 3 == 2 ? nil : thumbnail
-            let item = HistorySearchItem(id: String(index), url: "https://example.test/\(index)", title: title, snippet: "Saved page content.", seen: seen, image: picture, profile: "work", isVisit: true)
-            model.results.append(item)
-        }
+        model.lastSaved = model.results.first?.seen
         let context = BrowserScreenContext(kind: "history", model: model)
         let host = NSHostingView(rootView: HistoryScreen(context: context))
         host.sizingOptions = []
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1100, height: 850), styleMask: [.titled], backing: .buffered, defer: false)
-        window.isReleasedWhenClosed = false; window.contentView = host; window.orderBack(nil)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1080, height: 760), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.title = "History"
+        window.contentView = host
+        window.orderBack(nil)
         defer { window.orderOut(nil); window.contentView = nil }
-        for width in [1100, 820] {
-            window.setContentSize(NSSize(width: width, height: 850))
-            try await Task.sleep(for: .milliseconds(200))
+
+        func collectionView(in view: NSView) -> NSCollectionView? {
+            if let collection = view as? NSCollectionView { return collection }
+            return view.subviews.lazy.compactMap { collectionView(in: $0) }.first
+        }
+        for (width, gallery, appearance, name) in [
+            (1080, false, NSAppearance.Name.aqua, "list"),
+            (1080, true, .aqua, "gallery"),
+            (480, false, .darkAqua, "compact-dark")
+        ] {
+            context.values["historyGallery"] = gallery
+            window.appearance = NSAppearance(named: appearance)
+            window.setContentSize(NSSize(width: width, height: 760))
+            try await Task.sleep(for: .milliseconds(220))
             host.layoutSubtreeIfNeeded()
+            let collection = try XCTUnwrap(collectionView(in: host))
+            let layout = try XCTUnwrap(collection.collectionViewLayout)
+            let first = try XCTUnwrap(layout.layoutAttributesForItem(at: IndexPath(item: 1, section: 0))).frame
+            let second = try XCTUnwrap(layout.layoutAttributesForItem(at: IndexPath(item: 2, section: 0))).frame
+            XCTAssertTrue(gallery ? first.minY == second.minY : first.maxY <= second.minY)
             XCTAssertEqual(host.bounds.width, Double(width))
-            // Reused native cells receive their final width during AppKit layout;
-            // let their SwiftUI text drawing commit before capturing the artifact.
-            try await Task.sleep(for: .milliseconds(100))
-            let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
-            host.cacheDisplay(in: host.bounds, to: bitmap)
-            try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: URL(fileURLWithPath: "/tmp/bowser-history-timeline-\(width).png"))
+            XCTAssertLessThanOrEqual(first.maxX, collection.bounds.width + 1)
+            try await savePreview(window, name: name)
+        }
+        model.results = []
+        model.enabled = false
+        context.objectWillChange.send()
+        try await Task.sleep(for: .milliseconds(220))
+        XCTAssertNil(collectionView(in: host))
+        try await savePreview(window, name: "recording-off")
+    }
+
+    private func thumbnail(title: String, site: String, accent: NSColor) throws -> Data {
+        let image = NSImage(size: NSSize(width: 480, height: 240), flipped: false) { rect in
+            NSColor(white: 0.97, alpha: 1).setFill()
+            rect.fill()
+            accent.withAlphaComponent(0.16).setFill()
+            NSRect(x: 0, y: 78, width: 480, height: 162).fill()
+            let ink = NSColor(white: 0.13, alpha: 1)
+            (site.uppercased() as NSString).draw(at: NSPoint(x: 22, y: 213), withAttributes: [
+                .font: NSFont.systemFont(ofSize: 13, weight: .bold), .foregroundColor: ink,
+            ])
+            (title as NSString).draw(in: NSRect(x: 21, y: 88, width: 436, height: 95), withAttributes: [
+                .font: NSFont(name: "Georgia", size: 32) ?? NSFont.systemFont(ofSize: 32), .foregroundColor: ink,
+            ])
+            NSColor(white: 0.68, alpha: 1).setFill()
+            for (index, width) in [319, 395, 260].enumerated() {
+                NSRect(x: 23, y: 55 - 11 * index, width: width, height: 2).fill()
+            }
+            return true
+        }
+        let cg = try XCTUnwrap(image.cgImage(forProposedRect: nil, context: nil, hints: nil))
+        return try XCTUnwrap(NSBitmapImageRep(cgImage: cg).representation(using: .jpeg, properties: [:]))
+    }
+
+    private func savePreview(_ window: NSWindow, name: String) async throws {
+        if let path = ProcessInfo.processInfo.environment["BOWSER_HISTORY_PREVIEWS"] {
+            let directory = URL(fileURLWithPath: path, isDirectory: true)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try await writeWindowPreview(window, to: directory.appendingPathComponent(name + ".png"))
         }
     }
     private func renderSettings(enabled: Bool, name: String) async throws {
@@ -201,8 +267,6 @@ import BowserSurfaceKit
         try await Task.sleep(for: .milliseconds(150))
         host.layoutSubtreeIfNeeded()
         XCTAssertEqual(host.bounds.size, NSSize(width: 820, height: 600))
-        let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
-        host.cacheDisplay(in: host.bounds, to: bitmap)
-        try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: URL(fileURLWithPath: "/tmp/bowser-history-warning-\(name).png"))
+        try await savePreview(window, name: enabled ? "settings-on" : "settings-off")
     }
 }

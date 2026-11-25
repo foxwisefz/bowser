@@ -1,11 +1,16 @@
 # Local history search
 
 Open **Go → Search History** (⌘Y) for a dedicated `bowser://history` browser tab.
-History opens in the current profile, with an **All profiles** option. Visits
-appear as preview cards in time blocks separated by 30 minutes of inactivity
-or a new day. Optional site labels summarize the domains in each block.
-Search titles, URLs, saved text, or descriptions; filter by date or site;
-inspect a preview, reopen a page, or select entries or a whole block to delete.
+History opens in the current profile, with an **All profiles** option.
+The list shows page titles, websites and times. Click a title to reopen the
+page, or inspect an entry to see its saved details. Switch to Gallery to
+browse by page preview. Both layouts group visits by profile and start a
+new time block after 30 minutes of inactivity or at the start of a new day.
+The display menu can hide the website labels on each block.
+Press ⌘F to search titles, URLs, saved text or descriptions. Use the date
+and website filters together to narrow the results. **Reset** clears the
+search and both filters while keeping the selected profile. You can select
+individual entries or an entire time block for deletion.
 Older captured content is labeled with its capture time rather than presented
 as a visit that was never recorded.
 
