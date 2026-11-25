@@ -6,7 +6,9 @@ release stage. To reuse a build, pass `--stage PATH`, where PATH is the output
 written to `BOWSER_STAGE_FILE` by `bin/install --stage-only`.
 
 The runner uses disposable state under `/tmp`, synthetic registrations, loopback
-pages, and telemetry disabled. It does not read the installed browser's session,
+pages, and telemetry disabled. Each browser fixture sets both `BOWSER_HOME`
+and `CFFIXED_USER_HOME` so macOS resolves saved-app and Library paths inside
+the fixture. It does not read the installed browser's session,
 connect to its sockets, or install an update. Build, signing, fixture preparation,
 and release copying happen outside measured intervals. Keep the machine idle and
 unlocked; visible WebKit windows are required for paint and animation callbacks.
@@ -134,6 +136,23 @@ python3 -m unittest discover -s tests/performance -p test_report.py
 Treat budget changes as reviewed product decisions. Investigate the workload and
 artifact before increasing a threshold; shared CI runners have noise, but a
 missing readiness signal must never be replaced with a fixed successful sleep.
+
+## Large History and site-mod fixtures
+
+Run the focused release fixtures to print timings on an Apple Silicon Mac:
+
+```sh
+fixture=$(mktemp -d /tmp/bowser-perf-detail.XXXXXX)
+BOWSER_HOME="$fixture" CFFIXED_USER_HOME="$fixture" BOWSER_PERF=1 \
+  swift test -c release --package-path shell \
+  --filter 'testLargeHistoryBrowseAndSiteDeletion|testToolbarFollowsCatalogChangesOnTheSamePage'
+```
+
+History seeds 4,500 synthetic visits and 4,500 indexed captures, times 25
+recent-page queries including retention and statistics, then deletes 500
+visits and 500 captures belonging to one site. The toolbar fixture times 100
+refreshes of an unchanged page with 128 matching entries in a catalog of 4,096
+site mods. The existing release gates cover whole-browser workloads separately.
 
 ## Safari comparison
 

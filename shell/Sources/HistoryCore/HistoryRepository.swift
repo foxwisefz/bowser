@@ -40,10 +40,7 @@ public actor HistoryRepository {
         guard accepts(profile, generation: generation) else { return nil }
         let store = try store(profile)
         if all || host != nil { try store.delete(host: host) }
-        else {
-            for id in visits { try store.deleteVisit(id: id) }
-            for id in records { try store.delete(key: id) }
-        }
+        else { try store.delete(visits: visits, records: records) }
         return try store.stats()
     }
 }

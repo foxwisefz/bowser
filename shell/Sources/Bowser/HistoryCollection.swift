@@ -197,7 +197,20 @@ import BowserSurfaceKit
     }
     override var collectionViewContentSize: NSSize { size }
     override func layoutAttributesForElements(in rect: NSRect) -> [NSCollectionViewLayoutAttributes] {
-        ordered.filter { $0.frame.intersects(rect) }
+        // prepare() emits headers, equal-height card rows and footers in vertical order.
+        // A scroll only needs to inspect the rows that reach this viewport.
+        var lower = 0, upper = ordered.count
+        while lower < upper {
+            let mid = lower + (upper - lower) / 2
+            if ordered[mid].frame.maxY < rect.minY { lower = mid + 1 }
+            else { upper = mid }
+        }
+        var result: [NSCollectionViewLayoutAttributes] = []
+        for entry in ordered[lower...] {
+            if entry.frame.minY > rect.maxY { break }
+            if entry.frame.intersects(rect) { result.append(entry) }
+        }
+        return result
     }
     override func layoutAttributesForItem(at indexPath: IndexPath) -> NSCollectionViewLayoutAttributes? { attributes[indexPath] }
     override func shouldInvalidateLayout(forBoundsChange newBounds: NSRect) -> Bool {

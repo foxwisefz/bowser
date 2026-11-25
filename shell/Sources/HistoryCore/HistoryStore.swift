@@ -23,6 +23,7 @@ public final class HistoryStore {
           appearance TEXT NOT NULL, seen REAL NOT NULL, image BLOB, embedding BLOB, image_embedding BLOB, model TEXT);
         CREATE INDEX IF NOT EXISTS recent ON records(seen);
         CREATE INDEX IF NOT EXISTS record_urls ON records(url,seen DESC);
+        CREATE INDEX IF NOT EXISTS record_models ON records(model);
         CREATE TABLE IF NOT EXISTS visits (id TEXT PRIMARY KEY, url TEXT NOT NULL, title TEXT NOT NULL, host TEXT NOT NULL, seen REAL NOT NULL, preview BLOB);
         CREATE INDEX IF NOT EXISTS visits_recent ON visits(seen DESC);
         CREATE INDEX IF NOT EXISTS visits_urls ON visits(url);
@@ -105,11 +106,17 @@ public final class HistoryStore {
             defer { sqlite3_finalize(expiredVisits) }
             sqlite3_bind_double(expiredVisits, 1, expiration); try step(expiredVisits)
             // Expiration is a retention policy, not evidence that capacity was reached.
-            try recordCleanup(removeOldest(keeping: max(1, limit)), now: now)
+            let capacity = max(1, limit)
+            let count = try statement("SELECT (SELECT COUNT(*) FROM records) + (SELECT COUNT(*) FROM visits)")
+            defer { sqlite3_finalize(count) }
+            guard sqlite3_step(count) == SQLITE_ROW else { throw Failure.database }
+            if sqlite3_column_int64(count, 0) > capacity {
+                try recordCleanup(removeOldest(keeping: capacity), now: now)
+            }
         }
         // Include the FTS index and SQLite overhead in the physical cap; keep headroom
         // below max_page_count for the rollback journal and the next bounded insert.
-        while try stats().bytes > budget {
+        while try fileSize() > budget {
             var removed = 0
             try transaction {
                 removed = try removeOldest(keeping: nil)
@@ -140,6 +147,12 @@ public final class HistoryStore {
         }
         return keys.count
     }
+    // URL.resourceValues caches file sizes. Recheck after each committed
+    // auto-vacuum batch, without reading search-index or visit statistics.
+    private func fileSize() throws -> Int64 {
+        (try FileManager.default.attributesOfItem(atPath: path.path)[.size] as? NSNumber)?.int64Value ?? 0
+    }
+
     public func stats() throws -> HistoryStats {
         let stmt = try statement("SELECT COUNT(*), SUM(CASE WHEN model IS NULL OR model != ? THEN 1 ELSE 0 END) FROM records")
         defer { sqlite3_finalize(stmt) }; bind(HistoryModel.version, 1, stmt)
@@ -149,10 +162,8 @@ public final class HistoryStore {
         let cleanupStep = sqlite3_step(cleanup)
         guard cleanupStep == SQLITE_ROW || cleanupStep == SQLITE_DONE else { throw Failure.database }
         let notice = cleanupStep == SQLITE_ROW ? HistoryCapacityCleanup(removedCount: Int(sqlite3_column_int64(cleanup, 0)), lastRemovedAt: Date(timeIntervalSince1970: sqlite3_column_double(cleanup, 1))) : nil
-        // URL.resourceValues caches file sizes on this long-lived URL. Read fresh
-        // attributes after each write/auto-vacuum so the cap uses current usage.
-        let bytes = (try FileManager.default.attributesOfItem(atPath: path.path)[.size] as? NSNumber)?.int64Value ?? 0
-        let visits = try statement("SELECT COUNT(*),MAX(seen) FROM visits")
+        let bytes = try fileSize()
+        let visits = try statement("SELECT (SELECT COUNT(*) FROM visits), (SELECT MAX(seen) FROM visits)")
         defer { sqlite3_finalize(visits) }
         guard sqlite3_step(visits) == SQLITE_ROW else { throw Failure.database }
         let last = sqlite3_column_type(visits, 1) == SQLITE_NULL ? nil : Date(timeIntervalSince1970: sqlite3_column_double(visits, 1))
@@ -183,24 +194,21 @@ public final class HistoryStore {
         bind(textData, 1, stmt); bind(imageData, 2, stmt); bind(HistoryModel.version, 3, stmt); bind(record.key, 4, stmt); try step(stmt)
     }
     public func delete(key: String? = nil, host: String? = nil) throws {
-        if let host {
-            let stmt = try statement("SELECT id,url FROM records")
-            var keys: [String] = []
-            while sqlite3_step(stmt) == SQLITE_ROW {
-                if !HistoryPolicy.permits(string(stmt, 1), exclusions: [host]) { keys.append(string(stmt, 0)) }
-            }
-            sqlite3_finalize(stmt)
-            for key in keys { try delete(key: key) }
-            let visits = try statement("DELETE FROM visits WHERE host=? OR host LIKE ? ESCAPE '\\'")
-            defer { sqlite3_finalize(visits) }
-            bind(host, 1, visits); bind("%." + Self.likeLiteral(host), 2, visits); try step(visits)
-            return
-        }
+        if host == nil, let key { return try delete(visits: [], records: [key]) }
         try transaction {
-            let stmt = try statement(key == nil ? "DELETE FROM records" : "DELETE FROM records WHERE id=?")
-            defer { sqlite3_finalize(stmt) }
-            if let key { bind(key, 1, stmt) }; try step(stmt)
-            if key == nil { try execute("DELETE FROM capacity_cleanup; DELETE FROM visits;") }
+            if let host {
+                let domain = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                guard !domain.isEmpty else { return }
+                let predicate = " WHERE host=? OR host LIKE ? ESCAPE '\\'"
+                for table in ["records", "visits"] {
+                    let stmt = try statement("DELETE FROM " + table + predicate)
+                    defer { sqlite3_finalize(stmt) }
+                    bind(domain, 1, stmt); bind("%." + Self.likeLiteral(domain), 2, stmt)
+                    try step(stmt)
+                }
+            } else {
+                try execute("DELETE FROM records; DELETE FROM capacity_cleanup; DELETE FROM visits;")
+            }
             try execute("INSERT INTO words(words) VALUES('optimize')")
         }
     }
@@ -277,12 +285,31 @@ public final class HistoryStore {
     }
 
     public func deleteVisit(id: String) throws {
+        try delete(visits: [id], records: [])
+    }
+
+    public func delete(visits: [String], records: [String]) throws {
+        guard !visits.isEmpty || !records.isEmpty else { return }
         try transaction {
             // Remove associated content only when this was the last recorded visit.
-            let content = try statement("DELETE FROM records WHERE url=(SELECT url FROM visits WHERE id=?) AND NOT EXISTS(SELECT 1 FROM visits v WHERE v.url=records.url AND v.id!=?)")
-            defer { sqlite3_finalize(content) }; bind(id, 1, content); bind(id, 2, content); try step(content)
-            let stmt = try statement("DELETE FROM visits WHERE id=?")
-            defer { sqlite3_finalize(stmt) }; bind(id, 1, stmt); try step(stmt)
+            if !visits.isEmpty {
+                let content = try statement("DELETE FROM records WHERE url=(SELECT url FROM visits WHERE id=?1) AND NOT EXISTS(SELECT 1 FROM visits v WHERE v.url=records.url AND v.id!=?1)")
+                defer { sqlite3_finalize(content) }
+                let visit = try statement("DELETE FROM visits WHERE id=?")
+                defer { sqlite3_finalize(visit) }
+                for id in visits {
+                    sqlite3_reset(content); bind(id, 1, content); try step(content)
+                    sqlite3_reset(visit); bind(id, 1, visit); try step(visit)
+                }
+            }
+            if !records.isEmpty {
+                let record = try statement("DELETE FROM records WHERE id=?")
+                defer { sqlite3_finalize(record) }
+                for id in records {
+                    sqlite3_reset(record); bind(id, 1, record); try step(record)
+                }
+                try execute("INSERT INTO words(words) VALUES('optimize')")
+            }
         }
     }
 

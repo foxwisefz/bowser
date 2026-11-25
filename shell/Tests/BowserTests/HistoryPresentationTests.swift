@@ -111,6 +111,19 @@ import BowserSurfaceKit
             try await Task.sleep(for: .milliseconds(180))
             let newFrame = try XCTUnwrap(collection.collectionViewLayout?.layoutAttributesForItem(at: anchor)).frame
             XCTAssertTrue(newFrame.intersects(collection.visibleRect), "Changing layout should keep the entry being read on screen")
+            let layout = try XCTUnwrap(collection.collectionViewLayout)
+            var all: [NSCollectionViewLayoutAttributes] = []
+            for section in 0..<collection.numberOfSections {
+                for item in 0..<collection.numberOfItems(inSection: section) {
+                    let path = IndexPath(item: item, section: section)
+                    all.append(try XCTUnwrap(layout.layoutAttributesForItem(at: path)))
+                }
+            }
+            for y in [0, newFrame.minY, newFrame.maxY, layout.collectionViewContentSize.height + 1] {
+                let rect = NSRect(x: 10, y: y, width: 345, height: 200)
+                XCTAssertEqual(layout.layoutAttributesForElements(in: rect).map(\.indexPath),
+                               all.filter { $0.frame.intersects(rect) }.map(\.indexPath))
+            }
         }
         for _ in 0..<5 {
             // Filtering while deep in the timeline must safely shrink its

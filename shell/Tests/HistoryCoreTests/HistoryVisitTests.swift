@@ -1,4 +1,5 @@
 import XCTest
+import SQLite3
 @testable import HistoryCore
 
 final class HistoryVisitTests: XCTestCase {
@@ -97,6 +98,79 @@ final class HistoryVisitTests: XCTestCase {
         try store.prune(days: 1, now: now.addingTimeInterval(2 * 86400))
         XCTAssertEqual(try store.stats().visits, 0)
         XCTAssertEqual(try store.stats().capacityCleanup?.removedCount, 3)
+    }
+    func testSelectionDeletionRollsBackEarlierVisitsWhenARecordDeleteFails() throws {
+        let store = try HistoryStore(directory: root, profile: "work")
+        let id = UUID().uuidString
+        try store.visit(id: id, record: page("Visited"))
+        var saved = page("Saved", url: "https://saved.test")
+        saved.text = "Retained until deletion succeeds"
+        try store.ingest(saved)
+        var connection: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(store.path.path, &connection), SQLITE_OK)
+        defer { sqlite3_close(connection) }
+        let fail = "CREATE TRIGGER simulate_error BEFORE DELETE ON records BEGIN SELECT RAISE(ABORT, 'fixture'); END"
+        XCTAssertEqual(sqlite3_exec(connection, fail, nil, nil, nil), SQLITE_OK)
+        XCTAssertThrowsError(try store.delete(visits: [id], records: [saved.key]))
+        XCTAssertEqual(Set(try store.browse().map(\.id)), [id, saved.key])
+        XCTAssertEqual(sqlite3_exec(connection, "DROP TRIGGER simulate_error", nil, nil, nil), SQLITE_OK)
+        try store.delete(visits: [id], records: [saved.key])
+        XCTAssertTrue(try store.browse().isEmpty)
+        XCTAssertTrue(try store.search("Retained", embedding: nil).isEmpty)
+    }
+
+    func testSiteDeletionNormalizesTheHostAndEscapesLikeWildcards() throws {
+        let store = try HistoryStore(directory: root, profile: "work")
+        for host in ["team_1.test", "sub.team_1.test", "teamX1.test"] {
+            var row = page(host, url: "https://" + host)
+            try store.visit(id: UUID().uuidString, record: row)
+            row.text = "Test content"
+            try store.ingest(row)
+        }
+        try store.delete(host: " TEAM_1.TEST ")
+        XCTAssertEqual(try store.browse().map(\.record.title), ["teamX1.test"])
+        XCTAssertEqual(try store.stats().records, 1)
+    }
+
+    func testLargeHistoryBrowseAndSiteDeletion() throws {
+        let store = try HistoryStore(directory: root, profile: "bench")
+        var db: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(store.path.path, &db), SQLITE_OK)
+        defer { sqlite3_close(db) }
+        let fixture = """
+            BEGIN;
+            WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<4500),
+            pages AS (SELECT i, CASE WHEN i%9=0 THEN 'remove.example' ELSE 'keep.example' END AS host FROM n)
+            INSERT INTO records(id,url,title,text,appearance,seen,image,host)
+            SELECT 'p'||i,'https://'||host||'/'||i,'Fixture '||i,'Synthetic local page '||i,'',
+                   unixepoch()-i,zeroblob(4096),host FROM pages;
+            INSERT INTO visits(id,url,title,host,seen)
+            SELECT printf('%08x-0000-4000-8000-%012x',rowid,rowid),url,title,host,seen FROM records;
+            COMMIT;
+            """
+        XCTAssertEqual(sqlite3_exec(db, fixture, nil, nil, nil), SQLITE_OK)
+        let benchmark = ProcessInfo.processInfo.environment["BOWSER_PERF"] == "1"
+        var samples: [Double] = []
+        for _ in 0..<(benchmark ? 25 : 1) {
+            let start = ProcessInfo.processInfo.systemUptime
+            try store.prune(days: 90)
+            let hits = try store.browse()
+            let stats = try store.stats()
+            samples.append((ProcessInfo.processInfo.systemUptime - start) * 1000)
+            XCTAssertEqual(hits.count, 60)
+            XCTAssertEqual(stats.visits, 4500)
+        }
+        let start = ProcessInfo.processInfo.systemUptime
+        try store.delete(host: "remove.example")
+        let stats = try store.stats()
+        let deletion = (ProcessInfo.processInfo.systemUptime - start) * 1000
+        XCTAssertEqual(stats.visits, 4000)
+        XCTAssertEqual(stats.records, 4000)
+        if benchmark {
+            samples.sort()
+            print("History browse with retention and statistics (9,000 entries), p50=\(samples[12]) ms, p95=\(samples[23]) ms")
+            print("History site deletion (1,000 entries), total=\(deletion) ms")
+        }
     }
     func testDeletedGenerationRejectsLateWritesAndAllowsNewNavigation() async throws {
         let repository = HistoryRepository(directory: root)
