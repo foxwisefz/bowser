@@ -1,5 +1,6 @@
 import XCTest
 import SwiftUI
+import BowserSurfaceKit
 @testable import Bowser
 
 final class SurfaceStateTests: XCTestCase {
@@ -62,8 +63,18 @@ final class SurfaceStateTests: XCTestCase {
     }
 
     @MainActor
-    func testPopoverChoiceEditsEnclosingFormDraft() throws {
+    func testPopoverChoiceEditsEnclosingFormDraft() async throws {
         _ = NSApplication.shared
+        let presentations = SurfaceServices.shared.presentations
+        try autoreleasepool { try editChoiceInPopover(presentations: presentations) }
+        let deadline = Date().addingTimeInterval(1)
+        while SurfaceServices.shared.presentations != presentations, Date() < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(SurfaceServices.shared.presentations, presentations)
+    }
+
+    @MainActor private func editChoiceInPopover(presentations: Int) throws {
         let surface = "popover-binding-test"
         let model = SurfaceFormStore.shared.model(surface: surface, key: "form", initial: ["icon": "book"])
         let tree: [String: Any] = ["t": "form", "key": "form", "values": ["icon": "book"], "content": [
@@ -75,15 +86,25 @@ final class SurfaceStateTests: XCTestCase {
         let host = NSHostingView(rootView: SurfaceTreeView(surfaceId: surface, node: tree))
         host.sizingOptions = []
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 200), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
         window.contentView = host
         window.makeKeyAndOrderFront(nil)
-        defer { model.reset(); window.orderOut(nil); SurfaceFormStore.shared.remove(surface: surface) }
+        defer { model.reset(); window.close(); SurfaceFormStore.shared.remove(surface: surface) }
         RunLoop.main.run(until: Date().addingTimeInterval(0.1))
-        let existing = Set(NSApp.windows.map(ObjectIdentifier.init))
+        var presented: NSPopover?
+        let observer = NotificationCenter.default.addObserver(forName: NSPopover.willShowNotification, object: nil, queue: .main) { notification in
+            let popover = notification.object as? NSPopover
+            MainActor.assumeIsolated { presented = popover }
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
         try pressButton("Pick icon", in: host, at: NSPoint(x: 45, y: host.bounds.midY - 20))
         RunLoop.main.run(until: Date().addingTimeInterval(0.25))
-        let popup = try XCTUnwrap(NSApp.windows.first { !existing.contains(ObjectIdentifier($0)) && $0.isVisible })
-        defer { popup.orderOut(nil) }
+        let popover = try XCTUnwrap(presented)
+        // Dismiss the popover through AppKit so SwiftUI balances onAppear
+        // after its content is released. Ordering out its window skips dismissal.
+        defer { popover.close() }
+        let popup = try XCTUnwrap(popover.contentViewController?.view.window)
+        XCTAssertEqual(SurfaceServices.shared.presentations, presentations + 1)
         let content = try XCTUnwrap(popup.contentView)
         // Tahoe adds popover chrome around the requested content width.
         XCTAssertGreaterThanOrEqual(content.bounds.width, 260)
