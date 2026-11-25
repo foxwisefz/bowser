@@ -106,7 +106,8 @@ defmodule BowserBrain.Loader do
         if BowserBrain.ModScope.current(pid) not in [nil, profile],
           do: raise("Module #{inspect(module)} already belongs to another profile; choose a distinct module name")
       end
-      results = for module <- BowserBrain.ModUpgrade.load(path) do
+      compiled = BowserBrain.ModUpgrade.load_with_diagnostics(path)
+      results = for module <- compiled.modules do
         case DynamicSupervisor.start_child(BowserBrain.ModSupervisor, {module, []}) do
           {:ok, _pid} ->
             Logger.info("loader: started mod #{inspect(module)}")
@@ -133,7 +134,8 @@ defmodule BowserBrain.Loader do
             %{module: inspect(module), status: "failed", error: inspect(reason)}
         end
       end
-      %{ok: results != [] and Enum.all?(results, &(&1.status != "failed")), modules: results}
+      %{ok: results != [] and Enum.all?(results, &(&1.status != "failed")), modules: results,
+        warnings: compiled.warnings}
     rescue
       error ->
         Logger.error(

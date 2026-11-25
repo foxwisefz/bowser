@@ -7,9 +7,37 @@ public struct ModSmithTurn: Decodable, Identifiable {
     public var status: String?
     public var notes: String?
     public var checks: [String]?
+    public var pauseReason: String?
+    enum CodingKeys: String, CodingKey {
+        case id, role, text, status, notes, checks
+        case pauseReason = "pause_reason"
+    }
+    public var pauseExplanation: String? {
+        switch pauseReason {
+        case "request_limit": return "Paused at this run’s request limit. Progress is saved for Resume."
+        case "time_limit": return "Paused at this run’s time limit. Progress is saved for Resume."
+        case "no_progress": return "Paused because the last attempts made no further progress. Work is saved for Resume."
+        default: return nil
+        }
+    }
     public var displayText: String {
         text.replacingOccurrences(of: "NEEDS THE RESIDENT AGENT:", with: "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    public var outcomeLabel: String? {
+        guard role == "assistant" else { return nil }
+        switch status {
+        case "active": return "Completed and checked"
+        case "partial": return "Not finished"
+        case "needs_help": return "Action needed"
+        case "failed": return "Couldn’t complete"
+        case "interrupted": return "Stopped"
+        case "ready": return "Not checked yet"
+        default: return nil
+        }
+    }
+    public var reportedChecks: [String] {
+        (checks ?? []).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
     }
 }
 
@@ -33,9 +61,19 @@ public struct ModSmithUsage: Decodable {
     enum CodingKeys: String, CodingKey { case entryPoint = "entry_point", steps, tips }
 }
 
+public struct TaskArtifact: Decodable, Identifiable {
+    public let name: String
+    public let path: String
+    public let bytes: Int
+    public var id: String { path }
+}
+
 public struct ModSmithProject: Decodable, Identifiable {
     public let id: String
     public let name: String
+    public let kind: String?
+    public let artifacts: [TaskArtifact]?
+    public var isTask: Bool { kind == "task" }
     public let scope: String
     public let url: String
     public let status: String
@@ -50,11 +88,12 @@ public struct ModSmithProject: Decodable, Identifiable {
     public let repairNotice: String?
     public let usage: ModSmithUsage?
     enum CodingKeys: String, CodingKey {
-        case id, name, scope, url, status, summary, turns, files, enabled, favicon, usage
+        case id, name, kind, artifacts, scope, url, status, summary, turns, files, enabled, favicon, usage
         case canUndo = "can_undo", undoLabel = "undo_label"
         case nextStep = "next_step", repairNotice = "repair_notice"
     }
     public var scopeLabel: String {
+        if isTask { return "Run once · " + (URL(string: url)?.host ?? "This page") }
         switch scope {
         case "browser": return "Across Bowser"
         case "app": return "Only this app"
@@ -64,6 +103,11 @@ public struct ModSmithProject: Decodable, Identifiable {
     public var canContinue: Bool {
         ["partial", "needs_help", "failed", "interrupted"].contains(status)
     }
+    public var canRetry: Bool {
+        files.isEmpty && ["failed", "interrupted"].contains(status) && nextStep == nil
+    }
+    public var recoveryLabel: String { isTask ? "Resume task" : canRetry ? "Try again" : "Resume testing & fixes" }
+    public var recoveryAction: String { canRetry ? "retry" : "continue" }
     public var canEnableAndTest: Bool {
         status != "working" && !enabled && !files.isEmpty
     }
@@ -71,16 +115,16 @@ public struct ModSmithProject: Decodable, Identifiable {
         nextStep?.options != nil || (status == "needs_help" && !canEnableAndTest) || (canContinue && nextStep != nil)
     }
     public var statusLabel: String {
-        if canEnableAndTest && ["needs_help", "disabled"].contains(status) { return "Disabled" }
         switch status {
-        case "working": return "Working"
+        case "working": return isTask ? "Working…" : "Building…"
         case "partial": return "Unfinished"
         case "failed": return "Needs attention"
         case "needs_help": return "Needs your input"
         case "interrupted": return "Interrupted"
         case "restored": return files.isEmpty ? "Removed" : "Restored"
-        case "ready": return "Ready to edit"
-        default: return enabled ? "Active" : "Disabled"
+        case "ready": return files.isEmpty ? "Draft" : "Not yet verified"
+        case "active": return isTask ? "Completed" : files.isEmpty ? "Draft" : "Ready"
+        default: return files.isEmpty ? "Draft" : "Not yet verified"
         }
     }
 }
@@ -113,12 +157,20 @@ public struct ModSmithSnapshot: Decodable {
     public var running_project: String?
     public var accepted: String?
     public var error: String?
+    public var notice: String?
     public var progress: [String] = []
     public var stage = "Inspecting page"
+    public var unrepresentedMods: [ModSmithExisting] {
+        func canonical(_ path: String) -> String { path.hasSuffix(".off") ? String(path.dropLast(4)) : path }
+        let owned = Set(projects.flatMap { $0.files }.map(canonical))
+        return (available_mods ?? []).filter { !owned.contains(canonical($0.path)) }
+    }
     public var canStop: Bool { busy && (running_run != nil || projects.contains(where: { $0.status == "working" })) }
 }
 
 @MainActor public protocol ModSmithPresentation: AnyObject {
+    var workspacePage: String { get set }
+    var instructionsOpen: Bool { get set }
     var isSiteApp: Bool { get }
     var snapshot: ModSmithSnapshot { get }
     var draft: String { get set }
@@ -131,6 +183,7 @@ public struct ModSmithSnapshot: Decodable {
     func submit()
 }
 public extension ModSmithPresentation {
+    var requestKind: String { project?.kind ?? (project == nil ? scopeChoice.kind : "mod") }
     func action(_ action: String, project: String? = nil, path: String? = nil) {
         self.action(action, project: project, path: path)
     }

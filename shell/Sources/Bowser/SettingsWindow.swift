@@ -13,8 +13,9 @@ final class SettingsWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         lazy var permissionsContext = BrowserScreenContext(kind: "permissions", model: PermissionSettingsModel.shared)
         lazy var profilesContext = BrowserScreenContext(kind: "profiles", model: ProfileSettingsModel.shared)
         lazy var defaultContext = BrowserScreenContext(kind: "default-browser", model: DefaultBrowserSettingsModel.shared)
+        lazy var historyContext = BrowserScreenContext(kind: "history", model: HistoryController.shared)
 
-        @Published var sections: [Section] = [Section(id: "websites", title: "Websites", order: 30, tree: [:])]
+        @Published var sections: [Section] = [Section(id: "websites", title: "Websites", order: 30, tree: [:]), Section(id: "history", title: "History", order: 35, tree: [:])]
         @Published var selected: String?
         /// Bumped on every tree update so the detail re-renders (trees are
         /// [String: Any], not Equatable).
@@ -57,8 +58,8 @@ final class SettingsWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             while !toolbar.items.isEmpty { toolbar.removeItem(at: 0) }
             self.refreshToolbar()
         }
-        PermissionSettingsModel.shared.start()
         DefaultBrowserSettingsModel.shared.refresh()
+        if id == "history" { HistoryController.shared.search() }
         if window == nil {
             let w = NSWindow(
                 contentRect: NSRect(x: 0, y: 0, width: 820, height: 560),
@@ -88,6 +89,7 @@ final class SettingsWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         if let id, id != model.selected, ProfileSettingsModel.shared.confirmDiscardChanges() { model.selected = id }
         refreshToolbar()
         window?.makeKeyAndOrderFront(nil)
+        updatePermissionMonitoring()
         NSApp.activate()
         BrainBridge.shared.send(["op": "event", "event": "settings_opened"])
     }
@@ -98,6 +100,7 @@ final class SettingsWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
 
     private func refreshToolbar() {
         guard let toolbar = preferencesToolbar else { return }
+        updatePermissionMonitoring()
         let identifiers = toolbarIdentifiers
         if toolbar.items.map(\.itemIdentifier) != identifiers {
             while !toolbar.items.isEmpty { toolbar.removeItem(at: 0) }
@@ -128,6 +131,15 @@ final class SettingsWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         ProfileSettingsModel.shared.confirmDiscardChanges()
     }
 
+    private func updatePermissionMonitoring() {
+        if let window {
+            PermissionSettingsModel.shared.monitor(window, showingPermissions: window.isVisible && model.selected == "websites")
+        }
+    }
+    func windowDidChangeOcclusionState(_ notification: Notification) { updatePermissionMonitoring() }
+    func windowWillClose(_ notification: Notification) {
+        if let window { PermissionSettingsModel.shared.monitor(window, showingPermissions: false) }
+    }
 }
 
 @MainActor

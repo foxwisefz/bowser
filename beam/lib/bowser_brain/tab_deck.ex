@@ -27,7 +27,7 @@ defmodule BowserBrain.TabDeck do
   # Full tab snapshot on connect — rebuild from scratch (also prunes closed tabs).
   def handle_event(%{"event" => "hello"} = ev, state) do
     BowserBrain.Chrome.hide_tab_bar()
-    base = %{state | tabs: %{}, order: []} |> Map.put(:last_items, nil)
+    base = %{state | tabs: %{}, order: []} |> Map.delete(:profiles) |> Map.put(:last_items, nil) |> Map.put(:preferences, BowserBrain.Settings.dock_preferences())
 
     state =
       ev
@@ -44,14 +44,18 @@ defmodule BowserBrain.TabDeck do
       end)
 
     state = %{state | active: Map.get(ev, "active", state.active)}
-    # Fresh engine = fresh surfaces; hello also restarts the decay tick chain.
-    Process.send_after(self(), :decay_tick, @tick_ms)
+    schedule_decay_tick()
     state |> stamp_focus() |> render()
   end
 
   def handle_event(%{"event" => "tab_opened", "webview" => wv} = ev, state) do
     state |> put_tab(wv, profile: ev["profile"]) |> apply_order(ev["order"]) |> render()
   end
+
+  def handle_event(%{"event" => "dock_settings_changed"}, state),
+    do: state |> Map.put(:preferences, BowserBrain.Settings.dock_preferences()) |> render()
+
+  def handle_event(%{"event" => "profiles_changed"}, state), do: state |> Map.delete(:profiles) |> render()
 
   def handle_event(%{"event" => "tabs_reordered", "order" => order}, state),
     do: state |> apply_order(order) |> render()
@@ -138,13 +142,20 @@ defmodule BowserBrain.TabDeck do
   def handle_event(_ev, state), do: state
 
   # -- decay ticking ---------------------------------------------------------
-  # One chain per engine connection: hello starts it, each tick reschedules.
-  # Handoff freeze tolerates a queued tick (Handoff.poll_message?); ticks are
-  # no-ops while the rendered items are unchanged.
+  # Timer references belong to this process and must stay out of its checkpoint.
+  # A reconnect or handoff can ask for a refresh while a timer is already armed.
+  defp schedule_decay_tick do
+    timer = Process.get(:bowser_dock_decay_timer)
+    if is_nil(timer) or Process.read_timer(timer) == false do
+      Process.put(:bowser_dock_decay_timer, Process.send_after(self(), :decay_tick, @tick_ms))
+    end
+  end
 
   def handle_info(:decay_tick, state) do
-    Process.send_after(self(), :decay_tick, @tick_ms)
-    {:noreply, render(state)}
+    schedule_decay_tick()
+    # Profile edits through the browser invalidate immediately. Also pick up
+    # external edits to profiles.json on the existing dock refresh.
+    {:noreply, state |> Map.delete(:profiles) |> render()}
   end
 
   def handle_info(other, state), do: super(other, state)
@@ -221,6 +232,7 @@ defmodule BowserBrain.TabDeck do
     tab =
       Enum.reduce(attrs, tab, fn
         {_k, nil}, acc -> acc
+        {:url, url}, acc -> acc |> Map.put(:url, url) |> Map.put(:host, host_of(url))
         {k, val}, acc -> Map.put(acc, k, val)
       end)
 
@@ -263,7 +275,8 @@ defmodule BowserBrain.TabDeck do
 
   defp render(state) do
     # The header identifies the active profile; tab artwork needs no repeated badge.
-    profiles = BowserBrain.Profiles.list()
+    profiles = Map.get_lazy(state, :profiles, &BowserBrain.Profiles.list/0)
+    state = Map.put(state, :profiles, profiles)
     rank = profiles |> Enum.map(& &1["id"]) |> Enum.with_index() |> Map.new()
     now = now_ms()
 
@@ -274,7 +287,7 @@ defmodule BowserBrain.TabDeck do
 
     host_counts =
       grouped
-      |> Enum.map(&host_of(state.tabs[&1][:url]))
+      |> Enum.map(&tab_host(state.tabs[&1]))
       |> Enum.reject(&is_nil/1)
       |> Enum.frequencies()
 
@@ -296,7 +309,7 @@ defmodule BowserBrain.TabDeck do
         # distinguishable. The hue is a pure hash of the full URL: stable
         # across close/reopen and independent of which other tabs exist.
         base =
-          with host when not is_nil(host) <- host_of(tab[:url]),
+          with host when not is_nil(host) <- tab_host(tab),
                true <- Map.get(host_counts, host, 0) > 1 do
             Map.put(base, :tint, domain_tint(tab[:url]))
           else
@@ -309,15 +322,20 @@ defmodule BowserBrain.TabDeck do
         end
       end)
 
+    header = profile_header(active_profile(state), profiles)
+
+    preferences = Map.get_lazy(state, :preferences, &BowserBrain.Settings.dock_preferences/0)
+
     # Decay ticks land here between events; only ship real changes.
-    if items == Map.get(state, :last_items) do
+    if items == Map.get(state, :last_items) and header == Map.get(state, :last_header) and preferences == Map.get(state, :last_preferences) do
       state
     else
       BowserBrain.Surface.show(
         :edge_dock,
         magnify_strip(items, size: 32, spacing: 8, magnify: 1.4, event: "select",
-          header: profile_header(active_profile(state)), header_height: 82, header_outside: true, chrome: "notch")
-        |> Map.put(:profile_id, active_profile(state)),
+          header: header, header_height: 82, header_outside: true, chrome: "notch")
+        |> Map.put(:profile_id, active_profile(state))
+        |> Map.put(:dock_preferences, preferences),
         title: "Tabs",
         kind: :edge,
         edge: :left,
@@ -326,9 +344,13 @@ defmodule BowserBrain.TabDeck do
         width: 48
       )
 
-      Map.put(state, :last_items, items)
+      state |> Map.put(:last_items, items) |> Map.put(:last_header, header) |> Map.put(:last_preferences, preferences) |> Map.put(:preferences, preferences)
     end
   end
+
+  # Tab state can arrive from a running generation that kept only the URL.
+  defp tab_host(nil), do: nil
+  defp tab_host(tab), do: Map.get_lazy(tab, :host, fn -> host_of(tab[:url]) end)
 
   @doc "Lowercased host for domain grouping; nil when the tab has no usable URL."
   def host_of(nil), do: nil
@@ -367,9 +389,11 @@ defmodule BowserBrain.TabDeck do
     |> then(&("#" <> String.downcase(&1)))
   end
 
-  def profile_header(nil), do: nil
-  def profile_header(id) do
-    profile = Enum.find(BowserBrain.Profiles.list(), &(&1["id"] == id)) || %{}
+  def profile_header(id), do: profile_header(id, BowserBrain.Profiles.list())
+  def profile_header(nil, _profiles), do: nil
+  def profile_header(_id, profiles) when length(profiles) <= 1, do: nil
+  def profile_header(id, profiles) do
+    profile = Enum.find(profiles, &(&1["id"] == id)) || %{}
     name = if id == "default", do: "Default", else: profile["name"] || id
     profile_avatar(id, size: 18, badge: true, help: "Profile: " <> name)
   end

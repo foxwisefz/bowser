@@ -30,20 +30,24 @@ defmodule BowserBrain.UserContent do
     try { discardFields(localStorage); } catch (e) {}
     try { discardFields(sessionStorage); } catch (e) {}
     var MAX_AGE_MS = 6 * 60 * 60 * 1000;
+    var saveTimer = null, checkpointTimer = null;
     function save() {
+      clearTimeout(saveTimer);
+      clearTimeout(checkpointTimer);
+      saveTimer = checkpointTimer = null;
       var data = { y: Math.max(0, window.scrollY), at: Date.now() };
       try { localStorage.setItem(KEY, JSON.stringify(data)); } catch (e) {}
     }
-    // Scroll restore is a CAMPAIGN, not a shot: virtualized/slow pages
-    // (x.com, YT Music) are not tall enough at load, scrollTo clamps to ~0
-    // and the position was lost — and the save loop then overwrote the
-    // stored y with the clamped value (bowser-browser-l8r). And on
-    // infinite-scroll sites waiting is not enough: content only grows when
-    // something presses toward the bottom, so the campaign WALKS the loader
-    // back to depth (bowser-browser-uuy) — DOM save/reinject was rejected:
-    // serialized HTML without its JS heap is a corpse. The target lives in
-    // this closure so mid-restore saves cannot corrupt it; a stall (no
-    // growth for 4s) or the owner scrolling ends the campaign.
+    function scheduleSave() {
+      // Keep synchronous storage and serialization out of the scroll handler.
+      // Save after a pause, with a bounded checkpoint for a long gesture.
+      clearTimeout(saveTimer);
+      saveTimer = setTimeout(save, 200);
+      if (checkpointTimer === null) checkpointTimer = setTimeout(save, 1000);
+    }
+    // Retry briefly while a slow or virtualized page grows. Keep the target
+    // in this closure so saves of an intermediate position cannot replace it.
+    // Stop when the page stops growing or the user takes over scrolling.
     function restoreScroll() {
       var data = null;
       try { data = JSON.parse(localStorage.getItem(KEY) || "null"); } catch (e) {}
@@ -58,8 +62,6 @@ defmodule BowserBrain.UserContent do
       window.addEventListener("keydown", cancel, { once: true });
       (function attempt() {
         if (cancelled || Date.now() > deadline) return;
-        // Semantic media recovery owns the scroll anchor for a saved X tweet.
-        if (window.__bowserMediaRestoring) return;
         var se = document.scrollingElement || document.documentElement;
         if (se.scrollHeight !== lastH) { lastH = se.scrollHeight; lastGrowthAt = Date.now(); }
         var maxY = se.scrollHeight - window.innerHeight;
@@ -79,8 +81,11 @@ defmodule BowserBrain.UserContent do
     }
     function boot() {
       restoreScroll();
-      window.addEventListener("scroll", save, { passive: true });
+      window.addEventListener("scroll", scheduleSave, { passive: true });
       window.addEventListener("pagehide", save);
+      document.addEventListener("visibilitychange", function () {
+        if (document.visibilityState === "hidden") save();
+      });
     }
     if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot);
     else boot();

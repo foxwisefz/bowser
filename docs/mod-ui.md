@@ -1,4 +1,8 @@
+Mods is the unified home for installed mods and saved drafts. Open it from View → Mods, `:mods`, or Settings → Mods → Open Mods. The overview is profile-scoped and provides search, site/browser filters, enablement, build history, and usage instructions. Each mod keeps one conversation. How to use opens beside its history in wide windows and as a sheet in narrow windows; opening the guide does not run generation. Undo and Delete live in the mod’s action menu. Build status is independent of the on/off switch.
+
 User mods belong to one browser profile. ModSmith stamps new Elixir, CSS, and JS files with a `bowser-profile` comment; untagged files belong to Default. Keep this comment when editing. Existing filenames owned by another profile cannot be overwritten; choose a distinct file and module name. Browser-wide means all windows in the owning profile, not all profiles.
+
+ModSmith’s selected scope is authoritative. Across Bowser uses an Elixir mod without `host:`; site payloads and host-restricted modules are rejected in that scope. The current webpage is a test target. Browser-wide mods may render effects inside webpages with `Page.set_scripts/set_styles`; scope controls availability, not whether rendering is native or in-page.
 
 Page hooks must mount idempotently and ignore their own DOM changes. The injected
 `MutationObserver` constructor tracks observers per script. Bowser disconnects
@@ -24,6 +28,22 @@ and panel styles retain their behavior. No Swift compilation is needed to use
 these new builders. See `beam/example_mods/native_settings.ex` for a runnable
 settings section covering the new layouts and interactions.
 
+## Design and review
+
+ModSmith should design around the requested task from the first version: clear
+content hierarchy, an obvious primary action, aligned rows, balanced spacing,
+adaptive colors and concise labels. Respect the owner's style preferences and
+native panel chrome; avoid repeating the panel title in the content. Restrained
+styling should keep the interface readable in both light and dark appearances.
+
+Actions need a clear role in the requested workflow. Access to the current page
+alone is not a reason to add page capture or bookmarking. Review empty, populated
+and overflowing content, long labels and narrow layouts. Keep creation controls
+reachable, exercise the primary action, and inspect the rendered UI where capture
+tools support it. Native screenshot tools capture browser windows, not separate
+floating panels; report verification gaps instead of claiming a visual check from
+source inspection.
+
 ## Composition and identity
 
 `vstack` and `hstack` accept shared options. Every other node can be decorated
@@ -43,6 +63,27 @@ rows. Closing/removing the surface clears its stored drafts; restarting the shel
 also clears them. Drafts are local UI state, not durable storage.
 
 ## Layouts
+
+- `scroll(content, opts \\ [])` wraps one tree in a native scroll viewport.
+  `axis: :vertical` (default), `:horizontal`, or `:both`; `indicators: true`
+  by default. The viewport defaults to 320 points high. Override with `height:`
+  or `max_height:`, or use `fill_height: true` inside a bounded parent.
+  Keep the scroll node's `key` and each record's key stable across updates.
+  Headers and input controls remain fixed when placed outside the scroll node:
+
+  ```elixir
+  vstack([
+    text("Recent", style: :caption),
+    scroll(vstack(rows), key: :items, height: 320),
+    action("Add item", event: :add)
+  ])
+  ```
+
+  Use this for growing lists in panels, settings and other mod surfaces. Stacks
+  and grids alone do not scroll. The viewport clips overflowing content; its
+  children keep their ordinary events and local form state. Verify the last item
+  remains reachable as records are added. Scroll position survives updates while
+  the keyed viewport remains mounted; it is not persisted across restarts.
 
 - `fields([field("Name:", input(:name), key: :name), ...])` aligns labels and
   controls in shared columns.
@@ -297,8 +338,11 @@ automatically into your live mods directory.
 `chrome: "notch"` enables the rounded backing; `background: "#112233"` sets its
 color. The slots participate in centering and magnification geometry.
 When items exceed the available height, the strip scrolls vertically while header
-and footer stay fixed. Overflow rows retain stable spacing as icons magnify;
-changing the active item brings it into view.
+and footer stay fixed. The pointer anchors a smooth magnifying lens: neighboring rows move apart as
+icons enlarge. Reserved space keeps the scroll range stable during hover;
+changing the active item brings it into view. Reduced motion disables the lens.
+The active item uses a clear accent-colored outline and shares the same lens motion as its
+neighbors; its outline replaces the recency halo.
 
 For example, `header: vstack([profile_avatar(profile_id, size: 22),
 profile_name(profile_id, size: 9)], spacing: 1)` follows the profile's current

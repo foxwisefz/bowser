@@ -5,6 +5,30 @@ import XCTest
 @testable import Bowser
 
 final class SiteAppTests: XCTestCase {
+    @MainActor func testHubDiscoversOnlyRunningUnconnectedRegistrationsAndWaitsForLateStartup() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let key = "0123456789abcdef"
+        let appID = SiteAppConfiguration.identifierPrefix + key
+        let directory = root.appendingPathComponent(key)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let config = SiteAppConfiguration(url: URL(string: "https://fixture.test")!, profile: "work", identifier: appID,
+            mainApp: URL(fileURLWithPath: "/Applications/Bowser.app"))
+        let early = SiteAppHub.registrations(in: root, runningIDs: [appID], connectedIDs: [])
+        XCTAssertTrue(early.ready.isEmpty)
+        XCTAssertTrue(early.waiting)
+        try JSONEncoder().encode(config).write(to: directory.appendingPathComponent("app.json"))
+        let ready = SiteAppHub.registrations(in: root, runningIDs: ["com.other.app", appID], connectedIDs: [])
+        XCTAssertEqual(ready.ready, [config])
+        XCTAssertFalse(ready.waiting)
+        let connected = SiteAppHub.registrations(in: root, runningIDs: [appID], connectedIDs: [appID])
+        XCTAssertTrue(connected.ready.isEmpty)
+        XCTAssertFalse(connected.waiting)
+        let stopped = SiteAppHub.registrations(in: root, runningIDs: ["com.other.app"], connectedIDs: [])
+        XCTAssertTrue(stopped.ready.isEmpty)
+        XCTAssertFalse(stopped.waiting)
+    }
+
     func testCookieMatchingRespectsDomainBoundaries() {
         XCTAssertTrue(SiteAppRuntime.matches(cookieDomain: ".example.com", host: "app.example.com"))
         XCTAssertTrue(SiteAppRuntime.matches(cookieDomain: "example.com", host: "example.com"))
@@ -44,7 +68,8 @@ final class SiteAppTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try "globalThis.fixture='only this app';".write(to: directory.appendingPathComponent("test.js"), atomically: true, encoding: .utf8)
         try "globalThis.bad=true;".write(to: directory.appendingPathComponent("ignored.tmp"), atomically: true, encoding: .utf8)
-        let scripts = SiteAppRuntime.modScripts(configuration: config, root: root)
+        var files = SiteAppModFiles(configuration: config, root: root)
+        let scripts = files.scripts()
         XCTAssertEqual(scripts.count, 1)
         XCTAssertFalse(scripts[0].matches(URL(string: "https://accounts.example.com")!))
         XCTAssertTrue(scripts[0].matches(URL(string: "https://example.com")!))
@@ -54,7 +79,40 @@ final class SiteAppTests: XCTestCase {
         XCTAssertEqual(context.evaluateScript("fixture")?.toString(), "only this app")
         let other = SiteAppConfiguration(url: config.url, profile: "work",
             identifier: "com.foxwiseai.bowser.site.fedcba9876543210", mainApp: config.mainApp)
-        XCTAssertTrue(SiteAppRuntime.modScripts(configuration: other, root: root).isEmpty)
+        var otherFiles = SiteAppModFiles(configuration: other, root: root)
+        XCTAssertTrue(otherFiles.scripts().isEmpty)
+    }
+
+    func testModRefreshTracksReplacementInPlaceEditsAndDeletedFiles() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let config = SiteAppConfiguration(url: URL(string: "https://fixture.test")!, profile: "default",
+            identifier: "fixture", mainApp: URL(fileURLWithPath: "/Applications/Bowser.app"))
+        var files = SiteAppModFiles(configuration: config, root: root)
+        XCTAssertTrue(files.scripts().isEmpty)
+        let directory = root.appendingPathComponent(config.identifier)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let a = directory.appendingPathComponent("a.js"), b = directory.appendingPathComponent("b.js")
+        try Data("first".utf8).write(to: b)
+        try Data().write(to: a)
+        XCTAssertEqual(files.scripts().map(\.source), ["", "first"])
+        let stamp = Date(timeIntervalSince1970: 1_800_000_000)
+        try FileManager.default.setAttributes([.modificationDate: stamp], ofItemAtPath: b.path)
+        XCTAssertEqual(files.scripts().map(\.source), ["", "first"])
+        try Data("other".utf8).write(to: b, options: .atomic)
+        try FileManager.default.setAttributes([.modificationDate: stamp], ofItemAtPath: b.path)
+        XCTAssertEqual(files.scripts().map(\.source), ["", "other"])
+        let handle = try FileHandle(forWritingTo: b)
+        try handle.write(contentsOf: Data("third".utf8))
+        try handle.close()
+        try FileManager.default.setAttributes([.modificationDate: stamp], ofItemAtPath: b.path)
+        XCTAssertEqual(files.scripts().map(\.source), ["", "third"])
+        try Data(repeating: 65, count: 200_001).write(to: a)
+        XCTAssertEqual(files.scripts().map(\.source), ["third"])
+        try FileManager.default.removeItem(at: b)
+        XCTAssertTrue(files.scripts().isEmpty)
+        try Data("again".utf8).write(to: a)
+        XCTAssertEqual(files.scripts().map(\.source), ["again"])
     }
 
     @MainActor
@@ -97,8 +155,8 @@ final class SiteAppTests: XCTestCase {
         let preparationStart = ProcessInfo.processInfo.systemUptime
         let server = try SiteIconFixtureServer()
         defer { server.stop() }
-        let bundle = try TabAppBundle.create(url: server.url, profile: "default",
-                                             iconData: nil, directory: root, bowser: browser)
+        let registry = SavedAppRegistry(directory: root, bowser: browser, icons: root.appendingPathComponent("icons"))
+        let bundle = try registry.create(url: server.url, profile: "default", iconData: nil)
         // The saved app may start its parent when the real browser is closed.
         // Give LaunchServices a complete, harmless parent instead of an invalid
         // Engine.app or another browser process with access to user state.

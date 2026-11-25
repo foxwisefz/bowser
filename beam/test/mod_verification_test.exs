@@ -30,6 +30,18 @@ defmodule BowserBrain.ModVerificationTest do
     }
   end
 
+  test "tasks accept observed results without installation but still require receipts" do
+    task = context() |> Map.merge(%{kind: "task", installed: false, last_write: 0,
+      receipts: [%{id: 1, tool: "save_task_file", result: "saved JSON export"}]})
+    Application.put_env(:bowser_brain, :modsmith_verifier, fn prompt ->
+      assert JSON.decode!(prompt)["kind"] == "task"
+      {:ok, JSON.encode!(%{verified: true, reason: "Export observed", evidence: [1]})}
+    end)
+    assert :ok = ModVerification.assess(task)
+    assert {:error, _} = ModVerification.assess(%{task | receipts: []})
+    assert {:error, _} = ModVerification.assess(%{task | kind: "mod"})
+  end
+
   test "external dependency claims require review, but owner choices do not" do
     assert ModVerification.external_blocker?(JSON.encode!(%{status: "needs_help", blocker: %{kind: "external_dependency"}}))
     refute ModVerification.external_blocker?(JSON.encode!(%{status: "needs_help", blocker: %{kind: "owner_decision"}}))
@@ -154,6 +166,24 @@ defmodule BowserBrain.ModVerificationTest do
     for result <- [{:error, :timeout}, {:ok, "not JSON"}, {:ok, "{}"}] do
       Application.put_env(:bowser_brain, :modsmith_verifier, fn _ -> result end)
       assert {:error, _} = ModVerification.assess(context())
+    end
+  end
+
+  test "task review failures retain the complete answer as an unverified draft" do
+    answer = String.duplicate("Source-grounded draft paragraph.\n\n", 20)
+    output = JSON.encode!(%{status: "active", summary: answer, files: [], checks: ["Read the page"]})
+    task = context() |> Map.merge(%{kind: "task", installed: false})
+    for response <- [{:error, :timeout}, {:ok, "not JSON"}, {:ok, JSON.encode!(%{verified: true, reason: "Done", evidence: [999]})}] do
+      Application.put_env(:bowser_brain, :modsmith_verifier, fn _ -> response end)
+      assert {:error, reason} = ModVerification.assess(task)
+      refute reason =~ "mod"
+      result = ModVerification.partial(output, reason, "task") |> JSON.decode!()
+      assert result["status"] == "partial"
+      assert result["summary"] =~ answer
+      refute result["summary"] == answer
+      assert result["notes"] == reason
+      assert result["files"] == []
+      assert result["checks"] == ["Read the page"]
     end
   end
 end

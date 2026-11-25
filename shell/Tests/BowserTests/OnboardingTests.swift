@@ -88,21 +88,36 @@ final class OnboardingTests: XCTestCase {
             case .recovery: await model.requestRecovery()
             case .thanks: await model.joinWaitlist()
             }
-            let host = NSHostingView(rootView: OnboardingView(model: model, finished: {}))
-            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 860, height: 600), styleMask: [.titled, .fullSizeContentView], backing: .buffered, defer: false)
-            window.titlebarAppearsTransparent = true
-            window.titleVisibility = .hidden
-            window.titlebarSeparatorStyle = .none
-            window.isReleasedWhenClosed = false
-            defer { window.close() }
-            window.contentView = host; window.makeKeyAndOrderFront(nil)
-            host.layoutSubtreeIfNeeded()
-            XCTAssertLessThanOrEqual(host.fittingSize.height, 600)
-            XCTAssertLessThanOrEqual(host.fittingSize.width, 860)
-            if ProcessInfo.processInfo.environment["BOWSER_ONBOARDING_PREVIEW"] == "1" {
-                let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
-                host.cacheDisplay(in: host.bounds, to: bitmap)
-                try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: URL(fileURLWithPath: "/tmp/bowser-welcome-\(step.rawValue).png"))
+            let sizes: [(name: String, rect: NSRect, appearance: NSAppearance.Name)] = [
+                ("light", NSRect(x: 0, y: 0, width: 760, height: 500), .aqua),
+                ("dark", NSRect(x: 0, y: 0, width: 760, height: 500), .darkAqua),
+                ("compact", NSRect(x: 0, y: 0, width: 420, height: 400), .aqua)
+            ]
+            for (name, size, appearance) in sizes {
+                let host = NSHostingView(rootView: OnboardingView(model: model, finished: {}))
+                let window = NSWindow(contentRect: size, styleMask: [.titled, .closable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
+                window.appearance = NSAppearance(named: appearance)
+                window.titlebarAppearsTransparent = true
+                window.titleVisibility = .hidden
+                window.titlebarSeparatorStyle = .none
+                window.isReleasedWhenClosed = false
+                defer { window.close() }
+                window.contentView = host; window.makeKeyAndOrderFront(nil)
+                await Task.yield()
+                host.layoutSubtreeIfNeeded()
+                window.displayIfNeeded()
+                XCTAssertLessThanOrEqual(host.fittingSize.height, size.height)
+                XCTAssertLessThanOrEqual(host.fittingSize.width, size.width)
+                if [.email, .code, .recovery].contains(step) {
+                    let field = try XCTUnwrap(window.initialFirstResponder as? WelcomeEmailTextField)
+                    XCTAssertGreaterThan(field.visibleRect.width, 100)
+                    XCTAssertGreaterThan(field.visibleRect.height, 0)
+                }
+                if ProcessInfo.processInfo.environment["BOWSER_ONBOARDING_PREVIEW"] == "1" {
+                    try await Task.sleep(for: .milliseconds(120))
+                    let filename = "/tmp/bowser-welcome-\(step.rawValue)-\(name).png"
+                    try await writeWindowPreview(window, to: URL(fileURLWithPath: filename))
+                }
             }
         }
     }
@@ -339,22 +354,25 @@ final class OnboardingTests: XCTestCase {
         } catch { }
     }
 
-    func testRenderWelcomeAndReady() throws {
+    func testRenderWelcomeAndReady() async throws {
         guard let directory = ProcessInfo.processInfo.environment["BOWSER_ONBOARDING_RENDER"] else {
             throw XCTSkip("Optional native render")
         }
         _ = NSApplication.shared
         let model = OnboardingModel(policy: policy, store: store()) { _ in throw RegistrationFailure.invalidResponse }
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 552, height: 520),
+                              styleMask: [.titled, .closable, .fullSizeContentView], backing: .buffered, defer: false)
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = NSHostingView(rootView: OnboardingView(model: model, finished: {}))
+        window.makeKeyAndOrderFront(nil)
         for populated in [false, true] {
             model.email = populated ? "person@example.com" : ""
-            model.acceptedTerms = populated
-            let view = NSHostingView(rootView: OnboardingView(model: model, finished: {}))
-            view.frame = NSRect(x: 0, y: 0, width: 552, height: 520)
-            view.layoutSubtreeIfNeeded()
-            let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
-            view.cacheDisplay(in: view.bounds, to: bitmap)
-            let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
-            try png.write(to: URL(fileURLWithPath: directory).appendingPathComponent(populated ? "ready.png" : "welcome.png"))
+            try await Task.sleep(for: .milliseconds(120))
+            try await writeWindowPreview(window, to: URL(fileURLWithPath: directory)
+                .appendingPathComponent(populated ? "ready.png" : "welcome.png"))
         }
     }
 }

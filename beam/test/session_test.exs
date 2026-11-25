@@ -39,6 +39,16 @@ defmodule BowserBrain.SessionTest do
     state
   end
 
+  test "engine restart discards old cookie snapshots and retains profile tabs" do
+    state = base_state(%{tabs: %{4 => "https://restart.test/"}, active: 4, profiles: %{4 => "work"},
+      cookies: %{{"work", "https://restart.test"} => %{url: "https://restart.test/", profile: "work",
+        cookies: [%{"name" => "login", "value" => "stale"}]}}})
+    restored = event(state, %{"event" => "hello", "tabs" => [%{"id" => 1, "url" => "about:blank"}], "active" => 1})
+    refute Map.has_key?(restored, :cookies)
+    assert restored.pending_restore == [%{url: "https://restart.test/", profile: "work"}]
+    assert event(restored, %{"event" => "load_status", "status" => 2, "webview" => 1}) == restored
+  end
+
   test "native insertion order persists and reconnect preserves it", %{path: path} do
     state = base_state()
       |> event(%{"event" => "hello", "tabs" => [

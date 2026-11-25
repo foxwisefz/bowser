@@ -8,14 +8,17 @@ case "${1:-help}" in
   start) exec open -n /Applications/Bowser-staging.app;;
   update) shift; exec "$REPO/bin/install" --staging "$@";;
   backups) find "$STATE/backups" -mindepth 2 -maxdepth 2 -name snapshot.json -print;;
-  restore|cancel)
+  restore|cancel|cleanup)
     action="$1"; shift
     (cd "$REPO/shell" && swift build --product BowserRuntimeTool)
     tool="$REPO/shell/.build/debug/BowserRuntimeTool"
+    if [ "$action" = cleanup ]; then
+      exec "$tool" cleanup-backups "$STATE" "$@"
+    fi
     if [ "$action" = restore ]; then
       [ "$#" = 1 ] || { echo 'usage: bin/staging restore BACKUP_DIRECTORY' >&2; exit 2; }
       exec "$tool" restore-backup "$1"
     fi
     exec "$tool" cancel-update "$STATE";;
-  *) echo 'usage: bin/staging prod | start | update | backups | cancel | restore BACKUP_DIRECTORY';;
+  *) echo 'usage: bin/staging prod | start | update | backups | cleanup [--apply] | cancel | restore BACKUP_DIRECTORY';;
 esac

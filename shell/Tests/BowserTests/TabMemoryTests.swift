@@ -1,4 +1,5 @@
 import AppKit
+import JavaScriptCore
 import Network
 import WebKit
 import XCTest
@@ -35,6 +36,31 @@ private final class MemoryPageServer: @unchecked Sendable {
 }
 
 @MainActor final class TabMemoryTests: XCTestCase {
+    func testEditTrackingSignalsOnceAndProtectsRestoredDocuments() throws {
+        let js = try XCTUnwrap(JSContext())
+        js.evaluateScript("""
+        const listeners = new Map();
+        let messages = 0;
+        const window = {webkit: {messageHandlers: {bowserEdited: {postMessage: () => messages++}}}};
+        function addEventListener(name, fn) {
+          if (!listeners.has(name)) listeners.set(name, new Set());
+          listeners.get(name).add(fn);
+        }
+        function removeEventListener(name, fn) { listeners.get(name)?.delete(fn); }
+        function fire(type, isTrusted, persisted = false) {
+          for (const fn of listeners.get(type) || []) fn({type, isTrusted, persisted});
+        }
+        """)
+        js.evaluateScript(TabMemory.editTrackingScript)
+        js.evaluateScript("fire('input', false); fire('pageshow', true, true)")
+        XCTAssertEqual(js.evaluateScript("messages").toInt32(), 0)
+        js.evaluateScript("for (let i = 0; i < 500; i++) { fire('keydown', true); fire('input', true); }")
+        XCTAssertEqual(js.evaluateScript("messages").toInt32(), 1)
+        js.evaluateScript("fire('pageshow', false, true); fire('pageshow', true, false); fire('pageshow', true, true)")
+        XCTAssertEqual(js.evaluateScript("messages").toInt32(), 2)
+        XCTAssertNil(js.exception)
+    }
+
     private static let server = try? MemoryPageServer()
     private static let dataStore = WKWebsiteDataStore.nonPersistent()
     private static let fixtureWindow: NSWindow = {

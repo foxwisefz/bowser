@@ -1,4 +1,6 @@
 import AppKit
+import BackendRuntime
+import Darwin
 import WebKit
 
 struct SiteAppConfiguration: Codable, Equatable {
@@ -7,13 +9,14 @@ struct SiteAppConfiguration: Codable, Equatable {
     let identifier: String
     let mainApp: URL
 
+    static let identifierPrefix = "com.foxwiseai.bowser.site."
     static let current = parse(Bundle.main.infoDictionary ?? [:])
 
     static func parse(_ info: [String: Any]) -> Self? {
         guard info["BowserAppVersion"] as? Int == 2,
               let value = info["BowserSavedURL"] as? String, let url = URL(string: value),
               ["http", "https"].contains(url.scheme ?? ""), url.host != nil,
-              let id = info["CFBundleIdentifier"] as? String, id.hasPrefix("com.foxwiseai.bowser.site."),
+              let id = info["CFBundleIdentifier"] as? String, id.hasPrefix(identifierPrefix),
               let app = info["BowserMainApp"] as? String else { return nil }
         return Self(url: url, profile: info["BowserProfile"] as? String ?? "default",
                     identifier: id, mainApp: URL(fileURLWithPath: app))
@@ -21,7 +24,78 @@ struct SiteAppConfiguration: Codable, Equatable {
 
     var home: URL {
         BowserPaths.home.appendingPathComponent("site-apps")
-            .appendingPathComponent(identifier.replacingOccurrences(of: "com.foxwiseai.bowser.site.", with: ""))
+            .appendingPathComponent(identifier.replacingOccurrences(of: Self.identifierPrefix, with: ""))
+    }
+}
+
+/// Each saved app owns this cache for its origin. The periodic check also notices
+/// external edits, including writes in place and atomic replacements with the same size.
+struct SiteAppModFiles {
+    private struct Stamp: Equatable {
+        let device: dev_t
+        let inode: ino_t
+        let size: off_t
+        let modifiedSeconds, modifiedNanos, changedSeconds, changedNanos: Int
+
+        init?(_ file: URL) {
+            var info = stat()
+            guard stat(file.path, &info) == 0, info.st_mode & S_IFMT == S_IFREG,
+                  info.st_size <= SiteAppModFiles.byteLimit else { return nil }
+            device = info.st_dev
+            inode = info.st_ino
+            size = info.st_size
+            modifiedSeconds = info.st_mtimespec.tv_sec
+            modifiedNanos = info.st_mtimespec.tv_nsec
+            changedSeconds = info.st_ctimespec.tv_sec
+            changedNanos = info.st_ctimespec.tv_nsec
+        }
+    }
+
+    private static let byteLimit = 200_000
+    private let directory: URL
+    private let origin: String
+    private var cache: [URL: (stamp: Stamp, script: ModScript?)] = [:]
+
+    init(configuration: SiteAppConfiguration, root: URL) {
+        directory = root.appendingPathComponent(configuration.identifier)
+        let url = configuration.url
+        origin = "\(url.scheme ?? "https")://\(url.host ?? "")" + (url.port.map { ":\($0)" } ?? "")
+    }
+
+    mutating func scripts() -> [ModScript] {
+        let files = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? []
+        let candidates = files.filter { ["css", "js"].contains($0.pathExtension) }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+        var next: [URL: (stamp: Stamp, script: ModScript?)] = [:]
+        var scripts: [ModScript] = []
+        for file in candidates {
+            guard let stamp = Stamp(file) else { continue }
+            if let entry = cache[file], entry.stamp == stamp {
+                next[file] = entry
+            } else {
+                // Read at most one byte over the limit even if a writer grows the file
+                // after stat. Retry transient reads on the next tick.
+                guard let handle = try? FileHandle(forReadingFrom: file) else { continue }
+                defer { try? handle.close() }
+                guard let data = try? handle.read(upToCount: Self.byteLimit + 1) ?? Data(),
+                      data.count == stamp.size, Stamp(file) == stamp else { continue }
+                next[file] = (stamp, String(data: data, encoding: .utf8).flatMap { script($0, css: file.pathExtension == "css") })
+            }
+            if let script = next[file]?.script { scripts.append(script) }
+        }
+        cache = next
+        return scripts
+    }
+
+    private func script(_ content: String, css: Bool) -> ModScript? {
+        if css {
+            guard let encoded = try? JSONSerialization.data(withJSONObject: content, options: [.fragmentsAllowed]),
+                  let literal = String(data: encoded, encoding: .utf8) else { return nil }
+            let body = "const add=()=>{const s=document.createElement('style');s.textContent=\(literal);(document.head||document.documentElement).appendChild(s);};if(document.documentElement)add();else document.addEventListener('DOMContentLoaded',add,{once:true});"
+            return ModScript(source: body, world: "isolated", origin: origin)
+        }
+        guard let world = ModScript.declaredWorld(content) else { return nil }
+        return ModScript(source: content, world: world, origin: origin)
     }
 }
 
@@ -29,6 +103,7 @@ struct SiteAppConfiguration: Codable, Equatable {
 final class SiteAppRuntime {
     static let shared = SiteAppRuntime()
     private var contentTimer: Timer?
+    private var modFiles: SiteAppModFiles?
     private var inheritedScripts: [ModScript] = []
     private var profileScripts: [ModScript] = []
     private var profileStyles: [String] = []
@@ -42,6 +117,7 @@ final class SiteAppRuntime {
 
     func start(_ configuration: SiteAppConfiguration, controller: BrowserWindowController) {
         self.controller = controller
+        modFiles = SiteAppModFiles(configuration: configuration, root: BowserPaths.home.appendingPathComponent("app-mods"))
         refreshMods(reload: false)
         contentTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
             MainActor.assumeIsolated { SiteAppRuntime.shared.refreshMods(reload: true) }
@@ -115,33 +191,9 @@ final class SiteAppRuntime {
     }
 
     private func refreshMods(reload: Bool) {
-        guard let config = SiteAppConfiguration.current else { return }
-        let scripts = Self.modScripts(configuration: config, root: BowserPaths.home.appendingPathComponent("app-mods"))
-        guard scripts != appScripts else { return }
+        guard let scripts = modFiles?.scripts(), scripts != appScripts else { return }
         appScripts = scripts
         applyContent(reload: reload)
-    }
-
-    /// App files are never placed in the browser's global sites directory.
-    /// Guard the saved origin as well, so OAuth and external pages stay clean.
-    nonisolated static func modScripts(configuration: SiteAppConfiguration, root: URL) -> [ModScript] {
-        let directory = root.appendingPathComponent(configuration.identifier)
-        let files = ((try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? [])
-            .filter { ["css", "js"].contains($0.pathExtension) }.sorted { $0.lastPathComponent < $1.lastPathComponent }
-        let url = configuration.url
-        let origin = "\(url.scheme ?? "https")://\(url.host ?? "")" + (url.port.map { ":\($0)" } ?? "")
-        func literal(_ value: String) -> String {
-            String(data: try! JSONSerialization.data(withJSONObject: value, options: [.fragmentsAllowed]), encoding: .utf8)!
-        }
-        return files.compactMap { file in
-            guard let data = try? Data(contentsOf: file), data.count <= 200_000,
-                  let content = String(data: data, encoding: .utf8) else { return nil }
-            let body = file.pathExtension == "css"
-                ? "const add=()=>{const s=document.createElement('style');s.textContent=\(literal(content));(document.head||document.documentElement).appendChild(s);};if(document.documentElement)add();else document.addEventListener('DOMContentLoaded',add,{once:true});"
-                : content
-            guard let world = file.pathExtension == "css" ? "isolated" : ModScript.declaredWorld(content) else { return nil }
-            return ModScript(source: body, world: world, origin: origin)
-        }
     }
 
     func pageFinished(_ view: EngineView) {
@@ -190,31 +242,71 @@ final class SiteAppHub {
     static let shared = SiteAppHub()
     private var connections: [String: SiteAppConnection] = [:]
     private var connecting = Set<String>()
-    private var configurations: [String: SiteAppConfiguration] = [:]
-    private var pending: [Int: String] = [:]
-    private var timer: Timer?
+    private struct PendingEvaluation {
+        let app: String
+        let requestID: Int
+        let reply: @MainActor ([String: Any]) -> Void
+    }
+    private var nextEvaluationID = 0
+    private var pending: [Int: PendingEvaluation] = [:]
+    private var launchObserver: NSObjectProtocol?
+    private var retry: Timer?
 
     func start() {
+        guard launchObserver == nil else { return }
+        launchObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didLaunchApplicationNotification, object: nil, queue: .main
+        ) { [weak self] notification in
+            guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+                  let id = app.bundleIdentifier, id.hasPrefix(SiteAppConfiguration.identifierPrefix) else { return }
+            MainActor.assumeIsolated { self?.scan(launched: id) }
+        }
         scan()
-        timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
-            MainActor.assumeIsolated { SiteAppHub.shared.scan() }
+    }
+
+    /// A registration and its Unix socket may remain on disk after a saved app
+    /// quits. Only a running app can supply the other end of the connection.
+    static func registrations(in root: URL, runningIDs: Set<String>, connectedIDs: Set<String>)
+        -> (ready: [SiteAppConfiguration], waiting: Bool) {
+        var ready: [SiteAppConfiguration] = []
+        var waiting = false
+        for id in runningIDs.subtracting(connectedIDs) where id.hasPrefix(SiteAppConfiguration.identifierPrefix) {
+            let key = String(id.dropFirst(SiteAppConfiguration.identifierPrefix.count))
+            guard !key.isEmpty, key != ".", key != "..", !key.contains("/") else { continue }
+            let registration = root.appendingPathComponent(key).appendingPathComponent("app.json")
+            guard let data = try? Data(contentsOf: registration),
+                  let config = try? JSONDecoder().decode(SiteAppConfiguration.self, from: data),
+                  config.identifier == id else {
+                waiting = true
+                continue
+            }
+            ready.append(config)
+        }
+        return (ready, waiting)
+    }
+
+    private func scheduleRetry() {
+        guard retry == nil else { return }
+        retry = Timer.scheduledTimer(withTimeInterval: 1, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { self?.scan() }
         }
     }
 
-    private func scan() {
+    private func scan(launched: String? = nil) {
+        retry?.invalidate()
+        retry = nil
+        var running = Set(NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier))
+        if let launched { running.insert(launched) }
         let root = BowserPaths.home.appendingPathComponent("site-apps")
-        let dirs = (try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)) ?? []
-        for dir in dirs {
-            guard connections[dir.path] == nil, !connecting.contains(dir.path),
-                  let data = try? Data(contentsOf: dir.appendingPathComponent("app.json")),
-                  let config = try? JSONDecoder().decode(SiteAppConfiguration.self, from: data) else { continue }
-            connecting.insert(dir.path)
-            let key = dir.path
-            SiteAppConnection.connect(path: dir.appendingPathComponent("brain.sock").path) { connection in
+        let registrations = Self.registrations(in: root, runningIDs: running, connectedIDs: Set(connections.keys).union(connecting))
+        if registrations.waiting { scheduleRetry() }
+        for config in registrations.ready {
+            let key = config.identifier
+            connecting.insert(key)
+            SiteAppConnection.connect(path: config.home.appendingPathComponent("brain.sock").path) { connection in
                 self.connecting.remove(key)
-                guard let connection else { return }
+                guard let connection else { self.scheduleRetry(); return }
                 self.connections[key] = connection
-                self.configurations[key] = config
                 connection.onMessage = { [weak connection] message in
                     guard let connection else { return }
                     switch message["op"] as? String {
@@ -243,16 +335,18 @@ final class SiteAppHub {
                         BrainBridge.shared.send(["op": "event", "event": "site_mod_request", "request": request,
                             "app": ["id": config.identifier, "url": config.url.absoluteString, "profile": config.profile]])
                     case "js_result":
-                        guard let id = message["id"] as? Int, self.pending[id] == key else { return }
-                        self.pending.removeValue(forKey: id)
-                        BrainBridge.shared.send(message)
+                        guard let id = message["id"] as? Int, self.pending[id]?.app == key,
+                              let request = self.pending.removeValue(forKey: id) else { return }
+                        var response = message
+                        response["id"] = request.requestID
+                        request.reply(response)
                     default: break
                     }
                 }
                 connection.onClose = {
                     self.connections.removeValue(forKey: key)
-                    self.configurations.removeValue(forKey: key)
-                    for id in self.pending.filter({ $0.value == key }).map(\.key) {
+                    self.scheduleRetry()
+                    for id in self.pending.filter({ $0.value.app == key }).map(\.key) {
                         self.finishEval(id, error: "Saved app disconnected")
                     }
                 }
@@ -303,22 +397,23 @@ final class SiteAppHub {
     }
 
     private func finishEval(_ id: Int, error: String) {
-        guard pending.removeValue(forKey: id) != nil else { return }
-        BrainBridge.shared.send(["op": "js_result", "id": id, "ok": false, "value": error])
+        guard let request = pending.removeValue(forKey: id) else { return }
+        request.reply(["op": "js_result", "id": request.requestID, "ok": false, "value": error])
     }
 
-    func route(_ message: [String: Any]) {
-        let key = configurations.first { $0.value.identifier == message["app"] as? String }?.key
-        guard let key, let connection = connections[key] else {
+    func route(_ message: [String: Any], reply: @escaping @MainActor ([String: Any]) -> Void) {
+        guard let key = message["app"] as? String, let connection = connections[key] else {
             if ["site_eval", "site_screenshot"].contains(message["op"] as? String ?? ""), let id = message["id"] as? Int {
-                BrainBridge.shared.send(["op": "js_result", "id": id, "ok": false, "value": "Saved app is not running"])
+                reply(["op": "js_result", "id": id, "ok": false, "value": "Saved app is not running"])
             }
             return
         }
         if message["op"] as? String == "modsmith_state" {
             connection.send(message)
-        } else if ["site_eval", "site_screenshot"].contains(message["op"] as? String ?? ""), let id = message["id"] as? Int {
-            pending[id] = key
+        } else if ["site_eval", "site_screenshot"].contains(message["op"] as? String ?? ""), let requestID = message["id"] as? Int {
+            nextEvaluationID += 1
+            let id = nextEvaluationID
+            pending[id] = PendingEvaluation(app: key, requestID: requestID, reply: reply)
             if message["op"] as? String == "site_screenshot" {
                 connection.send(["op": "page_screenshot", "webview": 0, "id": id, "max_width": message["max_width"] ?? 1280])
             } else {
@@ -335,7 +430,7 @@ final class SiteAppHub {
     }
 
     func routeIcon(_ message: [String: Any]) {
-        guard let key = configurations.first(where: { $0.value.identifier == message["app"] as? String })?.key else { return }
+        guard let key = message["app"] as? String else { return }
         connections[key]?.send(message)
     }
 
@@ -344,15 +439,16 @@ final class SiteAppHub {
     }
 }
 
-/// Framed JSON I/O is kept off the AppKit thread. A stalled app must never
-/// stall the main browser. The lock protects closure/write against fd reuse.
+/// Each saved app owns a separate reader and a bounded, ordered writer.
 final class SiteAppConnection: @unchecked Sendable {
-    private var fd: Int32
-    private let lock = NSLock()
-    private let writer = DispatchQueue(label: "bowser.site-app.writer")
+    private let fd: Int32
+    private let writer: SocketFrameWriter
     @MainActor var onMessage: (([String: Any]) -> Void)?
     @MainActor var onClose: (() -> Void)?
-    private init(fd: Int32) { self.fd = fd }
+    private init(fd: Int32) {
+        self.fd = fd
+        writer = SocketFrameWriter(fd: fd)
+    }
 
     nonisolated static func connect(path: String, completion: @escaping @MainActor @Sendable (SiteAppConnection?) -> Void) {
         DispatchQueue.global(qos: .utility).async {
@@ -373,30 +469,17 @@ final class SiteAppConnection: @unchecked Sendable {
                 pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
             }
             guard result == 0 else { close(fd); DispatchQueue.main.async { completion(nil) }; return }
-            var enabled: Int32 = 1
-            setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &enabled, socklen_t(MemoryLayout<Int32>.size))
-            var timeout = timeval(tv_sec: 5, tv_usec: 0)
-            setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
             let connection = SiteAppConnection(fd: fd)
             DispatchQueue.main.async { completion(connection) }
         }
     }
 
     @MainActor func send(_ message: [String: Any]) {
-        guard let payload = try? JSONSerialization.data(withJSONObject: message) else { return }
-        var size = UInt32(payload.count).bigEndian
-        let frame = withUnsafeBytes(of: &size) { Data($0) } + payload
-        writer.async {
-            self.lock.lock(); defer { self.lock.unlock() }
-            guard self.fd >= 0 else { return }
-            frame.withUnsafeBytes { bytes in
-                var offset = 0
-                while offset < bytes.count {
-                    let written = write(self.fd, bytes.baseAddress!.advanced(by: offset), bytes.count - offset)
-                    guard written > 0 else { return }
-                    offset += written
-                }
-            }
+        guard writer.isOpen else { return }
+        do {
+            try writer.sendJSON(message)
+        } catch {
+            NSLog("Bowser: could not send saved-app message: %@", String(describing: error))
         }
     }
 
@@ -406,11 +489,12 @@ final class SiteAppConnection: @unchecked Sendable {
             var chunk = [UInt8](repeating: 0, count: 65536)
             while true {
                 let n = read(self.fd, &chunk, chunk.count)
+                if n < 0 && errno == EINTR { continue }
                 if n <= 0 { break }
                 buffer.append(contentsOf: chunk.prefix(n))
                 while buffer.count >= 4 {
                     let count = buffer.prefix(4).reduce(0) { ($0 << 8) | Int($1) }
-                    guard count <= 64 * 1024 * 1024 else { self.finish(); return }
+                    guard count <= SocketFrameWriter.maximumPayloadBytes else { self.finish(); return }
                     if buffer.count < count + 4 { break }
                     let data = buffer.subdata(in: 4..<(count + 4))
                     buffer.removeSubrange(0..<(count + 4))
@@ -426,14 +510,11 @@ final class SiteAppConnection: @unchecked Sendable {
     }
 
     nonisolated func disconnect() {
-        lock.lock(); defer { lock.unlock() }
-        if fd >= 0 { shutdown(fd, SHUT_RDWR) }
+        writer.close()
     }
 
     private func finish() {
-        lock.lock()
-        if fd >= 0 { close(fd); fd = -1 }
-        lock.unlock()
+        writer.finishReading()
         DispatchQueue.main.async {
             self.onClose?()
             self.onMessage = nil

@@ -57,19 +57,13 @@ public final class Peer: @unchecked Sendable {
     public let messages: AsyncThrowingStream<Message, Error>
     private let continuation: AsyncThrowingStream<Message, Error>.Continuation
     private let fd: Int32
-    private let lock = NSLock()
-    private var stopped = false
-    private let writes = DispatchQueue(label: "bowser.relay.writes")
+    private let writer: SocketFrameWriter
     public init(fd: Int32) {
         self.fd = fd
         var output: AsyncThrowingStream<Message, Error>.Continuation!
         messages = AsyncThrowingStream { output = $0 }
         continuation = output
-        var one: Int32 = 1
-        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, socklen_t(MemoryLayout.size(ofValue: one)))
-        var timeout = timeval(tv_sec: 1, tv_usec: 0)
-        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout.size(ofValue: timeout)))
-        _ = fcntl(fd, F_SETFD, FD_CLOEXEC)
+        writer = SocketFrameWriter(fd: fd, timeout: 1)
         DispatchQueue.global().async { self.readLoop() }
     }
     public static func connect(_ path: URL) throws -> Peer {
@@ -96,43 +90,22 @@ public final class Peer: @unchecked Sendable {
         return data
     }
     private func readLoop() {
-        defer {
-            lock.lock(); stopped = true; Darwin.close(fd); lock.unlock()
-        }
+        defer { writer.finishReading() }
         do {
             while true {
                 let header = try readExact(4)
                 let count = header.reduce(0) { ($0 << 8) | Int($1) }
-                guard count <= 64 * 1024 * 1024 else { throw RuntimeFailure("frame exceeds limit") }
+                guard count <= SocketFrameWriter.maximumPayloadBytes else { throw RuntimeFailure("frame exceeds limit") }
                 continuation.yield(try json(readExact(count)))
             }
         } catch { continuation.finish(throwing: error) }
     }
     /// Enqueue synchronously: replay cannot be overtaken by newer native events.
     public func send(_ message: Message) throws {
-        let data = try encode(message)
-        guard data.count <= 64 * 1024 * 1024 else { throw RuntimeFailure("frame exceeds limit") }
-        var size = UInt32(data.count).bigEndian
-        var frame = withUnsafeBytes(of: &size) { Data($0) }; frame.append(data)
-        writes.async {
-            self.lock.lock(); defer { self.lock.unlock() }
-            guard !self.stopped else { return }
-            frame.withUnsafeBytes { bytes in
-                var offset = 0
-                while offset < bytes.count {
-                    let n = Darwin.write(self.fd, bytes.baseAddress!.advanced(by: offset), bytes.count - offset)
-                    if n < 0 && errno == EINTR { continue }
-                    if n <= 0 { self.stopped = true; shutdown(self.fd, SHUT_RDWR); break }
-                    offset += n
-                }
-            }
-        }
+        try writer.sendJSON(message, options: [.sortedKeys])
     }
-    public func close() {
-        lock.lock(); defer { lock.unlock() }
-        if !stopped { stopped = true; shutdown(fd, SHUT_RDWR) }
-    }
-    public func finishWrites() async { await withCheckedContinuation { continuation in writes.async { continuation.resume() } } }
+    public func close() { writer.close() }
+    public func finishWrites() async { await writer.finishWrites() }
 }
 public final class Listener: @unchecked Sendable {
     private let fd: Int32

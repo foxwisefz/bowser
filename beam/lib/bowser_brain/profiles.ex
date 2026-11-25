@@ -418,6 +418,9 @@ defmodule BowserBrain.Profiles do
     File.mkdir_p!(Path.dirname(path()))
     File.write!(path(), JSON.encode!(profiles))
     Bridge.cast_msg(%{op: "profiles", profiles: profiles})
+    Registry.dispatch(BowserBrain.Events, :browser_event, fn entries ->
+      for {pid, _} <- entries, do: send(pid, {:browser_event, %{"event" => "profiles_changed"}})
+    end)
     :ok
   end
 end

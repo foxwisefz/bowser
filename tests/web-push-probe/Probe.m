@@ -2,12 +2,17 @@
 #import <WebKit/WebKit.h>
 
 // Standalone diagnostic declarations, checked with respondsToSelector before use.
+@interface NSObject (PushProbeConfiguration)
+- (instancetype)initWithIdentifier:(NSUUID *)identifier;
+- (void)setWebPushMachServiceName:(NSString *)name;
+@end
 @interface WKPreferences (PushProbe)
 - (void)_setPushAPIEnabled:(BOOL)value;
 - (void)_setNotificationsEnabled:(BOOL)value;
 - (void)_setNotificationEventEnabled:(BOOL)value;
 @end
 @interface WKWebsiteDataStore (PushProbe)
+- (instancetype)_initWithConfiguration:(id)configuration;
 - (void)set_delegate:(id)delegate;
 - (void)_setServiceWorkerOverridePreferences:(WKPreferences *)preferences;
 - (void)_processPushMessage:(NSDictionary *)message completionHandler:(void (^)(bool))completion;
@@ -45,7 +50,21 @@ static void record(NSString *event, id value) {
 }
 - (void)applicationDidFinishLaunching:(NSNotification *)note {
     self.origin = NSProcessInfo.processInfo.environment[@"PROBE_ORIGIN"];
-    self.store = [WKWebsiteDataStore dataStoreForIdentifier:NSUUID.UUID];
+    NSString *service = NSProcessInfo.processInfo.environment[@"PROBE_MACH_SERVICE"];
+    if (service.length) {
+        Class configurationClass = NSClassFromString(@"_WKWebsiteDataStoreConfiguration");
+        if (![configurationClass instancesRespondToSelector:@selector(initWithIdentifier:)] ||
+            ![configurationClass instancesRespondToSelector:@selector(setWebPushMachServiceName:)] ||
+            ![WKWebsiteDataStore instancesRespondToSelector:@selector(_initWithConfiguration:)]) {
+            record(@"missing_selector", @"custom push data-store configuration"); exit(2);
+        }
+        id configuration = [[configurationClass alloc] initWithIdentifier:NSUUID.UUID];
+        [configuration setWebPushMachServiceName:service];
+        self.store = [[WKWebsiteDataStore alloc] _initWithConfiguration:configuration];
+        record(@"provider", service);
+    } else {
+        self.store = [WKWebsiteDataStore dataStoreForIdentifier:NSUUID.UUID];
+    }
     record(@"webkit", [[NSBundle bundleForClass:WKWebView.class] objectForInfoDictionaryKey:@"CFBundleVersion"]);
     for (NSString *name in @[@"set_delegate:", @"_processPushMessage:completionHandler:", @"_setServiceWorkerOverridePreferences:"]) {
         if (![self.store respondsToSelector:NSSelectorFromString(name)]) { record(@"missing_selector", name); exit(2); }

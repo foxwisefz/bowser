@@ -45,6 +45,12 @@ defmodule BowserBrain.ModControls do
     |> render(true)
   end
 
+  def handle_event(%{"event" => "surface", "surface" => "mods", "id" => "open_workspace"}, state) do
+    open_workspace(state)
+    state
+  end
+
+
   def handle_event(%{"event" => "surface", "surface" => "mods", "id" => "scope"}, state) do
     state |> Map.put(:show_global, not Map.get(state, :show_global, false)) |> render()
   end
@@ -280,103 +286,25 @@ defmodule BowserBrain.ModControls do
       profile: BowserBrain.ModScope.source_profile(source), on: enabled?(name)}
   end
 
-  # -- rendering --------------------------------------------------------------
-
-  # No add_menu_item here: PanelMenu already gives every surface a
-  # View-menu toggle ("panel:mods"), so a second "Mods" entry was a duplicate.
-  defp assert_chrome do
-    Chrome.register_command("mods", "What's modding this page — toggle on/off")
+  defp open_workspace(state) do
+    send(BowserBrain.ModWorkshop, {:browser_event, %{"event" => "modsmith", "action" => "open", "webview" => state.active}})
   end
 
-  defp host_of(state) do
-    # Prefer our own capture, but fall back to the brain's authoritative
-    # tab→url mirror: a hot-reloaded mod_switch starts with an empty urls
-    # map and would otherwise show NO site payloads for an already-loaded
-    # page (the "no twitter mods for x.com" bug).
-    url = state.urls[state.active] || BowserBrain.Session.url_of(state.active) || ""
-    URI.parse(url).host
+  # -- rendering --------------------------------------------------------------
+
+  # The native View menu opens the same Mods workspace.
+  defp assert_chrome do
+    Chrome.register_command("mods", "Mods — manage, create, and view build history")
   end
 
   defp render(state, activate \\ false) do
-    host = host_of(state)
-    global? = Map.get(state, :show_global, false)
-
-    sites_dir = not global? && host && Path.join([BowserBrain.Paths.home(), "sites", host])
-
-    site_rows =
-      case sites_dir && File.ls(sites_dir) do
-        {:ok, names} ->
-          for name <- Enum.sort(names),
-              Path.extname(display(name)) in [".css", ".js"],
-              BowserBrain.ModScope.file_profile(Path.join(sites_dir, name)) == BowserBrain.ModScope.profile_of(state.active) do
-            info = describe_file(Path.join(sites_dir, name)) || "site payload"
-            row(dot(enabled?(name)) <> " " <> display(name), "site|#{host}|#{name}", info, state, host)
-          end
-
-        _ ->
-          []
-      end
-
-    mods_dir = Path.join(BowserBrain.Paths.home(), "mods")
-
-    mod_rows =
-      case File.ls(mods_dir) do
-        {:ok, names} ->
-          for name <- Enum.sort(names),
-              String.ends_with?(name, ".ex") or String.ends_with?(name, ".ex.off"),
-              not String.starts_with?(name, "zz_"),
-              BowserBrain.ModScope.file_profile(Path.join(mods_dir, name)) == BowserBrain.ModScope.profile_of(state.active),
-              {:ok, source} <- [File.read(Path.join(mods_dir, name))],
-              scope = host_of_source(source),
-              visible_scope?(scope, host, global?) do
-
-            status =
-              cond do
-                not enabled?(name) -> nil
-                running?(source) -> nil
-                true -> "STOPPED"
-              end
-
-            info =
-              [scope, status, describe_source(source) || "mod"]
-              |> Enum.reject(&is_nil/1)
-              |> Enum.join(" · ")
-
-            row(dot(enabled?(name)) <> " " <> display(name), "mod|#{name}", info, state, scope)
-          end
-
-        _ ->
-          []
-      end
-
-    Surface.show(
-      :mods,
-      vstack(
-        deletion_prompt(state) ++ [section(if(global?, do: "Global mods", else: "This tab#{if host, do: " · #{host}", else: ""}"))] ++
-          (if site_rows ++ mod_rows == [],
-             do: [text(if(global?, do: "No global mods in this profile.", else: "No mods for this tab."), style: :caption)],
-             else: site_rows ++ mod_rows) ++
-          [button(if(global?, do: "Show tab mods", else: "Show global mods"), event: "scope")]
-      ),
-      title: "Mods",
-      kind: :settings,
-      section: "Mods",
-      order: 20,
-      activate: activate
-    )
+    Surface.show(:mods, vstack([
+      text("Your mods, instructions, and build history—all in one place."),
+      button("Open Mods", event: "open_workspace", symbol: "square.grid.2x2")
+    ]), title: "Mods", kind: :settings, section: "Mods", order: 20)
+    if activate, do: open_workspace(state)
 
     state
-  end
-
-  defp deletion_prompt(state) do
-    case Map.get(state, :pending_delete) do
-      {path, _} ->
-        [section("Delete #{Path.basename(path)}?"),
-         text("Removes this mod’s files and all its ModSmith conversation and undo history. This can’t be undone. Website actions and saved mod data stay as they are.", style: :caption)] ++
-          (if reason = Map.get(state, :delete_error), do: [text(reason)], else: []) ++
-          [hstack([button("Cancel", event: "cancel_delete"), button("Delete mod", event: "confirm_delete")])]
-      _ -> []
-    end
   end
 
   # A freshly hot-swapped process still carries the previous code's state
@@ -385,39 +313,5 @@ defmodule BowserBrain.ModControls do
   # should be lost in the meantime).
   defp expanded(state), do: Map.get(state, :info) || MapSet.new()
 
-  # icon · name / description · ✎ · switch — the extensions-list pattern.
-  defp row(label, payload, info, state, host) do
-    on = enabled?(payload |> String.split("|") |> List.last())
-
-    row(String.replace_prefix(String.replace_prefix(label, "● ", ""), "○ ", ""),
-      subtitle: String.slice(info, 0, 90),
-      path: BowserBrain.ModIcon.cached(host, BowserBrain.ModScope.profile_of(state.active)),
-      symbol: if(String.starts_with?(payload, "site|"), do: "doc.text", else: "puzzlepiece.extension"),
-      trailing: [
-        button("✎", event: "edit", payload: payload, compact: true),
-        button("Delete…", event: "delete", payload: payload, compact: true),
-        toggle("toggle", on: on, payload: payload)
-      ]
-    )
-  end
-
-  defp describe_file(path) do
-    case File.read(path) do
-      {:ok, source} -> describe_source(source)
-      _ -> nil
-    end
-  end
-
-  # Is the process for this mod source actually alive? An enabled file with
-  # a dead process means it crashed past the restart budget.
-  defp running?(source) do
-    case modname(source) do
-      nil -> false
-      name -> Registry.lookup(BowserBrain.ModRegistry, Module.concat([name])) != []
-    end
-  end
-
-  defp dot(true), do: "●"
-  defp dot(false), do: "○"
   defp display(name), do: String.replace_suffix(name, ".off", "")
 end

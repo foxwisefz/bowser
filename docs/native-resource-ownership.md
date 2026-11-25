@@ -28,7 +28,10 @@ shells without the capability receive the existing `chrome.open_tab` operation.
 
 `hello.resources` and `resource_snapshot` expose protocol version 1, native launch
 session ID, next command sequence, topology revision, and windows with stable IDs,
-profile IDs, ordered tab IDs and active tab. No cookie or document data is included.
+profile IDs, ordered tab IDs, active tab, and recent focus order. No cookie or document data is included.
+Closing the active tab returns to the most recently focused surviving tab, with
+strip order as a fallback when no focus history remains. An explicit successor
+and visible split panes take precedence. Closing a background tab preserves focus.
 
 `resource_command` contains `version`, `session`, `sequence`, and `command`.
 The command names its observed `revision`, `window`, `profile`, `tab`, and `action`.
@@ -83,8 +86,9 @@ After `resource_ready`, native tab gestures and commands enqueue intents (up to
 time with a fresh topology snapshot. `resource_decision` must reference that
 request. A stale topology retries with a fresh snapshot; a completed request ID
 cannot be applied again. Pending intents stay native through controller death,
-reconnection and whole-brain replacement. A one-second readiness heartbeat recovers
-a controller restart without requiring a new socket connection. Browser-internal
+reconnection and whole-brain replacement. The native hello establishes readiness.
+A restarted controller or newly committed backend requests a fresh snapshot and
+resumes pending intents. An idle connection sends no readiness traffic. Browser-internal
 resource intents go only to the controller, not to mod event subscribers.
 
 The controller contains no authoritative resource state, so it reconstructs from
@@ -101,6 +105,14 @@ local media, not a physical-input or DRM qualification.
 
 ## Navigation and downloads
 
+Navigation responses with `Content-Disposition: attachment` download even when
+WebKit can display their MIME type (including video, audio, images, and PDFs).
+Inline responses keep their normal preview behavior. This also applies to
+cross-origin download links that open a new window.
+An uncommitted popup is retired after its request becomes a download, returning
+selection to its opener if the popup was selected. Popups that have committed a
+document remain open. Download ownership transfers before the empty tab closes.
+
 Elixir publishes ordered navigation rules with required/forbidden modifier names
 and a native tab action. The native owner validates the complete rule set before
 replacing its cached policy, then answers WebKit synchronously. External-scheme
@@ -113,6 +125,21 @@ controller from a native download snapshot. The native owner enforces profile
 identity, basename-only filenames, collision avoidance (including reserved paths)
 and single completion of each callback. Once started, a transfer continues
 without the controller. A source tab closing does not retire its download.
+Window-owned download cards show connecting/transfer progress, completion with
+Show in Finder, and failures for both website downloads and explicit saves.
+Cards do not take keyboard focus. Dismissing a card leaves the transfer running;
+concurrent transfers retain separate progress and completion states.
+
+Explicit file saves use the same native owner and the source webview's authenticated
+download session, preserving the original URL and signed query. The toolbar saves
+to Downloads; File → Save As opens a native save panel. Destinations are owned
+natively rather than chosen by the Elixir controller. Transfers are staged in a
+private temporary directory, checked for a successful response matching the original
+file type (or a binary stream), then moved to the destination. PDFs also require a
+PDF signature. Only a save-panel choice can replace an existing file. Filename
+extensions and save-panel types follow the original content type. Native completion
+feedback offers Show in Finder. Availability follows non-HTML main-frame response
+metadata or a single embedded PDF data URL and resets when another document commits.
 
 The native integration check also streams a real 1 MiB WebKit download from a
 loopback fixture, closes its source tab and restarts the controller before
@@ -166,8 +193,10 @@ WebKit permission callbacks and the app's startup/recovery machinery remain host
 responsibilities. Modules remain subject to the existing signature, exact SurfaceKit
 identity, generation-count and mapped-byte limits.
 
-Unloaded tabs reuse the startup snapshot capture for a per-tab preview. Captures are limited to 1280 points wide; compressed previews use at most 512 KB per tab and 16 MB total, evicting oldest entries. Only displayed overlays decode an image. Selecting a sleeping tab shows its matching URL preview synchronously while interaction state reloads. Completion, failure, explicit navigation, unmounting, a click, or an eight-second timeout removes the overlay. Closed tabs release cached previews; cache entries are not persisted.
+Unloaded tabs reuse the startup snapshot capture for a per-tab preview. A tab switch schedules one capture after 400 ms; switching again cancels the pending capture. There is no periodic capture during browsing, and tabs using the camera or microphone are excluded. Captures are limited to 1280 points wide; compressed previews use at most 512 KB per tab and 16 MB total, evicting oldest entries. Only displayed overlays decode an image. Selecting a sleeping tab shows its matching URL preview synchronously while interaction state reloads. Completion, failure, explicit navigation, unmounting, a click, or an eight-second timeout removes the overlay. Closed tabs release cached previews; cache entries are not persisted.
 
+
+Media recovery listens to playback and metadata events. During playback, changed state is saved at most once per second, with a final save on pause, seek, hiding or leaving the page. Idle pages have no media polling timer. A fresh snapshot from another browser process can restore a single matching player with a stable HTTP(S) or file source and a finite duration; camera/MediaStream sources, live streams, blob URLs and ambiguous players are excluded. Recovery waits at most 20 seconds for metadata events, stops on user scrolling or keyboard input, and requires an explicit click to re-enter fullscreen. Core recovery has no site-specific DOM or scroll handling.
 
 ## Capture mode
 

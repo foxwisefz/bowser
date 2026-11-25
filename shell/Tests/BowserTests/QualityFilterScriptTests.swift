@@ -48,6 +48,7 @@ import WebKit
     private func exercise(mode: String) async throws {
         let web = WKWebView(frame: NSRect(x: 0, y: 0, width: 900, height: 600))
         let window = NSWindow(contentRect: web.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
         window.contentView = web; window.makeKeyAndOrderFront(nil)
         defer { window.close() }
         let text = "Generic promotional filler repeated without concrete useful information."

@@ -1,4 +1,6 @@
 import AppKit
+import BowserSurfaceKit
+import SwiftUI
 import WebKit
 
 /// Relays page messages (console.* taps and window.bowser.emit) to the brain.
@@ -50,10 +52,7 @@ private final class PageRelay: NSObject, WKScriptMessageHandler {
             case "bowserEmit":
                 // The page->brain duplex channel: whatever the page emits,
                 // mods receive as {"event": "page", "payload": ...}.
-                BrainBridge.shared.send([
-                    "op": "event", "event": "page", "webview": id,
-                    "payload": BrainBridge.jsonify(body),
-                ])
+                BrainBridge.shared.send(BrainBridge.pageEvent(body, webview: id))
             default:
                 break
             }
@@ -83,6 +82,7 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
 
     var onTitleChange: ((String) -> Void)?
     var onURLChange: ((String) -> Void)?
+    var onNavigationChange: (() -> Void)?
     var onThemeColor: ((NSColor?) -> Void)?
 
     private(set) var webviewId: UInt64 = 0
@@ -90,15 +90,26 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
     private(set) var faviconPath: String?
     private var faviconGeneration = UUID()
     private var iconCandidates: [[String: Any]] = []
-    private var faviconICNSPath: String?
+    private(set) var faviconICNSPath: String?
     /// Last sampled page tint. Cached because a tab can be mounted long
     /// after it loaded, and the chrome has to catch up on the spot.
     private(set) var themeColor: NSColor?
     private(set) var webView: WKWebView
+    private let historyController: HistoryController
+    private(set) var historyNavigationCommitted = false
+    static let historyURL = "bowser://history"
+    private var historyPage: NSView?
+    private weak var historyScreenContext: BrowserScreenContext?
+    var isHistoryPage: Bool { historyPage != nil }
+
+    func focusHistorySearch() {
+        historyScreenContext?.focusSearchRequests.send()
+    }
 
     private let pageRelay = PageRelay()
     fileprivate var didWarmMediaRecovery = false
     private var urlObservation: NSKeyValueObservation?
+    private var appearanceObservation: NSKeyValueObservation?
     private var mediaObservations: [NSKeyValueObservation] = []
     private var titleObservation: NSKeyValueObservation?
     private var loadingCover: PageLoadingView?
@@ -173,7 +184,7 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
     })();
     """
 
-    /// Browser notches overlay the page without a full-width reserved band.
+    /// AppKit reserves the native toolbar above the content view; WebKit needs no extra inset.
     static let pageTopInset: CGFloat = 0
 
     /// Invoke an ObjC setter taking a primitive (no KVC, no NSInvocation).
@@ -186,6 +197,11 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
 
     override func layout() {
         super.layout()
+        historyPage?.frame = bounds
+        // Element fullscreen reparents the web view into WebKit's own window.
+        // Only size it while this container owns it; otherwise a background
+        // layout pass overwrites the fullscreen viewport with the inline size.
+        guard webView.superview === self else { return }
         webView.frame = bounds
     }
 
@@ -206,8 +222,9 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
     private static let tabProcessPool = WKProcessPool()
 
     init(frame frameRect: NSRect, configuration external: WKWebViewConfiguration?, profile: Profile = .defaultProfile,
-         reuseProcessPool: Bool = false) {
+         reuseProcessPool: Bool = false, historyController: HistoryController = .shared) {
         profileId = profile.id
+        self.historyController = historyController
         let configuration = external ?? {
             let c = WKWebViewConfiguration()
             // The profile's own cookies/logins/storage (default profile =
@@ -249,6 +266,12 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
         // Full Safari impersonation: WKWebView's default UA lacks the
         // "Version/x Safari/x" suffix and sites like YouTube Music sniff it.
         webView.customUserAgent = SafariUserAgent.current
+        // Chrome follows the page's theme color, but web content must follow
+        // the application appearance. Otherwise moving into WebKit's fullscreen
+        // window changes prefers-color-scheme and can tear down a site's player.
+        appearanceObservation = NSApplication.shared.observe(\.effectiveAppearance, options: [.initial, .new]) { [weak webView] application, _ in
+            MainActor.assumeIsolated { webView?.appearance = application.effectiveAppearance }
+        }
         webView.frame = bounds
         addSubview(webView)
         hasRenderedContent = false
@@ -265,7 +288,8 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
 
         urlObservation = webView.observe(\.url) { [weak self] view, _ in
             MainActor.assumeIsolated {
-                guard let self, self.pendingRestoreURL == nil, let url = self.failedNavigationURL ?? view.url?.absoluteString else { return }
+                guard let self, !self.isHistoryPage, self.pendingRestoreURL == nil, let url = self.failedNavigationURL ?? view.url?.absoluteString else { return }
+                self.historyController.urlChanged(self)
                 self.onURLChange?(url)
                 BrainBridge.shared.send([
                     "op": "event", "event": "url_changed",
@@ -273,18 +297,20 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
                 ])
             }
         }
-        mediaObservations = [webView.observe(\.isLoading) { [weak self] _, _ in
-            MainActor.assumeIsolated {
-                if let self { BrowserWindowController.host(of: self.webviewId)?.refreshToolbarLoading() }
+        let navigationKeys = [\WKWebView.isLoading, \.canGoBack, \.canGoForward]
+        mediaObservations = navigationKeys.map { key in
+            webView.observe(key) { [weak self] _, _ in
+                MainActor.assumeIsolated { self?.onNavigationChange?() }
             }
-        }, webView.observe(\.cameraCaptureState) { [weak self] _, _ in
-            Task { @MainActor in if let self { BrowserWindowController.host(of: self.webviewId)?.syncModButtons() } }
+        } + [webView.observe(\.cameraCaptureState) { [weak self] _, _ in
+            Task { @MainActor in if let self { BrowserWindowController.host(of: self.webviewId)?.syncModButtons() }; self?.historyController.refresh() }
         }, webView.observe(\.microphoneCaptureState) { [weak self] _, _ in
-            Task { @MainActor in if let self { BrowserWindowController.host(of: self.webviewId)?.syncModButtons() } }
+            Task { @MainActor in if let self { BrowserWindowController.host(of: self.webviewId)?.syncModButtons() }; self?.historyController.refresh() }
         }]
         titleObservation = webView.observe(\.title) { [weak self] view, _ in
             MainActor.assumeIsolated {
-                guard let self, self.pendingRestoreURL == nil else { return }
+                guard let self, !self.isHistoryPage, self.pendingRestoreURL == nil else { return }
+                self.historyController.recordVisit(self)
                 let title = view.title ?? ""
                 SiteAppBadge.shared.updateTitle(title, id: self.webviewId, url: view.url)
                 self.onTitleChange?(title)
@@ -308,10 +334,22 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
     private(set) var hasUnsavedInteraction = false
     private var hasSubmittedForm = false
     var isSleeping: Bool { sleepingInteractionState != nil }
-    var currentTitle: String { sleepingTitle ?? webView.title ?? "" }
+    var currentTitle: String { isHistoryPage ? "History" : sleepingTitle ?? webView.title ?? "" }
     private var requestedURL: String?
+    private var pendingDownloadableResource: ResourceDownload?
+    private var resourceNavigation = UUID()
+    private var uncommittedPopup = false
+    private weak var popupOpener: EngineView?
+    private(set) var downloadableResource: ResourceDownload? {
+        didSet { BrowserWindowController.host(of: webviewId)?.syncModButtons() }
+    }
+    func saveResource(destination: NativeDownloads.Destination = .downloads) {
+        guard let downloadableResource else { return }
+        NativeDownloads.shared.startResource(downloadableResource, in: webView, tab: webviewId,
+                                        profile: profileId, destination: destination)
+    }
     private var failedNavigationURL: String?
-    var currentURLString: String? { pendingRestoreURL ?? failedNavigationURL ?? webView.url?.absoluteString ?? requestedURL }
+    var currentURLString: String? { isHistoryPage ? Self.historyURL : pendingRestoreURL ?? failedNavigationURL ?? webView.url?.absoluteString ?? requestedURL }
 
     /// Restored background pages keep their identity without starting a load.
     /// Mounting in a window (selection, split pane, or explicit warming) resumes it.
@@ -368,8 +406,17 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
     }
 
     func reloadPage() {
-        if let url = failedNavigationURL { load(urlString: url) }
-        else if !resumePageIfNeeded() { webView.reload() }
+        if isHistoryPage { historyController.search(); return }
+        if let url = failedNavigationURL { load(urlString: url); return }
+        if resumePageIfNeeded() { return }
+        // Stopping the very first response leaves WebKit with no history item
+        // to reload. Retry the intended address unless it was a form submission.
+        if webView.url == nil, webView.backForwardList.currentItem == nil,
+           !hasSubmittedForm, let requestedURL {
+            load(urlString: requestedURL)
+        } else {
+            webView.reload()
+        }
     }
 
     var inspectionUnavailableReason: String? {
@@ -382,6 +429,7 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
     /// Reuse the startup capture; only compressed bytes remain for inactive tabs.
     func capturePreview() {
         guard pendingRestoreURL == nil, tabPreview == nil, !webView.isLoading,
+              webView.cameraCaptureState == .none, webView.microphoneCaptureState == .none,
               let url = currentURLString else { return }
         ResurrectFrame.capture(webView) { [weak self] data in
             guard let self, Self.live[self.webviewId] === self,
@@ -445,7 +493,7 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
     func noteUserEdit() { hasUnsavedInteraction = true }
 
     private var canSleep: Bool {
-        guard SiteAppConfiguration.current == nil, window == nil,
+        guard !isHistoryPage, SiteAppConfiguration.current == nil, window == nil,
               !isSleeping, pendingRestoreURL == nil, !hasUnsavedInteraction, !hasSubmittedForm,
               !webView.isLoading, webView.cameraCaptureState == .none,
               webView.microphoneCaptureState == .none,
@@ -494,10 +542,34 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
         dismissTabPreview()
         TabPreviewCache.shared.remove(webviewId)
         guard let url = Self.localFileURL(urlString) ?? URL(string: urlString) else { return }
+        historyNavigationCommitted = false
         sleepingInteractionState = nil
         sleepingTitle = nil
         pendingRestoreURL = nil
         requestedURL = url.absoluteString
+        if url.absoluteString == Self.historyURL {
+            historyController.selectedProfile = profileId
+            historyController.allProfiles = false
+            webView.stopLoading(); webView.isHidden = true
+            if historyPage == nil {
+                let screen = LiveBrowserScreen(kind: "history", model: historyController) { [weak self] context in
+                    self?.historyScreenContext = context
+                }
+                let page = NSHostingView(rootView: screen)
+                page.sizingOptions = []; page.frame = bounds; page.autoresizingMask = [.width, .height]
+                historyPage = page; addSubview(page)
+            }
+            loadingCover?.removeFromSuperview(); loadingCover = nil; failedNavigationURL = nil
+            hasRenderedContent = true
+            onURLChange?(Self.historyURL); onTitleChange?("History")
+            BrainBridge.shared.send(["op":"event", "event":"url_changed", "webview":webviewId, "url":Self.historyURL])
+            BrainBridge.shared.send(["op":"event", "event":"title_changed", "webview":webviewId, "title":"History"])
+            BrainBridge.shared.send(["op":"event", "event":"load_status", "webview":webviewId, "status":2])
+            historyController.search()
+            BrowserWindowController.host(of: webviewId)?.engineDidPaint(self)
+            return
+        }
+        historyPage?.removeFromSuperview(); historyPage = nil; webView.isHidden = false
         if !hasRenderedContent { showLoadingCover() }
         failedNavigationURL = nil
         showCachedFavicon(for: url)
@@ -628,6 +700,7 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
     /// the right tab.
     private func registerRelay() {
         let controller = webView.configuration.userContentController
+        historyController.attach(self)
         for world in [WKContentWorld.page, ModScript.isolatedWorld] {
             controller.removeScriptMessageHandler(forName: "bowserScriptFault", contentWorld: world)
             controller.add(pageRelay, contentWorld: world, name: "bowserScriptFault")
@@ -665,10 +738,13 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
         stopMediaCapture()
         SiteAppBadge.shared.clear(id: webviewId)
         EngineView.live.removeValue(forKey: webviewId)
+        historyController.forget(self)
+        historyPage?.removeFromSuperview(); historyPage = nil
         BrainBridge.shared.send([
             "op": "event", "event": "webview_closed", "webview": webviewId,
         ])
         urlObservation = nil
+        appearanceObservation = nil
         titleObservation = nil
         mediaObservations = []
         let controller = webView.configuration.userContentController
@@ -775,8 +851,15 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
         view.load(urlString: url.absoluteString)
     }
 
-    // A response WebKit can't display (a binary, a file with Content-
-    // Disposition: attachment) becomes a download instead of a blank page.
+    static func responsePolicy(_ response: URLResponse, canShowMIMEType: Bool) -> WKNavigationResponsePolicy {
+        let disposition = (response as? HTTPURLResponse)?
+            .value(forHTTPHeaderField: "Content-Disposition")?
+            .split(separator: ";", maxSplits: 1, omittingEmptySubsequences: false).first?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return !canShowMIMEType || disposition?.lowercased() == "attachment" ? .download : .allow
+    }
+
+    // Displayable files can still explicitly request a download.
     func webView(
         _ webView: WKWebView,
         decidePolicyFor navigationResponse: WKNavigationResponse,
@@ -796,15 +879,28 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
             showLoadFailure(url: url.absoluteString, message: detail)
             return
         }
-        decisionHandler(navigationResponse.canShowMIMEType ? .allow : .download)
+        let policy = Self.responsePolicy(navigationResponse.response, canShowMIMEType: navigationResponse.canShowMIMEType)
+        if navigationResponse.isForMainFrame && policy == .allow {
+            pendingDownloadableResource = ResourceDownload(response: navigationResponse.response)
+        }
+        decisionHandler(policy)
     }
 
     func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) {
-        NativeDownloads.shared.attach(download, tab: webviewId, profile: profileId)
+        receiveDownload(download)
     }
 
     func webView(_ webView: WKWebView, navigationResponse: WKNavigationResponse, didBecome download: WKDownload) {
-        NativeDownloads.shared.attach(download, tab: webviewId, profile: profileId)
+        receiveDownload(download)
+    }
+
+    private func receiveDownload(_ download: WKDownload) {
+        let host = BrowserWindowController.host(of: webviewId)
+        NativeDownloads.shared.attach(download, tab: webviewId, profile: profileId, window: host?.window ?? window)
+        guard uncommittedPopup, let host else { return }
+        uncommittedPopup = false
+        // The download delegate owns the transfer before the empty webview is retired.
+        host.closeTab(self, selecting: popupOpener?.webviewId)
     }
 
     static func uniqueDownloadURL(_ suggested: String) -> URL { NativeDownloads.uniqueURL(suggested) }
@@ -916,6 +1012,10 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
     }
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        guard !isHistoryPage else { return }
+        historyNavigationCommitted = false
+        pendingDownloadableResource = nil
+        resourceNavigation = UUID()
         markNavigationTiming("provisional_ms")
         if !hasRenderedContent { showLoadingCover() }
         if failedNavigationURL == nil, let navigation {
@@ -946,6 +1046,11 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
     }
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        guard !isHistoryPage else { return }
+        historyNavigationCommitted = true
+        historyController.navigationChanged(self)
+        uncommittedPopup = false
+        downloadableResource = pendingDownloadableResource
         markNavigationTiming("commit_ms")
         if failedNavigationURL == nil { recordNavigationDiagnostic("committed", navigation: navigation) }
         hasRenderedContent = false
@@ -958,6 +1063,16 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        guard !isHistoryPage else { return }
+        historyController.recordVisit(self)
+        if downloadableResource == nil && failedNavigationURL == nil {
+            let generation = resourceNavigation
+            webView.evaluateJavaScript(ResourceDownload.embeddedPDFScript, in: nil, in: .defaultClient) { [weak self] result in
+                guard let self, self.resourceNavigation == generation,
+                      case .success(let source as String) = result else { return }
+                self.downloadableResource = ResourceDownload(embeddedURL: source)
+            }
+        }
         markNavigationTiming("finish_ms")
         if navigationDiagnosticTrace.isCurrent(navigation) { navigationDiagnosticWatchdog?.cancel() }
         if failedNavigationURL == nil { recordNavigationDiagnostic("finished", navigation: navigation) }
@@ -997,6 +1112,7 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
     }
 
     private func handleLoadFailure(_ error: Error, navigation: WKNavigation?, provisional: Bool) {
+        guard !isHistoryPage else { return }
         let nsError = error as NSError
         if navigationDiagnosticTrace.isCurrent(navigation) { navigationDiagnosticWatchdog?.cancel() }
         persistNavigationDiagnostic(navigationDiagnosticTrace.failure(navigation, error: nsError,
@@ -1040,11 +1156,11 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
     }
 
     /// Cancellation (-999) means a newer load won the race; WebKit 102 means
-    /// the navigation became a download or app handoff. Everything else left
-    /// the user staring at a blank tab.
+    /// the navigation became a download or app handoff. WebKit 204 hands the
+    /// load to its media viewer rather than loading the same resource twice.
     static func shouldShowErrorPage(domain: String, code: Int) -> Bool {
         if domain == NSURLErrorDomain && code == NSURLErrorCancelled { return false }
-        if domain == "WebKitErrorDomain" && code == 102 { return false }
+        if domain == "WebKitErrorDomain" && [102, 204].contains(code) { return false }
         return true
     }
 
@@ -1113,10 +1229,12 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
         guard let url = webView.url else { return }
         guard !iconCandidates.isEmpty else { captureFavicon(); return }
         faviconGeneration = UUID()
+        let badge = Profile.find(profileId).avatar?.encodedIconBadge
+            ?? NSImage(systemSymbolName: "person.crop.circle.fill", accessibilityDescription: nil)?.tiffRepresentation?.base64EncodedString()
         BrainBridge.shared.send(["op": "event", "event": "icon_candidates", "webview": webviewId,
             "generation": faviconGeneration.uuidString, "url": url.absoluteString, "profile": profileId,
             "candidates": iconCandidates,
-            "profile_badge": (Profile.find(profileId).avatar?.image ?? NSImage(systemSymbolName: "person.crop.circle.fill", accessibilityDescription: nil))?.tiffRepresentation?.base64EncodedString() ?? ""])
+            "profile_badge": badge ?? ""])
     }
 
     var appIconData: Data? {
@@ -1218,6 +1336,25 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
 
     // MARK: WKUIDelegate
 
+    // macOS WebKit asks the embedder for the window frame through this SPI.
+    // Without it, pages see outerWidth/outerHeight as zero. Supply the actual
+    // native frame; WebKit handles the conversion to DOM screen coordinates.
+    @objc(_webView:getWindowFrameWithCompletionHandler:)
+    func webView(_ webView: WKWebView, getWindowFrameWithCompletionHandler completionHandler: @escaping (CGRect) -> Void) {
+        // Fullscreen can move the WKWebView to another window. An inactive tab
+        // can instead be detached while still belonging to its browser window.
+        let host = webView.window ?? BrowserWindowController.host(of: webviewId)?.window ?? window
+        completionHandler(host?.frame ?? .zero)
+    }
+
+    // WebKit decides whether script is allowed to close this browsing context.
+    // Mirror its accepted close in the tab model, including persistence and focus.
+    func webViewDidClose(_ webView: WKWebView) {
+        guard webView === self.webView,
+              let host = BrowserWindowController.host(of: webviewId) else { return }
+        host.closeTab(self, selecting: popupOpener?.webviewId)
+    }
+
     // target=_blank / window.open: open a real tab, with opener lineage.
     func webView(
         _ webView: WKWebView,
@@ -1240,6 +1377,8 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
             configuration: configuration, opener: webviewId,
             activate: intent != .backgroundTab
         )
+        view.uncommittedPopup = true
+        view.popupOpener = self
         return view.webView
     }
 }

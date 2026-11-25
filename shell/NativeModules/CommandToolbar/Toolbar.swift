@@ -4,13 +4,14 @@ import QuartzCore
 // ABI 1: bounded UTF-8 JSON snapshots, generation-tagged copied UTF-8 events,
 // and one retained NSView pointer. No WebKit references or Swift values cross.
 public typealias ToolbarEvent = @convention(c) @Sendable (UInt64, UnsafePointer<CChar>) -> Void
-struct ToolbarButton: Decodable, Identifiable { let id: String; let title: String; let symbol: String? }
-struct SiteMod: Decodable, Identifiable { let id: String; let title: String; let on: Bool }
-struct ToolbarSnapshot: Decodable {
+struct ToolbarButton: Decodable, Equatable, Identifiable { let id: String; let title: String; let symbol: String? }
+struct SiteMod: Decodable, Equatable, Identifiable { let id: String; let title: String; let on: Bool }
+struct ToolbarSnapshot: Decodable, Equatable {
     let siteMods: [SiteMod]?
     let modWidth: Double?
     let permissionsAvailable: Bool?
     let capturing: Bool?
+    let resourceAvailable: Bool?
     let revealed: Bool
     let tint: [Double]?
     let colors: [String: String]
@@ -18,6 +19,17 @@ struct ToolbarSnapshot: Decodable {
     let cornerRadius: Double
     let showNavigation: Bool
     let buttons: [ToolbarButton]
+}
+private struct ToolbarUpdate: Decodable {
+    let layout: ToolbarSnapshot
+    let navigation: ToolbarNavigationState?
+    private enum CodingKeys: String, CodingKey { case navigation }
+
+    init(from decoder: Decoder) throws {
+        layout = try ToolbarSnapshot(from: decoder)
+        let fields = try decoder.container(keyedBy: CodingKeys.self)
+        navigation = try fields.decodeIfPresent(ToolbarNavigationState.self, forKey: .navigation)
+    }
 }
 struct ToolbarTheme {
     var colors: [String: String] = [:]
@@ -38,12 +50,12 @@ struct ToolbarTheme {
     init(title: String, symbol: String? = nil, action: @escaping () -> Void) {
         invoke = action
         super.init(frame: .zero)
-        self.title = title
+        self.title = symbol == nil ? title : ""
         isBordered = false
         setButtonType(.momentaryChange)
         if let symbol {
             image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)?
-                .withSymbolConfiguration(.init(pointSize: 12, weight: .semibold))
+                .withSymbolConfiguration(.init(pointSize: 13, weight: .medium))
             imagePosition = .imageOnly
         }
         target = self; self.action = #selector(clicked)
@@ -73,10 +85,14 @@ struct ToolbarTheme {
 @MainActor final class ToolbarView: NSView {
     private let emit: (String) -> Void
     private var appliedSnapshot: Data?
-    private var pendingSnapshot: ToolbarSnapshot?
+    private var pendingUpdate: ToolbarUpdate?
+    private var renderedLayout: ToolbarSnapshot?
+    private var back: ToolbarControl?
+    private var forward: ToolbarControl?
+    private var reload: ToolbarControl?
+    private var showingStop = false
     private var controls: [NSView] = []
     private let drag = ToolbarWindowDragView()
-    private var tracking: NSTrackingArea?
     private var modsMenu = NSMenu()
     private var widths: [CGFloat] = []
 
@@ -87,25 +103,23 @@ struct ToolbarTheme {
     }
     required init?(coder: NSCoder) { fatalError("init(generation:)") }
     override var mouseDownCanMoveWindow: Bool { false }
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        if let tracking { removeTrackingArea(tracking) }
-        let area = NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self)
-        addTrackingArea(area); tracking = area
-    }
-    override func mouseEntered(with event: NSEvent) { emit("hover:1") }
-    override func mouseExited(with event: NSEvent) { emit("hover:0") }
     override func layout() {
-        if let snapshot = pendingSnapshot {
-            pendingSnapshot = nil
-            render(snapshot)
+        if let update = pendingUpdate {
+            pendingUpdate = nil
+            if renderedLayout != update.layout {
+                render(update.layout)
+                renderedLayout = update.layout
+            }
+            // WebKit can change history or loading state while a control has
+            // keyboard focus. Update those buttons in place.
+            updateNavigation(update.navigation)
         }
         super.layout()
         drag.frame = bounds
         var x: CGFloat = 0
         for (control, width) in zip(controls, widths) {
-            control.frame = NSRect(x: x, y: (bounds.height - 22) / 2, width: width, height: 22)
-            x += width + 7
+            control.frame = NSRect(x: x, y: (bounds.height - 26) / 2, width: width, height: 26)
+            x += width + 3
         }
     }
     @objc private func selectMod(_ item: NSMenuItem) {
@@ -116,11 +130,12 @@ struct ToolbarTheme {
     }
     func apply(_ data: Data) -> Bool {
         if appliedSnapshot == data { return true }
-        guard let value = try? JSONDecoder().decode(ToolbarSnapshot.self, from: data),
-              value.buttons.count <= 128, (value.siteMods?.count ?? 0) <= 128,
+        guard let update = try? JSONDecoder().decode(ToolbarUpdate.self, from: data) else { return false }
+        let value = update.layout
+        guard value.buttons.count <= 128, (value.siteMods?.count ?? 0) <= 128,
               value.cornerRadius.isFinite, (0...12).contains(value.cornerRadius) else { return false }
         appliedSnapshot = data
-        pendingSnapshot = value
+        pendingUpdate = update
         needsLayout = true
         return true
     }
@@ -139,7 +154,7 @@ struct ToolbarTheme {
                 self?.emit(action)
             }
             control.setAccessibilityIdentifier(action)
-            control.contentTintColor = theme.color("button_foreground") ?? .secondaryLabelColor
+            control.contentTintColor = theme.color("button_foreground") ?? .labelColor
             control.fill = theme.color("button_background") ?? .clear
             control.radius = theme.cornerRadius
             control.beveled = theme.buttonStyle == "beveled"
@@ -147,14 +162,12 @@ struct ToolbarTheme {
             return control
         }
         let command = button("Command bar (⌘K)", nil, "command", shortcut: "⌘K")
-        let descriptor = NSFont.systemFont(ofSize: 10.5, weight: .bold).fontDescriptor.withDesign(.rounded)
-        command.attributedTitle = NSAttributedString(string: "⌘+K", attributes: [
-            .font: descriptor.flatMap { NSFont(descriptor: $0, size: 10.5) } ?? NSFont.boldSystemFont(ofSize: 10.5),
-            .kern: 0.8,
-            .foregroundColor: theme.color("button_foreground") ?? (tint == nil ? NSColor.secondaryLabelColor : NSColor.white.withAlphaComponent(0.95))
+        command.attributedTitle = NSAttributedString(string: "⌘K", attributes: [
+            .font: NSFont.systemFont(ofSize: 12, weight: .medium),
+            .foregroundColor: theme.color("button_foreground") ?? .labelColor
         ])
-        command.fill = theme.color("button_background") ?? tint ?? .controlBackgroundColor
-        command.border = theme.color("accent") ?? NSColor(srgbRed: 0.83, green: 0.65, blue: 0.13, alpha: 0.95)
+        command.fill = theme.color("button_background") ?? tint?.withAlphaComponent(0.22) ?? .quaternaryLabelColor
+        command.border = theme.color("accent") ?? .separatorColor
         command.beveled = false
         append(command, width: 50)
         let menuButton = button("Mods for this site", "puzzlepiece.extension", "site-mods")
@@ -176,17 +189,33 @@ struct ToolbarTheme {
             guard let self, let menuButton else { return }
             self.modsMenu.popUp(positioning: nil, at: NSPoint(x: 0, y: menuButton.bounds.minY), in: menuButton)
         }
-        append(menuButton, width: 20)
-        append(button("Back (⌘[)", "chevron.left", "back", shortcut: "⌘["), width: 20)
-        append(button("Forward (⌘])", "chevron.right", "forward", shortcut: "⌘]"), width: 20)
-        append(button("Reload this tab (⌘R)", "arrow.clockwise", "reload", shortcut: "⌘R"), width: 20)
+        append(menuButton, width: 24)
+        let back = button("Back", "chevron.left", "back", shortcut: "⌘[")
+        let forward = button("Forward", "chevron.right", "forward", shortcut: "⌘]")
+        let reload = button("Reload this tab", "arrow.clockwise", "reload", shortcut: "⌘R")
+        back.toolTip = "Back (⌘[)"
+        forward.toolTip = "Forward (⌘])"
+        reload.toolTip = "Reload this tab (⌘R)"
+        reload.invoke = { [weak self] in
+            guard let self else { return }
+            if !self.showingStop { ShortcutGhost.show("⌘R") }
+            self.emit(self.showingStop ? "stop" : "reload")
+        }
+        self.back = back
+        self.forward = forward
+        self.reload = reload
+        showingStop = false
+        for control in [back, forward, reload] { append(control, width: 28) }
+        if value.resourceAvailable == true {
+            append(button("Download file", "arrow.down.to.line", "download-resource"), width: 24)
+        }
         if value.revealed && !value.buttons.isEmpty {
             let scroll = NSScrollView()
             scroll.drawsBackground = false; scroll.hasHorizontalScroller = false; scroll.hasVerticalScroller = false
-            let document = NSView(frame: NSRect(x: 0, y: 0, width: CGFloat(value.buttons.count) * 27 - 7, height: 22))
+            let document = NSView(frame: NSRect(x: 0, y: 0, width: CGFloat(value.buttons.count) * 27 - 3, height: 26))
             for (index, mod) in value.buttons.enumerated() {
                 let control = button(mod.title, mod.symbol ?? "puzzlepiece.extension", "mod:" + mod.id)
-                control.frame = NSRect(x: CGFloat(index) * 27, y: 0, width: 20, height: 22)
+                control.frame = NSRect(x: CGFloat(index) * 27, y: 0, width: 24, height: 26)
                 document.addSubview(control)
             }
             scroll.documentView = document
@@ -199,6 +228,21 @@ struct ToolbarTheme {
             control.toolTip = "Camera or microphone in use — website permissions"
             append(control, width: 24)
         }
+    }
+
+    private func updateNavigation(_ navigation: ToolbarNavigationState?) {
+        back?.isEnabled = navigation?.canGoBack ?? true
+        forward?.isEnabled = navigation?.canGoForward ?? true
+        let isLoading = navigation?.isLoading == true
+        reload?.isEnabled = isLoading || navigation?.canReload != false
+        guard showingStop != isLoading, let reload else { return }
+        showingStop = isLoading
+        let title = isLoading ? "Stop loading" : "Reload this tab"
+        reload.image = NSImage(systemSymbolName: isLoading ? "xmark" : "arrow.clockwise", accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: 13, weight: .medium))
+        reload.setAccessibilityLabel(title)
+        reload.setAccessibilityIdentifier(isLoading ? "stop" : "reload")
+        reload.toolTip = isLoading ? title : "Reload this tab (⌘R)"
     }
 }
 @_cdecl("bowser_toolbar_abi") public func toolbarABI() -> Int32 { 1 }
@@ -267,16 +311,7 @@ private enum ShortcutGhost {
         badge.wantsLayer = true
         badge.drawsBackground = false
         badge.isBordered = false
-        // Only the glyphs cast the halo; no badge fill, border or shadow box.
-        let dark = owner.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        badge.textColor = dark
-            ? NSColor(calibratedRed: 0.9, green: 0.97, blue: 1, alpha: 1)
-            : NSColor(calibratedRed: 0.14, green: 0.3, blue: 0.58, alpha: 1)
-        badge.layer?.masksToBounds = false
-        badge.layer?.shadowColor = NSColor(calibratedRed: 0.35, green: 0.7, blue: 1, alpha: 1).cgColor
-        badge.layer?.shadowOffset = .zero
-        badge.layer?.shadowRadius = 7
-        badge.layer?.shadowOpacity = 0.95
+        ShortcutHintStyle.apply(to: badge, appearance: owner.effectiveAppearance)
         badge.setAccessibilityElement(false)
         canvas.addSubview(badge)
         panel.contentView = canvas

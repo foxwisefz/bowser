@@ -88,7 +88,7 @@ enum BowserAPI {
     }
     static var terms: URL {
         ProcessInfo.processInfo.environment["BOWSER_API_ENDPOINT"] == nil
-            ? URL(string: "https://bowser.app/terms.html")!
+            ? URL(string: "https://www.bowser.app/terms.html")!
             : base.appendingPathComponent("terms.html")
     }
     static func allows(_ url: URL) -> Bool {
@@ -417,14 +417,15 @@ struct OnboardingView: View {
         model.onRegistered = { (NSApp.delegate as? AppDelegate)?.openFirstModGuide(nil) }
         model.hostedAvailable = false
         model.setupMessage = "Checking invitation availability…"
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 860, height: 600), styleMask: [.titled, .closable, .fullSizeContentView], backing: .buffered, defer: false)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 500),
+                              styleMask: [.titled, .closable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
+        window.contentMinSize = NSSize(width: 420, height: 400)
         window.title = "Welcome to Bowser"
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
         window.titlebarSeparatorStyle = .none
-        window.backgroundColor = NSColor(red: 0.035, green: 0.065, blue: 0.075, alpha: 1)
+        window.backgroundColor = .windowBackgroundColor
         window.isMovableByWindowBackground = true
-        window.appearance = NSAppearance(named: .darkAqua)
         window.isReleasedWhenClosed = false
         window.contentView = NSHostingView(rootView: OnboardingView(model: model) { [weak self] in
             self?.window?.close(); self?.window = nil

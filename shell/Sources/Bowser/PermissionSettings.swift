@@ -12,38 +12,55 @@ import WebKit
     @Published private(set) var error: String?
     private let store: SitePermissionStore
     private var timer: Timer?
+    private let presentingWindows = NSHashTable<NSWindow>.weakObjects()
     var profiles: [SurfaceProfile] {
         Profile.all.filter { SiteAppConfiguration.current == nil || $0.id == selectedProfile }.map {
             SurfaceProfile(id: $0.id, name: $0.name, tint: $0.tint, icon: $0.icon, avatar: $0.character)
         }
     }
     init(store: SitePermissionStore = .shared) { self.store = store }
-    func start() {
-        refresh()
-        if timer == nil {
+    func monitor(_ window: NSWindow, showingPermissions: Bool) {
+        if showingPermissions && window.occlusionState.contains(.visible) {
+            presentingWindows.add(window)
+        } else {
+            presentingWindows.remove(window)
+        }
+        if presentingWindows.allObjects.isEmpty {
+            timer?.invalidate()
+            timer = nil
+        } else if timer == nil {
+            refresh()
             timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
-                Task { @MainActor in self?.refresh() }
+                MainActor.assumeIsolated { self?.refresh() }
             }
+            timer?.tolerance = 0.2
         }
     }
     func show(_ engine: EngineView?) {
         if let engine { selectedProfile = engine.profileId; selectedOrigin = SitePermissionKey.origin(engine.webView.url) }
-        start()
+        refresh()
     }
     func refresh() {
         let saved = store.entries.keys.filter { $0.profile == selectedProfile }.map(\.origin)
-        sites = Array(Set(saved)).sorted()
-        if !sites.contains(selectedOrigin ?? "") { selectedOrigin = sites.first }
-        refreshControls()
+        let updated = Array(Set(saved)).sorted()
+        if updated != sites { sites = updated }
+        if !sites.contains(selectedOrigin ?? ""), selectedOrigin != sites.first {
+            selectedOrigin = sites.first
+        } else {
+            refreshControls()
+        }
     }
     private func engines() -> [EngineView] {
         guard let selectedOrigin else { return [] }
         return EngineView.live.values.filter { $0.profileId == selectedProfile && SitePermissionKey.origin($0.webView.url) == selectedOrigin }
     }
     private func refreshControls() {
-        guard let origin = selectedOrigin else { controls = []; return }
+        guard let origin = selectedOrigin else {
+            if !controls.isEmpty { controls = [] }
+            return
+        }
         let tabs = engines()
-        controls = SitePermissionKey.kinds.map { kind in
+        let updated = SitePermissionKey.kinds.map { kind in
             let status: String
             if kind == "notifications" {
                 status = SiteAppConfiguration.current == nil ? "Available in saved apps; Web Push is not supported." : "macOS notification settings also apply."
@@ -58,6 +75,7 @@ import WebKit
             return PermissionControl(id: kind, title: kind.capitalized, choice: store.decision(profile: selectedProfile, origin: origin, kind: kind),
                 status: status, active: active, available: kind != "notifications" || SiteAppConfiguration.current != nil)
         }
+        if controls != updated { controls = updated }
     }
     func set(_ kind: String, choice: String) {
         guard let origin = selectedOrigin else { return }
@@ -90,7 +108,7 @@ import WebKit
     }
 }
 
-@MainActor final class SitePermissionsWindow: NSObject {
+@MainActor final class SitePermissionsWindow: NSObject, NSWindowDelegate {
     static let shared = SitePermissionsWindow()
     private var window: NSWindow?
     @objc func show(_ sender: Any? = nil) {
@@ -104,8 +122,16 @@ import WebKit
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 500), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
             window.isReleasedWhenClosed = false; window.title = "Website Permissions"
             window.contentView = NSHostingView(rootView: LiveBrowserScreen(kind: "permissions", model: PermissionSettingsModel.shared))
+            window.delegate = self
             window.center(); self.window = window
         }
         window?.makeKeyAndOrderFront(nil)
+        if let window { PermissionSettingsModel.shared.monitor(window, showingPermissions: true) }
+    }
+    func windowDidChangeOcclusionState(_ notification: Notification) {
+        if let window { PermissionSettingsModel.shared.monitor(window, showingPermissions: window.isVisible) }
+    }
+    func windowWillClose(_ notification: Notification) {
+        if let window { PermissionSettingsModel.shared.monitor(window, showingPermissions: false) }
     }
 }

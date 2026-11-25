@@ -76,7 +76,7 @@ defmodule BowserBrain.ModSmith do
     end
   end
 
-  def build_prompt(request, url, host, digest, existing, catalog) do
+  def build_prompt(request, url, host, digest, existing, catalog, scope \\ "site") do
     existing_block =
       case existing do
         [] ->
@@ -128,6 +128,15 @@ defmodule BowserBrain.ModSmith do
     {"tier":"payload"|"mod","summary":"<one line>","files":[{"path":"...","content":"..."}],"notes":"<caveats>"}
 
     TIERS:
+    #{if scope == "browser" do
+      """
+      Use tier "mod": an Elixir module under mods/*.ex using BowserBrain.Mod without host:.
+      Across Bowser is the owner's explicit selection. Site payloads under sites/<host>/
+      cannot provide browser-wide behavior. Use Page.set_scripts/set_styles from the mod
+      when the feature interacts with webpage DOM. In-page rendering does not imply site scope.
+      """
+    else
+      """
     - "payload" (preferred for deterministic styling and DOM changes): files under sites/#{host}/ named *.css or *.js.
       They are auto-injected on every page of #{host}, persistently. CSS over JS
       when possible. To change an existing payload, return the same path with new
@@ -136,6 +145,9 @@ defmodule BowserBrain.ModSmith do
       background processing are required): one file under mods/*.ex,
       an Elixir module using the mod API below. A site-scoped mod runs on BEAM;
       site scope limits which pages it serves, not its runtime to page JavaScript.
+
+      """
+    end}
 
     HARD RULES: paths only under sites/ or mods/; never read or touch password,
     credit-card, or one-time-code fields; keep CSS resilient (avoid brittle
@@ -150,7 +162,17 @@ defmodule BowserBrain.ModSmith do
     Generated Elixir can use available runtime libraries and native I/O as needed
     for the requested feature, subject to the independent code security audit.
     Keep blocking work off callbacks using supervised asynchronous work with
-    timeouts, bounded concurrency, and cleanup. Do not invent unlisted Bowser APIs
+    timeouts, bounded concurrency, and cleanup. Inside `use BowserBrain.Mod`,
+    Task and Task.Supervisor preserve the calling mod's profile and ownership.
+    For example, create a mod-owned supervisor in init_mod with
+    Task.Supervisor.start_link(name: MyMod.Workers), then start work with
+    Task.Supervisor.start_child(MyMod.Workers, fn -> ... end). Handle errors and
+    report completion from that worker. No BowserBrain.TaskSupervisor is provided.
+    Task.Supervisor also supports start_link/0,1, child_spec/1, children/1,
+    terminate_child/2, async/2,3,4,5, async_nolink/2,3,4,5, start_child/2,3,4,5,
+    async_stream/3,4,5,6 and async_stream_nolink/3,4,5,6 (function and MFA forms).
+    Await async tasks or handle their reply and monitor messages; bound streams
+    with max_concurrency and timeout. Do not invent unlisted Bowser APIs
     or assume an executable/library exists without checking through supported
     tools or an audited, feature-related mod. Never use a mod to bypass a denied
     tool or security audit.
@@ -175,6 +197,28 @@ defmodule BowserBrain.ModSmith do
     not silently install software or perform unrequested consequential actions.
     A previous assistant's blocker claim is not evidence: reassess it on resume.
 
+    UI DESIGN: deliver a considered first version without waiting for a second
+    request to make it elegant. Before composing a UI, identify the owner's main
+    task, the content they need to scan, and the primary action. Choose a layout
+    that fits that task and their style preferences. Familiar interaction patterns
+    should make it immediately usable; avoid assembling a generic pile of controls.
+    Build a clear hierarchy with semantic type, aligned rows, balanced spacing,
+    concise labels and restrained accents. Use adaptive colors with readable
+    secondary text in both light and dark appearances. Polish comes from coherent
+    proportions and interaction, not adding gradients, oversized headings, cards,
+    emoji or decorative controls indiscriminately. Respect native panel chrome.
+    Every visible action must serve the requested workflow and name its effect.
+    Available browser context does not by itself justify page capture, bookmarking,
+    or other extra features. Include contextual actions only when they contribute
+    to the owner's goal and their purpose is clear. Do not silently expand scope.
+    Review empty, typical and overflowing content; long labels; narrow layouts;
+    keyboard entry; and feedback after the primary action. Use bounded scrolling
+    for growing content while keeping essential creation controls reachable.
+    Install and exercise the result, inspect screenshots of surfaces the tools can
+    actually capture, and correct visible problems before finishing. Source/tree
+    inspection is not visual verification. If a floating panel or an appearance
+    cannot be captured with available tools, report that limitation accurately.
+
     MODIFY RULE: the EXISTING MODS catalog below is what the owner already has.
     If the request refers to behavior that exists — by name, by what it does,
     or by its site — MODIFY that file: read_mod it first, keep everything you
@@ -189,6 +233,17 @@ defmodule BowserBrain.ModSmith do
     unfinished parts go in "notes". If time runs out you will be asked to return
     what you have; a partial working envelope beats a lost run.
 
+    #{if scope == "browser" do
+      """
+      SCOPE RULE: Across Bowser. The current URL and DOM are a test page, not a host
+      restriction. Do not narrow scope based on that page or earlier site-specific drafts.
+      Make the feature available across websites within the owning profile. Use generic DOM
+      handling and verify navigation/tab behavior, not just this one page. Provide a browser
+      entry point for user-triggered features. Page effects may render inside each webpage;
+      choose controls according to the requested experience rather than the test site's layout.
+      """
+    else
+      """
     SCOPE RULE: a request about a specific page/site must be limited to that
     site by default. Payloads are auto host-scoped. A tier-"mod" for
     page-specific behavior MUST declare its host directly in a top-level defmodule:
@@ -198,6 +253,9 @@ defmodule BowserBrain.ModSmith do
     — events from tabs on other sites then never reach handle_event
     (subdomains included). Omit host: ONLY for genuinely browser-wide mods
     (tab docks, global chrome).
+
+      """
+    end}
 
     CONTROL PLACEMENT: for page/site-specific mods, default to compact IN-PAGE
     controls beside the content they affect (for example, beside search results).
@@ -238,7 +296,8 @@ defmodule BowserBrain.ModSmith do
     ELIXIR AUDIT IS AUTOMATIC: Call put_mod(name, content) with your draft. Bowser runs a separate tool-free LLM audit INSIDE that tool call before writing or compiling. There is deliberately no audit tool for you to invoke and no separate reviewer to locate. The final files envelope also triggers the same gate. Do not infer that auditing is unavailable from the tool list; only report an audit failure actually returned by put_mod or the final installer. Only explicit exact-source approval permits activation; reject/uncertain/unavailable/malformed/timeout blocks it. Never claim runtime verification if audit fails. Accepted mods still have full OS privileges; this is not a sandbox.
 
     APIs: BowserBrain.Browser.navigate(url); BowserBrain.Page.eval(js, webview: 0) ->
-    {:ok,val}; Page.set_styles([css]); Page.set_scripts([js]) (engine-injected, owner-keyed);
+    {:ok,val} | {:error,reason}; Page.set_styles([css]); Page.set_scripts([js]) (engine-injected, owner-keyed);
+    Page.eval/1,2 and page_eval results must be plain JSON-compatible data. Circular references, non-finite numbers, nesting deeper than 64 levels, or more than 100,000 values return an explicit error. Extract needed fields or request smaller batches.
     Disabling/deleting a mod removes its registered scripts and styles and reloads affected pages; Store data survives.
     BowserBrain.Chrome.add_button(id, title, symbol: "sfsymbol");
     Chrome.put_toolbar("status", BowserBrain.View.hstack([
@@ -267,8 +326,8 @@ defmodule BowserBrain.ModSmith do
     create a browser-wide tier-mod and call set_theme in init_mod and on
     mod_reloaded. Keys are optional; colors MUST be #rrggbb; button_style is
     "flat" or "beveled"; title_size 9..16; corner_radius 0..12; show_navigation
-    is boolean; core navigation stays visible in the compact notch regardless of this value.
-    The active favicon stays visible and the title expands on hover; the controls sit in a compact left notch and profile identity has a separate right notch. Pages have no reserved toolbar inset.
+    is boolean; core navigation stays visible in the native toolbar regardless of this value.
+    The native translucent toolbar keeps controls and the active address visible, with profile identity in the same bar when multiple profiles exist. Pages begin below the toolbar.
     No arbitrary native CSS or layout changes. There is no native
     tab strip: tab UI is a separate mod Surface. Do not claim to have styled
     tabs with set_theme. Chrome.theme() reads the effective map;
@@ -283,6 +342,17 @@ defmodule BowserBrain.ModSmith do
     Reload ⌘R, Actual Size/Zoom In/Out ⌘0/⌘+/⌘-, Enter Full Screen — never duplicate those.
     BowserBrain.Surface.show(id, view, title: "T", anchor: :right_of_main) with
     import BowserBrain.View: vstack/hstack(list, opts), text(v, style: :title|:caption),
+    scroll(content, opts) (1,2): a bounded native viewport around one tree.
+    axis: :vertical (default), :horizontal or :both; indicators: true (default).
+    Default viewport height is 320 points. Set height: or max_height:, or
+    fill_height: true inside a bounded, full-height parent. Use stable key: on
+    the scroll node and record IDs on repeated children to retain position.
+    Growing collections MUST have a bounded scroll viewport; stacks/grids alone
+    do not scroll. Keep headings and creation controls outside the scroll node:
+    vstack([text("Recent", style: :caption), scroll(vstack(rows), key: :items,
+      height: 320), action("Add item", event: :add)]).
+    Verify short and overflowing lists, reach the last row, and interact there.
+    Other builders:
     button(label, event:, payload:, active:, symbol:, indent:), slider(event, min:, max:,
     value:, label:), textfield(event, placeholder:, value:), colorpicker(event, value: "#rrggbb",
     label:) (sends "#rrggbb", debounced), divider(), particles(chars: ["♪"],
@@ -654,8 +724,11 @@ defmodule BowserBrain.ModSmith do
     dimmed items. Strip options: header: / footer: ordinary view trees,
     header_height: / footer_height: points (0–240, default 48), header_outside: true
     excludes the header from the notch backing, chrome: "notch", background: hex.
-    Overflowing strips scroll vertically with fixed header/footer slots and stable
-    row spacing. Changing the active item scrolls it into view.
+    The pointer anchors a smooth lens that enlarges icons and opens space between
+    neighboring rows. Overflowing strips scroll with fixed header/footer slots
+    and a stable scroll range during hover. Reduced motion disables magnification.
+    Changing the active item scrolls it into view. Active items use a clear
+    accent-colored outline instead of the recency halo and share the strip's lens motion.
     profile_avatar(profile_id) / profile_avatar(profile_id, opts), and
     profile_name(profile_id) / profile_name(profile_id, opts),
     bind to local profile identity (no remote asset URL); size: points (8–128).
@@ -680,6 +753,7 @@ defmodule BowserBrain.ModSmith do
     it in your "hello" handler, not just in init_mod (init often runs before the
     bridge connects and casts are silently dropped). Pages can push to mods via
     window.bowser.emit(payload) in injected JS -> event "page" {payload}.
+    Emitted payloads use the same JSON conversion limits as Page.eval; invalid payloads are dropped and reported as console errors.
 
     CONTEXT:
     Current URL: #{url}
@@ -701,16 +775,16 @@ defmodule BowserBrain.ModSmith do
   def run_audit(prompt) do
     if BowserBrain.AI.route() == :cli, do: run_cli_audit(prompt), else: BowserBrain.DirectAgent.audit(prompt)
   end
-  def run_verification(prompt, images \\ []) do
+  def run_verification(prompt, images \\ [], kind \\ "mod") do
     if BowserBrain.AI.route() == :cli do
-      run_cli_audit(prompt, BowserBrain.ModVerification.instructions())
+      run_cli_audit(prompt, BowserBrain.ModVerification.instructions(kind))
     else
       content = [%{"type" => "input_text", "text" => prompt}] ++ Enum.flat_map(images, fn image ->
         [%{"type" => "input_text", "text" => "Image for receipt #{image.id}"},
          %{"type" => "input_image", "image_url" => "data:image/png;base64," <> image.data}]
       end)
       with {:ok, output} <- BowserBrain.DirectAgent.completion(BowserBrain.AI.route(),
-        [%{"role" => "user", "content" => content}], [], BowserBrain.ModVerification.instructions()) do
+        [%{"role" => "user", "content" => content}], [], BowserBrain.ModVerification.instructions(kind)) do
         {:ok, Enum.flat_map(output, &(&1["content"] || [])) |> Enum.map_join("", &(&1["text"] || ""))}
       end
     end
@@ -748,18 +822,20 @@ defmodule BowserBrain.ModSmith do
 
   def run_claude(prompt, resume, on_progress, app) do
     if BowserBrain.AI.route() == :cli,
-      do: verified_cli(prompt, resume, on_progress, app, 0),
+      do: verified_cli(prompt, if(is_binary(resume), do: resume), on_progress, app, 0),
       else: BowserBrain.DirectAgent.run(prompt, resume, on_progress, app)
   end
   defp verified_cli(prompt, resume, progress, app, retries) do
     case run_cli(prompt, resume, progress, app) do
       {session, {:output, output}} = result ->
+        if Process.get(:modsmith_kind) == "task" and BowserBrain.ModVerification.active?(output),
+          do: progress.("Checking the task result…")
         case BowserBrain.ModVerification.check(output, Process.get(:modsmith_run)) do
           :ok -> result
           {:error, reason} when retries < 2 ->
             progress.("Checking the outcome and repairing what remains…")
-            verified_cli(prompt <> "\n" <> BowserBrain.ModVerification.correction(reason), session, progress, app, retries + 1)
-          {:error, reason} -> {session, {:output, BowserBrain.ModVerification.partial(output, reason)}}
+            verified_cli(prompt <> "\n" <> BowserBrain.ModVerification.correction(reason, Process.get(:modsmith_kind, "mod")), session, progress, app, retries + 1)
+          {:error, reason} -> {session, {:output, BowserBrain.ModVerification.partial(output, reason, Process.get(:modsmith_kind, "mod"))}}
         end
       result -> result
     end
@@ -813,7 +889,7 @@ defmodule BowserBrain.ModSmith do
             finish_args =
               [
                 "-p",
-                finish_prompt(),
+                if(Process.get(:modsmith_kind) == "task", do: BowserBrain.PageTask.finish_instruction("this run reached its time limit"), else: finish_prompt()),
                 "--output-format",
                 "stream-json",
                 "--verbose",
@@ -829,7 +905,9 @@ defmodule BowserBrain.ModSmith do
               _ ->
                 {session,
                  {:error,
-                  "timed out after #{div(timeout, 1000)}s — session saved, :do+ to continue"}}
+                  if(Process.get(:modsmith_kind) == "task",
+                    do: "The task reached its time limit. Your progress is saved; resume to continue.",
+                    else: "timed out after #{div(timeout, 1000)}s — session saved, :do+ to continue")}}
             end
 
           {:timeout, _none} ->
@@ -884,6 +962,11 @@ defmodule BowserBrain.ModSmith do
     installed drafts by path; include contents only for new or changed files, and describe what is unfinished in "notes". If nothing is usable
     yet, reply with a zero-file envelope explaining the blocker in plain language
     and the specific next step the owner can take. Do not mention internal agents.
+    Keep the summary to one or two short sentences about what works and what is
+    still unfinished or untested. Do not expose request counts or budget terminology.
+    A run ending is not a request for an owner decision; use partial when work can
+    continue without their input. Put actual observations in checks and concrete
+    limitations in notes, without repeating the summary.
     """
   end
 
@@ -1144,7 +1227,8 @@ defmodule BowserBrain.ModSmith do
         do: %{"BOWSER_SITE_APP_ID" => app["id"], "BOWSER_HOME" => BowserBrain.Paths.home()},
         else: %{"BOWSER_HOME" => BowserBrain.Paths.home()}
 
-    env = Map.put(env, "BOWSER_MODSMITH_RUN", Process.get(:modsmith_run, ""))
+    env = env |> Map.put("BOWSER_MODSMITH_RUN", Process.get(:modsmith_run, ""))
+      |> Map.put("BOWSER_MODSMITH_KIND", Process.get(:modsmith_kind, "mod"))
     File.mkdir_p!(Path.dirname(config))
 
     File.write!(
@@ -1156,7 +1240,9 @@ defmodule BowserBrain.ModSmith do
       })
     )
 
-    ["--mcp-config", config, "--allowedTools", @mcp_tools] ++
+    allowed = if Process.get(:modsmith_kind) == "task",
+      do: Enum.map_join(BowserBrain.PageTask.tools(), ",", &("mcp__bowser__" <> &1)), else: @mcp_tools
+    ["--mcp-config", config, "--allowedTools", allowed] ++
       ["--tools", "", "--strict-mcp-config", "--disable-slash-commands"] ++ isolation_args()
   end
 

@@ -31,9 +31,9 @@ import BowserSurfaceKit
             context.values["showDetails"] = true
             let slot = NativeModuleSlot(fallback: NSView(), kind: .surfaces)
             slot.setSnapshot(try JSONSerialization.data(withJSONObject: ["screen": context.id]))
-            XCTAssertTrue(slot.install(a))
+            XCTAssertTrue(slot.install(a), "First renderer should adopt the \(context.kind) screen")
             let old = try XCTUnwrap(slot.subviews.last)
-            XCTAssertTrue(slot.install(b))
+            XCTAssertTrue(slot.install(b), "Second renderer should adopt the \(context.kind) screen")
             XCTAssertFalse(slot.subviews.last === old)
             XCTAssertEqual(context.values["showDetails"] as? Bool, true)
             if context.kind == "palette" {

@@ -1,11 +1,13 @@
 """Test the native updater executable, not an imported duplicate implementation."""
 import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
 TOOL = ROOT / 'shell/.build/debug/BowserRuntimeTool'
@@ -61,6 +63,107 @@ class UpdateTests(unittest.TestCase):
         self.manifest['backup_required'] = True
         self.pending.write_text(json.dumps(self.manifest))
         (self.root/'session.json').write_text('real session')
+
+    def recovery_fixture(self, age, value='saved session', format=2):
+        snapshot = self.root/'backups'/f'{1700000000 + age}-{uuid.uuid4()}'
+        snapshot.mkdir(parents=True)
+        (snapshot/'0').write_text(value)
+        document = dict(format=format, created_at=1700000000 + age,
+                        installation=self.manifest,
+                        entries=[dict(target=str(self.root/'session.json'), payload='0',
+                                      inventory={'.': hashlib.sha256(value.encode()).hexdigest()})])
+        (snapshot/'snapshot.json').write_text(json.dumps(document))
+        return snapshot
+
+    def test_successful_backup_retains_three_recent_recovery_points(self):
+        old = [self.recovery_fixture(i, format=1 if i == 0 else 2) for i in range(5)]
+        self.require_backup()
+        result = self.run_tool('apply-update', self.pending)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual([p.exists() for p in old], [False, False, False, True, True])
+        self.assertEqual(len(list((self.root/'backups').glob('*/snapshot.json'))), 3)
+        self.assertEqual((self.root/'session.json').read_text(), 'real session')
+
+    def test_cleanup_preview_pins_and_unrecognized_paths(self):
+        snapshots = [self.recovery_fixture(i) for i in range(6)]
+        (snapshots[0]/'.keep').touch()
+        backups = self.root/'backups'
+        (backups/'unrecognized').mkdir()
+        (backups/'.in-progress').mkdir()
+        # A named snapshot symlink must never become a deletion candidate.
+        linked = backups/f'1600000000-{uuid.uuid4()}'
+        linked.symlink_to(snapshots[1], target_is_directory=True)
+        foreign = self.recovery_fixture(7)
+        document = json.loads((foreign/'snapshot.json').read_text())
+        document['installation']['home'] = '/tmp/unrelated-bowser'
+        (foreign/'snapshot.json').write_text(json.dumps(document))
+        result = self.run_tool('cleanup-backups', self.root)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f'Remove: {snapshots[1]}', result.stdout)
+        self.assertTrue(all(p.exists() for p in snapshots))
+        result = self.run_tool('cleanup-backups', self.root, '--apply')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual([p.exists() for p in snapshots], [True, False, False, True, True, True])
+        self.assertTrue(linked.is_symlink())
+        self.assertTrue(foreign.exists())
+        self.assertTrue((backups/'unrecognized').exists())
+        self.assertTrue((backups/'.in-progress').exists())
+
+    def test_cleanup_refuses_corrupt_retained_backup_before_deleting_anything(self):
+        snapshots = [self.recovery_fixture(i) for i in range(5)]
+        (snapshots[-1]/'0').write_text('corrupted')
+        result = self.run_tool('cleanup-backups', self.root, '--apply')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('failed verification', result.stderr)
+        self.assertTrue(all(p.exists() for p in snapshots))
+
+    def test_cleanup_verifies_payloads_larger_than_hash_read_buffer(self):
+        snapshots = [self.recovery_fixture(i) for i in range(4)]
+        payload = b'backup payload\n' * 200000 + b'end'
+        (snapshots[-1]/'0').write_bytes(payload)
+        metadata = snapshots[-1]/'snapshot.json'
+        document = json.loads(metadata.read_text())
+        document['entries'][0]['inventory']['.'] = hashlib.sha256(payload).hexdigest()
+        metadata.write_text(json.dumps(document))
+        result = self.run_tool('cleanup-backups', self.root, '--apply')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(snapshots[0].exists())
+        self.assertEqual((snapshots[-1]/'0').read_bytes(), payload)
+
+    def test_cleanup_serializes_with_updates_and_rejects_symlink_root(self):
+        snapshots = [self.recovery_fixture(i) for i in range(4)]
+        with open(self.root/'updates/pending.lock', 'w') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            self.assertNotEqual(self.run_tool('cleanup-backups', self.root, '--apply').returncode, 0)
+        self.assertTrue(all(p.exists() for p in snapshots))
+        (self.root/'backups').rename(self.root/'other')
+        (self.root/'backups').symlink_to(self.root/'other', target_is_directory=True)
+        self.assertNotEqual(self.run_tool('cleanup-backups', self.root, '--apply').returncode, 0)
+        self.assertEqual(len(list((self.root/'other').iterdir())), 4)
+
+    def test_restore_old_snapshot_survives_retention_of_pre_restore_backup(self):
+        snapshots = [self.recovery_fixture(i, value=f'session {i}') for i in range(5)]
+        self.pending.unlink()
+        (self.root/'session.json').write_text('current session')
+        result = self.run_tool('restore-backup', snapshots[0])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.root/'session.json').read_text(), 'session 0')
+        self.assertTrue(snapshots[0].exists())
+        self.assertFalse(snapshots[1].exists())
+        self.assertFalse(snapshots[2].exists())
+
+    def test_failed_backup_does_not_prune_existing_recovery_points(self):
+        snapshots = [self.recovery_fixture(i) for i in range(5)]
+        self.require_backup()
+        # A source that cannot be read must not cause old snapshots to be pruned.
+        session = self.root/'session.json'
+        session.chmod(0)
+        try:
+            result = self.run_tool('apply-update', self.pending)
+        finally:
+            session.chmod(0o600)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertTrue(all(p.exists() for p in snapshots))
 
     def test_offline_update_backs_up_and_restores_only_user_data(self):
         self.require_backup()

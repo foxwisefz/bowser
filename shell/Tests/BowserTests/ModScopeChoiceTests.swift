@@ -24,6 +24,29 @@ import BowserSurfaceKit
         XCTAssertEqual(choice.selected, "site")
         XCTAssertTrue(choice.manual)
     }
+    func testIntentSuggestionCannotOverrideManualModeOrFrozenSubmission() async throws {
+        let choice = ModScopeChoice()
+        choice.reset(url: "https://example.com")
+        var id = ""
+        choice.request = { requestID, _, _ in id = requestID }
+        choice.update("Always hide distractions")
+        try await Task.sleep(for: .milliseconds(450))
+        choice.receive(id: id, choice: "site", kind: "mod")
+        XCTAssertEqual(choice.kind, "mod")
+        choice.chooseKind("task")
+        choice.update("Add a reusable button")
+        try await Task.sleep(for: .milliseconds(450))
+        choice.receive(id: id, choice: "browser", kind: "mod")
+        XCTAssertEqual(choice.kind, "task")
+        XCTAssertEqual(choice.selected, "browser")
+        choice.reset(url: "https://example.com")
+        choice.update("Export this table")
+        try await Task.sleep(for: .milliseconds(450))
+        choice.freeze()
+        choice.receive(id: id, choice: "browser", kind: "mod")
+        XCTAssertEqual(choice.kind, "task")
+    }
+
     func testSubmissionFreezesSelectionAndTimeoutRetainsDefault() async throws {
         let choice = ModScopeChoice()
         choice.reset(url: "https://example.com")

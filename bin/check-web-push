@@ -4,7 +4,26 @@ set -euo pipefail
 repo="$(cd "$(dirname "$0")/.." && pwd -P)"
 out="$(mktemp -d /tmp/bowser-push-proof.XXXXXXXX)"
 identity="${BOWSER_SIGN_IDENTITY:?Set BOWSER_SIGN_IDENTITY to a normal Developer ID identity}"
+provider_check="${BOWSER_PUSH_PROVIDER_CHECK:-0}"
+case "$provider_check" in 0|1|webkit-test) ;; *) echo 'BOWSER_PUSH_PROVIDER_CHECK must be 0, 1 or webkit-test' >&2; exit 2 ;; esac
 app="$out/BowserPushProbe.app"
+server_pid=""
+provider_service=""
+provider_label=""
+provider_registered=0
+cleanup() {
+  if [ -n "$server_pid" ]; then
+    kill "$server_pid" 2>/dev/null || true
+    wait "$server_pid" 2>/dev/null || true
+  fi
+  if [ "$provider_registered" = 1 ]; then
+    launchctl bootout "gui/$(id -u)/$provider_label"
+    printf '%s\n' 'Temporary provider removed.' > "$out/provider-cleanup.txt"
+  fi
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 mkdir -p "$app/Contents/MacOS" "$out/home"
 clang -fobjc-arc -fmodules -framework AppKit -framework WebKit \
   "$repo/tests/web-push-probe/Probe.m" -o "$app/Contents/MacOS/Probe"
@@ -19,12 +38,47 @@ PLIST
 codesign --force --options runtime --sign "$identity" "$app"
 codesign --verify --strict "$app"
 codesign -d --entitlements - "$app" > "$out/signing.txt" 2>&1
+if [ "$provider_check" != 0 ]; then
+  clang -fobjc-arc -fmodules -framework Foundation \
+    "$repo/tests/web-push-probe/Provider.m" -o "$out/Provider"
+  codesign --force --options runtime --sign "$identity" "$out/Provider"
+  codesign --verify --strict "$out/Provider"
+  provider_label="com.foxwiseai.bowser.pushprobe.$(uuidgen)"
+  provider_service="$provider_label"
+  if [ "$provider_check" = webkit-test ]; then
+    # WebKit's own explicit testing hook, never an Apple production service.
+    # Keep our launchd label unique; cleanup must only remove our own job.
+    provider_service="org.webkit.webpushtestdaemon.service"
+    python3 "$repo/tests/web-push-probe/check-test-service.py" "$out"
+  fi
+  capture_start="$(date '+%Y-%m-%d %H:%M:%S')"
+  python3 - "$out" "$provider_service" "$provider_label" <<'PY'
+import pathlib, plistlib, sys
+out = pathlib.Path(sys.argv[1]); service = sys.argv[2]; label = sys.argv[3]
+(out/'provider.plist').write_bytes(plistlib.dumps({
+    'Label': label, 'ProgramArguments': [str(out/'Provider'), service],
+    'MachServices': {service: True}, 'ProcessType': 'Interactive',
+    'StandardOutPath': str(out/'provider.jsonl'), 'StandardErrorPath': str(out/'provider.stderr'),
+}))
+PY
+  launchctl bootstrap "gui/$(id -u)" "$out/provider.plist"
+  provider_registered=1
+  "$out/Provider" --ping "$provider_service" > "$out/provider-control.jsonl"
+  export PROBE_MACH_SERVICE="$provider_service"
+else
+  unset PROBE_MACH_SERVICE
+fi
 python3 "$repo/tests/web-push-probe/serve.py" "$out/port" > "$out/worker.jsonl" 2>&1 &
 server_pid=$!
-trap 'kill "$server_pid" 2>/dev/null || true' EXIT
 for i in {1..50}; do [ -f "$out/port" ] && break; sleep 0.1; done
 PROBE_ORIGIN="http://127.0.0.1:$(cat "$out/port")" CFFIXED_USER_HOME="$out/home" \
-  "$app/Contents/MacOS/Probe" > "$out/native.jsonl" 2> "$out/stderr.log"
+  python3 - "$app/Contents/MacOS/Probe" > "$out/native.jsonl" 2> "$out/stderr.log" <<'PY'
+import subprocess, sys
+sys.exit(subprocess.run([sys.argv[1]], timeout=50).returncode)
+PY
+if [ "$provider_check" != 0 ]; then
+  python3 "$repo/tests/web-push-probe/assess-provider.py" "$out" "$provider_service" "$capture_start"
+fi
 echo "Evidence: $out"
 cat "$out/native.jsonl" "$out/worker.jsonl"
 python3 - "$out" <<'PY'

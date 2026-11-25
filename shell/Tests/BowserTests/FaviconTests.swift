@@ -29,6 +29,46 @@ final class FaviconTests: XCTestCase {
     }
 
     @MainActor
+    func testToolbarRefreshesReplacedIconAtTheSamePath() async throws {
+        let browser = BrowserWindowController(profile: .defaultProfile)
+        defer { browser.window?.close() }
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .nonPersistent()
+        let tab = browser.openTab(configuration: configuration)
+        let page = try XCTUnwrap(URL(string: "https://favicon.example/"))
+        tab.webView.loadHTMLString("<title>Icon fixture</title>", baseURL: page)
+        for _ in 0..<200 where tab.webView.isLoading || tab.currentURLString == nil {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let toolbar = try XCTUnwrap(browser.window?.toolbar?.delegate as? BrowserToolbar)
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directory = root.appendingPathComponent("app-icons-v2")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let file = directory.appendingPathComponent(TabAppBundle.iconKey(url: page, profile: tab.profileId) + ".png")
+
+        func replaceIcon(_ color: NSColor) throws {
+            let image = NSImage(size: NSSize(width: 16, height: 16), flipped: false) { rect in
+                color.setFill()
+                rect.fill()
+                return true
+            }
+            let cg = try XCTUnwrap(image.cgImage(forProposedRect: nil, context: nil, hints: nil))
+            try XCTUnwrap(NSBitmapImageRep(cgImage: cg).representation(using: .png, properties: [:])).write(to: file, options: .atomic)
+        }
+        try replaceIcon(.red)
+        tab.showCachedFavicon(for: page, root: root)
+        let original = try XCTUnwrap(toolbar.location.image?.tiffRepresentation)
+        // The worker can refresh existing artwork in place while the tab is active.
+        try replaceIcon(.blue)
+        tab.showCachedFavicon(for: page, root: root)
+        let replacement = try XCTUnwrap(toolbar.location.image?.tiffRepresentation)
+        XCTAssertNotEqual(original, replacement)
+        tab.onTitleChange?("New title")
+        XCTAssertEqual(toolbar.location.image?.tiffRepresentation, replacement)
+    }
+
+    @MainActor
     func testInlineSVGProducesNativePNGDespiteBrokenRasterAlternative() async throws {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .nonPersistent()

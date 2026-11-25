@@ -2,6 +2,38 @@ import Foundation
 let toolCatalogJSON = #"""
 [
   {
+    "name": "save_task_file",
+    "description": "Save a UTF-8 JSON, CSV, text or Markdown export for an active Run once task. Use a plain filename, no directories. Creates a unique folder in Downloads/Bowser Tasks, never overwrites files; returns path, bytes, SHA-256 and export time (not an original message timestamp). Limits: 1 MiB per file, 32 files and 8 MiB per task. JSON must be valid. Persisted in task history. Unavailable in mod builds or unscoped calls.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "maxLength": 120,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._ -]*\\.(json|csv|txt|md)$"
+        },
+        "content": {
+          "type": "string",
+          "maxLength": 1048576
+        }
+      },
+      "required": [
+        "name",
+        "content"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "task_files",
+    "description": "List this Run once task’s saved exports with path, byte count, SHA-256, export time, and intact boolean checked against the current file. Use on Resume before exporting again. Includes earlier runs of the same task. Does not read any unrelated files. Requires an active Run once task.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    }
+  },
+  {
     "name": "discover_native_tools",
     "description": "Read-only discovery of 1–8 native executable names on this Mac. Checks the browser PATH plus standard macOS/Homebrew and user-local bin directories; returns available and absolute path. Runs nothing, installs nothing, and does not verify versions or successful feature execution. Use before claiming a dependency is missing or asking for a restart. Not available in saved-app ModSmith runs.",
     "inputSchema": {
@@ -298,7 +330,7 @@ let toolCatalogJSON = #"""
   },
   {
     "name": "put_mod",
-    "description": "Install or update an Elixir mod draft during an active ModSmith run, recording Undo history. Calling this tool automatically runs an independent tool-free source audit before any write or compilation. Submit the draft directly: there is no separate audit tool or prior approval step for the generator. Explicit exact-source approval is required; failure or uncertainty is returned by this tool and blocks installation. Accepted mods retain OS privileges. Returns compilation and startup/reload results; failed compilation or state migration leaves the active mod unchanged. Use state_version/0, pure migrate_state/2 returning {:ok, state} or {:error, reason}, and validate_state/1 returning :ok or {:error, reason} for state-shape changes. Migration runs without browser services and accepts data-only state. Fix errors, then verify runtime behavior. Use shell_theme for native theme state. Not available for saved apps. Reference the installed file by path in the final envelope; omit unchanged content.",
+    "description": "Install or update an Elixir mod draft during an active ModSmith run, recording Undo history. Calling this tool automatically runs an independent tool-free source audit before any write or compilation. Submit the draft directly: there is no separate audit tool or prior approval step for the generator. Explicit exact-source approval is required; failure or uncertainty is returned by this tool and blocks installation. Accepted mods retain OS privileges. Returns compilation and startup/reload results, including runtime.warnings (message, file, line). Repair undefined-call warnings before exercising callbacks: compilation success alone does not make those calls valid. Task and Task.Supervisor inside a mod preserve its profile/ownership; supervised function and MFA forms are supported. Failed compilation or state migration leaves the active mod unchanged. Use state_version/0, pure migrate_state/2 returning {:ok, state} or {:error, reason}, and validate_state/1 returning :ok or {:error, reason} for state-shape changes. Migration runs without browser services and accepts data-only state. Fix errors, then verify runtime behavior. Use shell_theme for native theme state. Not available for saved apps. Reference the installed file by path in the final envelope; omit unchanged content.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -319,7 +351,7 @@ let toolCatalogJSON = #"""
   },
   {
     "name": "shell_theme",
-    "description": "Read the effective native browser theme recorded by the brain. Empty means native defaults. The compact notch keeps core navigation and the favicon visible, reveals the title on hover, and places profile identity in its own right notch. The page has no reserved toolbar inset. This confirms theme state, not visual rendering.",
+    "description": "Read the effective native browser theme recorded by the brain. Empty means native defaults. The native translucent toolbar keeps navigation, the favicon and address visible, with profile identity in the same bar when multiple profiles exist. The page begins below the toolbar. This confirms theme state, not visual rendering.",
     "inputSchema": {
       "type": "object",
       "properties": {}
@@ -335,7 +367,7 @@ let toolCatalogJSON = #"""
   },
   {
     "name": "page_eval",
-    "description": "Evaluate JavaScript in a loaded tab and return the result. webview 0 = first tab; use list_tabs ids to target. Deferred or memory-unloaded tabs return tab_unloaded; activate the tab and wait for load_status 2 before inspecting it.",
+    "description": "Evaluate JavaScript in a loaded tab and return the result. Return plain JSON-compatible data; circular references, non-finite numbers, nesting deeper than 64 levels, or more than 100,000 values return an explicit error. Extract needed fields or request smaller batches. webview 0 = first tab; use list_tabs ids to target. Deferred or memory-unloaded tabs return tab_unloaded; activate the tab and wait for load_status 2 before inspecting it.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -402,7 +434,7 @@ let toolCatalogJSON = #"""
   },
   {
     "name": "read_mod",
-    "description": "Full source of one existing mod or payload by catalog path (mods/<name>.ex or sites/<host>/<name>.css|.js). Disabled (.off) files are found by their plain name too. Only files available to this run can be read.",
+    "description": "Full source of one existing mod or payload by catalog path (mods/<name>.ex or sites/<host>/<name>.css|.js). Disabled (.off) files are found by their plain name too. Only files available to this run can be read. In ModSmith, reading a file already owned by this project allows a final path-only reference while its content remains unchanged. Use this to continue verification without reinstalling the same code. Reading another mod does not transfer ownership.",
     "inputSchema": {
       "type": "object",
       "properties": {

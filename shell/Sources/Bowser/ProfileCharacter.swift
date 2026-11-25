@@ -9,6 +9,15 @@ extension ProfileCharacter {
 
     @MainActor private static var images: [ProfileCharacter: NSImage] = [:]
     @MainActor private static var sheets: [String: CGImage] = [:]
+    @MainActor private static var iconBadges: [ProfileCharacter: String] = [:]
+
+    /// IconJobs includes these bytes in its on-disk cache key.
+    @MainActor var encodedIconBadge: String? {
+        if let cached = Self.iconBadges[self] { return cached }
+        guard let encoded = image?.tiffRepresentation?.base64EncodedString() else { return nil }
+        Self.iconBadges[self] = encoded
+        return encoded
+    }
 
     @MainActor var image: NSImage? {
         if let cached = Self.images[self] { return cached }

@@ -4,6 +4,160 @@ import IconRendering
 @testable import Bowser
 
 final class TabAppDragTests: XCTestCase {
+    /// Keep native dragging out of the test runner while exercising the same
+    /// mouse events and pasteboard writer that AppKit receives in the browser.
+    @MainActor private final class DragHarness: TabAppDragView {
+        var overDock = false
+        var items: [NSDraggingItem] = []
+        var initiatingEvent: NSEvent?
+        let session = NSDraggingSession()
+        override func systemDockContains(_ point: NSPoint) -> Bool { overDock }
+        override func beginDraggingSession(with items: [NSDraggingItem], event: NSEvent,
+                                           source: any NSDraggingSource) -> NSDraggingSession {
+            self.items = items
+            initiatingEvent = event
+            return session
+        }
+    }
+
+    @MainActor func testOrdinaryDragOntoSystemDockExportsAppAndNeverClosesOnCompletion() async throws {
+        SurfaceHostServices.configure()
+        let services = SurfaceServices.shared
+        let oldSnapshot = services.tabSnapshot, oldExport = services.exportTab
+        defer { services.tabSnapshot = oldSnapshot; services.exportTab = oldExport }
+        let host = BrowserWindowController(profile: .defaultProfile)
+        let tab = host.openTab(activate: false)
+        let panel = NSPanel(contentRect: NSRect(x: 100, y: 100, width: 48, height: 200),
+            styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.isReleasedWhenClosed = false
+        let view = DragHarness(frame: NSRect(x: 0, y: 0, width: 48, height: 200))
+        view.webviewID = tab.webviewId
+        panel.contentView = view
+        defer { panel.close(); host.window?.close() }
+        services.tabSnapshot = { _ in SurfaceTabSnapshot(icon: nil, canExport: true) }
+        var exports = 0
+        var failExport = false
+        let app = URL(fileURLWithPath: "/tmp/Dock drag fixture.app")
+        services.exportTab = { id in
+            XCTAssertEqual(id, tab.webviewId)
+            exports += 1
+            if failExport { throw CocoaError(.fileWriteUnknown) }
+            return app
+        }
+        func event(_ type: NSEvent.EventType, x: CGFloat) throws -> NSEvent {
+            try XCTUnwrap(NSEvent.mouseEvent(with: type, location: NSPoint(x: x, y: 80),
+                modifierFlags: [], timestamp: 0, windowNumber: panel.windowNumber,
+                context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+        }
+        for outcome in ["accepted", "rejected", "escape", "exportFailed", "autoHidden"] {
+            view.overDock = false
+            view.items = []
+            exports = 0
+            failExport = outcome == "exportFailed"
+            view.mouseDown(with: try event(.leftMouseDown, x: 24))
+            view.mouseDragged(with: try event(.leftMouseDragged, x: 180))
+            XCTAssertTrue(view.items.isEmpty, "Dragging across another app must remain a local close gesture")
+            view.overDock = true
+            if outcome == "autoHidden" {
+                // Dock appears without another mouseDragged event.
+                try await Task.sleep(for: .milliseconds(250))
+            } else { view.mouseDragged(with: try event(.leftMouseDragged, x: 300)) }
+            let dragX: CGFloat = outcome == "autoHidden" ? 180 : 300
+            XCTAssertEqual(view.items.count, 1, "No modifier is required to drag into the macOS Dock")
+            XCTAssertEqual(view.initiatingEvent?.locationInWindow.x, dragX)
+            XCTAssertEqual(view.items.first?.draggingFrame.midX, dragX)
+            XCTAssertNil(TabDragPreview.shared.target)
+            XCTAssertTrue(services.hasInteractions, "The source renderer stays alive through native dragging")
+            XCTAssertEqual(exports, 0, "Preparing the drag does not build or sign an app")
+            let item = try XCTUnwrap(view.items.first?.item as? NSPasteboardItem)
+            XCTAssertEqual(item.string(forType: TabAppDragView.tabType), String(tab.webviewId))
+            XCTAssertTrue(item.types.contains(.fileURL))
+            if outcome == "accepted" || failExport {
+                // Use a real pasteboard to request the delayed representation.
+                let board = NSPasteboard.withUniqueName()
+                defer { board.releaseGlobally() }
+                board.writeObjects([item])
+                XCTAssertEqual(board.string(forType: .fileURL), failExport ? nil : app.absoluteString)
+                XCTAssertEqual(exports, 1)
+            }
+            if outcome == "escape" { view.cancelOperation(nil) }
+            view.draggingSession(view.session, endedAt: NSPoint(x: 400, y: 180),
+                operation: outcome == "accepted" ? .copy : [])
+            view.mouseUp(with: try event(.leftMouseUp, x: 300))
+            XCTAssertTrue(host.tabs.contains { $0 === tab }, "\(outcome) must keep the original tab")
+            XCTAssertNil(TabDragPreview.shared.source)
+            XCTAssertFalse(services.hasInteractions)
+        }
+    }
+
+    @MainActor func testDockAppearingAtReleaseOrUnsupportedTabDoesNotClose() throws {
+        SurfaceHostServices.configure()
+        let host = BrowserWindowController(profile: .defaultProfile)
+        let tab = host.openTab(activate: false)
+        let panel = NSPanel(contentRect: NSRect(x: 100, y: 100, width: 48, height: 200),
+            styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.isReleasedWhenClosed = false
+        let view = DragHarness(frame: NSRect(x: 0, y: 0, width: 48, height: 200))
+        view.webviewID = tab.webviewId
+        panel.contentView = view
+        defer { panel.close(); host.window?.close() }
+        func event(_ type: NSEvent.EventType, x: CGFloat) throws -> NSEvent {
+            try XCTUnwrap(NSEvent.mouseEvent(with: type, location: NSPoint(x: x, y: 80),
+                modifierFlags: [], timestamp: 0, windowNumber: panel.windowNumber,
+                context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+        }
+        for dockAppearsAtRelease in [true, false] {
+            view.overDock = false
+            view.mouseDown(with: try event(.leftMouseDown, x: 24))
+            view.mouseDragged(with: try event(.leftMouseDragged, x: 180))
+            view.overDock = true
+            if !dockAppearsAtRelease { view.mouseDragged(with: try event(.leftMouseDragged, x: 300)) }
+            view.mouseUp(with: try event(.leftMouseUp, x: 300))
+            XCTAssertTrue(view.items.isEmpty, "A blank tab has no saved-app representation")
+            XCTAssertTrue(host.tabs.contains { $0 === tab })
+            XCTAssertFalse(SurfaceServices.shared.hasInteractions)
+        }
+    }
+
+    @MainActor func testOrdinaryDragReordersBothWaysAndEscapeCancels() throws {
+        SurfaceHostServices.configure()
+        let host = BrowserWindowController(profile: .defaultProfile)
+        let first = try XCTUnwrap(host.activeTab)
+        let second = host.openTab(activate: false)
+        let panel = NSPanel(contentRect: NSRect(x: 100, y: 100, width: 48, height: 200),
+            styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.isReleasedWhenClosed = false
+        let root = NSView(frame: NSRect(x: 0, y: 0, width: 48, height: 200))
+        panel.contentView = root
+        let source = TabAppDragView(frame: NSRect(x: 0, y: 140, width: 48, height: 40))
+        let target = TabAppDragView(frame: NSRect(x: 0, y: 60, width: 48, height: 40))
+        source.webviewID = first.webviewId; target.webviewID = second.webviewId
+        root.addSubview(source); root.addSubview(target)
+        defer { panel.close(); host.window?.close() }
+        func drag(to y: CGFloat, x: CGFloat = 24, cancel: Bool = false) throws {
+            func event(_ type: NSEvent.EventType, _ y: CGFloat) throws -> NSEvent {
+                try XCTUnwrap(NSEvent.mouseEvent(with: type, location: NSPoint(x: type == .leftMouseDown ? 24 : x, y: y),
+                    modifierFlags: [], timestamp: 0, windowNumber: panel.windowNumber,
+                    context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+            }
+            source.mouseDown(with: try event(.leftMouseDown, source.frame.midY))
+            source.mouseDragged(with: try event(.leftMouseDragged, y))
+            XCTAssertEqual(TabDragPreview.shared.target, second.webviewId)
+            if cancel { source.cancelOperation(nil) }
+            source.mouseUp(with: try event(.leftMouseUp, y))
+            XCTAssertNil(TabDragPreview.shared.source)
+        }
+        try drag(to: 65)
+        XCTAssertEqual(host.tabs.map(\.webviewId), [second.webviewId, first.webviewId])
+        source.frame.origin.y = 60
+        target.frame.origin.y = 140
+        try drag(to: 155, cancel: true)
+        XCTAssertEqual(host.tabs.map(\.webviewId), [second.webviewId, first.webviewId])
+        try drag(to: 155, x: 80)
+        XCTAssertEqual(host.tabs.map(\.webviewId), [first.webviewId, second.webviewId],
+            "A small sideways drift must still reorder, without a dead zone before the close threshold")
+    }
+
     @MainActor func testContextMenuClosesOnlyTargetAndRejectsRetiredRenderer() throws {
         SurfaceHostServices.configure()
         let host = BrowserWindowController(profile: .defaultProfile)
@@ -20,24 +174,6 @@ final class TabAppDragTests: XCTestCase {
         view.isAuthorized = { true }
         view.closeFromMenu()
         XCTAssertFalse(host.tabs.contains { $0 === target })
-    }
-    @MainActor func testTrashRequiresRealVisibleTabDragAndPreservesOtherTabs() {
-        SurfaceHostServices.configure()
-        let host = BrowserWindowController(profile: .defaultProfile)
-        defer { TabDragPreview.shared.finish(); host.window?.close() }
-        let target = host.openTab(activate: false)
-        let trash = TabTrashView()
-        trash.allowedIDs = [target.webviewId]
-        XCTAssertNil(trash.accepts(source: NSObject()))
-        XCTAssertFalse(trash.closeDraggedTab(target.webviewId))
-        TabDragPreview.shared.source = target.webviewId
-        trash.isAuthorized = { false }
-        XCTAssertFalse(trash.closeDraggedTab(target.webviewId))
-        trash.isAuthorized = { true }
-        XCTAssertFalse(trash.closeDraggedTab(host.activeTab!.webviewId))
-        XCTAssertTrue(trash.closeDraggedTab(target.webviewId))
-        XCTAssertFalse(host.tabs.contains { $0 === target })
-        XCTAssertFalse(host.tabs.isEmpty)
     }
     @MainActor func testNormalDragClosesWithoutPublishingPasteboardAndEscapeCancels() throws {
         SurfaceHostServices.configure()
@@ -151,7 +287,7 @@ final class TabAppDragTests: XCTestCase {
     }
 
     @MainActor
-    func testCreatesReusableApplicationWithSafeLauncherAndIcon() throws {
+    func testCreatesReusableApplicationWithSafeLauncherAndIcon() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let page = URL(string: "https://example.com/dashboard?q=hello&value=$(touch%20bad)")!
@@ -165,7 +301,8 @@ final class TabAppDragTests: XCTestCase {
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: source.path)
         let icon = NSImage(systemSymbolName: "globe", accessibilityDescription: nil)!
         let start = ProcessInfo.processInfo.systemUptime
-        let bundle = try TabAppBundle.create(url: page, profile: "work", iconData: IconRenderer.icns(icon.tiffRepresentation!), directory: root, bowser: browser, sign: false)
+        let registry = SavedAppRegistry(directory: root, bowser: browser, icons: root.appendingPathComponent("icons"), sign: { _ in })
+        let bundle = try registry.create(url: page, profile: "work", iconData: IconRenderer.icns(icon.tiffRepresentation!))
         print("Tab app preparation: \((ProcessInfo.processInfo.systemUptime - start) * 1000)ms")
         XCTAssertEqual(bundle.pathExtension, "app")
         XCTAssertEqual(try Data(contentsOf: bundle.appendingPathComponent("Contents/Frameworks/libBowserSurfaceKit.dylib")), try Data(contentsOf: kit))
@@ -178,7 +315,7 @@ final class TabAppDragTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: executable), try Data(contentsOf: source))
         XCTAssertEqual(SiteAppConfiguration.parse(app.infoDictionary ?? [:])?.url, page)
         XCTAssertNotNil(NSImage(contentsOf: bundle.appendingPathComponent("Contents/Resources/SiteIcon.icns")))
-        let again = try TabAppBundle.create(url: page, profile: "work", iconData: nil, directory: root, bowser: browser, sign: false)
+        let again = try registry.create(url: page, profile: "work", iconData: nil)
         XCTAssertEqual(bundle, again)
         // An already-pinned v1 launcher is upgraded at exactly the same path.
         let plist = bundle.appendingPathComponent("Contents/Info.plist")
@@ -186,20 +323,21 @@ final class TabAppDragTests: XCTestCase {
         oldInfo.removeValue(forKey: "BowserAppVersion")
         try PropertyListSerialization.data(fromPropertyList: oldInfo, format: .xml, options: 0).write(to: plist)
         try Data("#!/bin/sh\nexit 0\n".utf8).write(to: executable)
-        try TabAppBundle.upgrade(bundle: bundle, bowser: browser, sign: false)
+        registry.request(.bundle(bundle))
+        await registry.flush()
         XCTAssertEqual(try Data(contentsOf: executable), try Data(contentsOf: source))
         let updated = try PropertyListSerialization.propertyList(from: Data(contentsOf: plist), format: nil) as! [String: Any]
         XCTAssertEqual(updated["BowserAppVersion"] as? Int, 2)
         XCTAssertNotNil(updated["NSCameraUsageDescription"] as? String)
         XCTAssertNotNil(updated["NSMicrophoneUsageDescription"] as? String)
-        let other = try TabAppBundle.create(url: page, profile: "personal", iconData: nil, directory: root, bowser: browser, sign: false)
+        let other = try registry.create(url: page, profile: "personal", iconData: nil)
         XCTAssertNotEqual(bundle, other)
     }
 
     @MainActor
     func testRejectsNonWebLaunchTargets() {
-        XCTAssertThrowsError(try TabAppBundle.create(url: URL(string: "file:///tmp/test")!, profile: "default", iconData: nil,
-                                                    directory: FileManager.default.temporaryDirectory,
-                                                    bowser: URL(fileURLWithPath: "/Applications/Bowser.app")))
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let registry = SavedAppRegistry(directory: root, bowser: root, icons: root)
+        XCTAssertThrowsError(try registry.export(url: URL(string: "file:///tmp/test")!, profile: "default"))
     }
 }

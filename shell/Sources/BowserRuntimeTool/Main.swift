@@ -41,6 +41,7 @@ import BackendRuntime
             case "restore-backup":
                 guard args.count == 1 else { throw RuntimeFailure("restore-backup SNAPSHOT") }
                 try restoreBackup(URL(fileURLWithPath: args[0]))
+            case "cleanup-backups": try cleanupBackups(args)
             case "backup-targets":
                 guard args.count == 3 else { throw RuntimeFailure("backup-targets HOME RUNTIME BUNDLE") }
                 let manifest: Message = ["home": args[0], "runtime": args[1], "bundle": args[2], "stage": args[0] + "/updates/unused"]

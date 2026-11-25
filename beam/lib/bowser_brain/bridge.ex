@@ -6,6 +6,10 @@ defmodule BowserBrain.Bridge do
 
   Events from the engine are broadcast to every subscriber in the
   BowserBrain.Events registry as `{:browser_event, map}`.
+
+  A disconnected engine or a socket that cannot drain a write for one second
+  completes outstanding RPCs with `{:error, :not_connected}`. The next
+  connection starts a fresh frame stream.
   """
   use GenServer
   require Logger
@@ -90,10 +94,12 @@ defmodule BowserBrain.Bridge do
   end
 
   @impl true
+  def handle_info(:connect, %{sock: sock} = state) when not is_nil(sock), do: {:noreply, state}
   def handle_info(:connect, state) do
     path = socket_path() |> String.to_charlist()
 
-    case :gen_tcp.connect({:local, path}, 0, [:binary, packet: 4, active: true]) do
+    case :gen_tcp.connect({:local, path}, 0,
+           [:binary, packet: 4, active: true, send_timeout: 1_000, send_timeout_close: true]) do
       {:ok, sock} ->
         Logger.info("bridge: connected to engine")
         {:noreply, %{state | sock: sock}}
@@ -105,7 +111,7 @@ defmodule BowserBrain.Bridge do
     end
   end
 
-  def handle_info({:tcp, _sock, data}, state) do
+  def handle_info({:tcp, sock, data}, %{sock: sock} = state) do
     state =
       case JSON.decode(data) do
         {:ok, %{"op" => "handoff_barrier", "id" => id}} ->
@@ -142,14 +148,9 @@ defmodule BowserBrain.Bridge do
           if pid = Process.whereis(BowserBrain.ResourceController), do: send(pid, {:browser_event, Map.put(result, "event", "resources")})
           state
 
-        {:ok, %{"op" => "js_result", "id" => id} = result} ->
+        {:ok, %{"op" => op, "id" => id} = result} when op in ["js_result", "cookies_result"] ->
           {from, pending} = Map.pop(state.pending, id)
-          if from, do: GenServer.reply(from, js_reply(result))
-          %{state | pending: pending}
-
-        {:ok, %{"op" => "cookies_result", "id" => id} = result} ->
-          {from, pending} = Map.pop(state.pending, id)
-          if from, do: GenServer.reply(from, if(result["error"], do: {:error, result["error"]}, else: {:ok, Map.get(result, "cookies", [])}))
+          if from, do: GenServer.reply(from, rpc_reply(result))
           %{state | pending: pending}
 
         {:ok, %{"op" => "hello", "v" => v} = hello} ->
@@ -184,21 +185,19 @@ defmodule BowserBrain.Bridge do
     end
   end
 
-  def handle_info({:tcp_closed, _sock}, state) do
-    Logger.info("bridge: engine disconnected, retrying")
-    Process.send_after(self(), :connect, @reconnect_ms)
-    {:noreply, %{state | sock: nil}}
-  end
+  def handle_info({:tcp_closed, sock}, %{sock: sock} = state), do: {:noreply, disconnect(state)}
+  def handle_info({:tcp_error, sock, _reason}, %{sock: sock} = state), do: {:noreply, disconnect(state)}
 
-  def handle_info({:tcp_error, _sock, _reason}, state) do
-    Process.send_after(self(), :connect, @reconnect_ms)
-    {:noreply, %{state | sock: nil}}
-  end
+  # A delayed event from a retired socket cannot complete a new connection's RPC.
+  def handle_info({:tcp_closed, _old}, state), do: {:noreply, state}
+  def handle_info({kind, _old, _value}, state) when kind in [:tcp_error, :tcp], do: {:noreply, state}
 
   @impl true
   def handle_cast({:send, map}, state) do
-    send_frame(state.sock, map)
-    {:noreply, state}
+    case send_frame(state.sock, map) do
+      :ok -> {:noreply, state}
+      :error -> {:noreply, disconnect(state)}
+    end
   end
 
   @impl true
@@ -213,44 +212,36 @@ defmodule BowserBrain.Bridge do
   def handle_call(:connected?, _from, state), do: {:reply, state.sock != nil, state}
 
   def handle_call({:eval_js, webview, code, world}, from, state) do
-    id = state.next_id
-
-    case send_frame(state.sock, %{op: "eval_js", id: id, webview: webview, code: code, world: world}) do
-      :ok ->
-        {:noreply, %{state | next_id: id + 1, pending: Map.put(state.pending, id, from)}}
-
-      :error ->
-        {:reply, {:error, :not_connected}, state}
-    end
+    request(%{op: "eval_js", webview: webview, code: code, world: world}, from, state)
   end
 
   def handle_call({:native_verify, op, args}, from, state) do
-    id = state.next_id
-    case send_frame(state.sock, Map.merge(args, %{"op" => op, "id" => id})) do
-      :ok -> {:noreply, %{state | next_id: id + 1, pending: Map.put(state.pending, id, from)}}
-      :error -> {:reply, {:error, :not_connected}, state}
-    end
+    request(Map.put(args, "op", op), from, state)
   end
 
   def handle_call({:eval_site_js, app, code}, from, state) do
-    id = state.next_id
-
-    case send_frame(state.sock, %{op: "site_eval", app: app, id: id, code: code}) do
-      :ok -> {:noreply, %{state | next_id: id + 1, pending: Map.put(state.pending, id, from)}}
-      :error -> {:reply, {:error, :not_connected}, state}
-    end
+    request(%{op: "site_eval", app: app, code: code}, from, state)
   end
 
   def handle_call({:get_cookies, url, profile}, from, state) do
+    request(%{op: "get_cookies", url: url, profile: profile}, from, state)
+  end
+
+  defp request(message, from, state) do
     id = state.next_id
-
-    case send_frame(state.sock, %{op: "get_cookies", id: id, url: url, profile: profile}) do
-      :ok ->
-        {:noreply, %{state | next_id: id + 1, pending: Map.put(state.pending, id, from)}}
-
-      :error ->
-        {:reply, {:error, :not_connected}, state}
+    case send_frame(state.sock, Map.put(message, "id", id)) do
+      :ok -> {:noreply, %{state | next_id: id + 1, pending: Map.put(state.pending, id, from)}}
+      :error -> {:reply, {:error, :not_connected}, disconnect(state)}
     end
+  end
+
+  defp disconnect(%{sock: nil} = state), do: state
+  defp disconnect(state) do
+    :gen_tcp.close(state.sock)
+    Enum.each(state.pending, fn {_id, from} -> GenServer.reply(from, {:error, :not_connected}) end)
+    Logger.info("bridge: engine disconnected, retrying")
+    Process.send_after(self(), :connect, @reconnect_ms)
+    %{state | sock: nil, pending: %{}}
   end
 
   defp check_engine_build(state) do
@@ -299,6 +290,10 @@ defmodule BowserBrain.Bridge do
     end)
   end
 
-  defp js_reply(%{"ok" => true, "value" => value}), do: {:ok, value}
-  defp js_reply(%{"value" => value}), do: {:error, value}
+  defp rpc_reply(%{"error" => "not_connected"}), do: {:error, :not_connected}
+  defp rpc_reply(%{"op" => "cookies_result"} = result) do
+    if result["error"], do: {:error, result["error"]}, else: {:ok, Map.get(result, "cookies", [])}
+  end
+  defp rpc_reply(%{"ok" => true, "value" => value}), do: {:ok, value}
+  defp rpc_reply(%{"value" => value}), do: {:error, value}
 end

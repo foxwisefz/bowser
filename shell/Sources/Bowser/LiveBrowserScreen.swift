@@ -8,6 +8,7 @@ import BowserSurfaceKit
 struct LiveBrowserScreen<Model: ObservableObject>: NSViewRepresentable where Model.ObjectWillChangePublisher == ObservableObjectPublisher {
     let kind: String
     let model: Model
+    var onCreateContext: ((BrowserScreenContext) -> Void)?
     @MainActor final class Coordinator {
         var context: BrowserScreenContext?
         func close(_ slot: NativeModuleSlot) {
@@ -20,6 +21,7 @@ struct LiveBrowserScreen<Model: ObservableObject>: NSViewRepresentable where Mod
     func makeNSView(context bridge: Context) -> NativeModuleSlot {
         let context = BrowserScreenContext(kind: kind, model: model)
         bridge.coordinator.context = context
+        onCreateContext?(context)
         BrowserScreenContext.contexts[context.id] = context
         let fallback = NSHostingView(rootView: BrowserScreenRoot(context: context))
         fallback.sizingOptions = []

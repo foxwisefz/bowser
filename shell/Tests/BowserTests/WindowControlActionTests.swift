@@ -39,7 +39,7 @@ final class WindowControlActionTests: XCTestCase {
     }
 
     @MainActor
-    func testNativeButtonsStayVisibleAndBackgroundHoverCreatesNoPanel() throws {
+    func testNativeButtonsStayVisibleAndBackgroundRefreshCreatesNoPanel() throws {
         let controller = BrowserWindowController(profile: .defaultProfile)
         let window = try XCTUnwrap(controller.window)
         defer { window.close() }
@@ -49,10 +49,11 @@ final class WindowControlActionTests: XCTestCase {
             XCTAssertTrue(button.isEnabled)
         }
         let front = NSWindow(contentRect: .zero, styleMask: [.titled], backing: .buffered, defer: false)
+        front.isReleasedWhenClosed = false
         front.makeKeyAndOrderFront(nil)
         defer { front.close() }
         let keyBefore = NSApp.keyWindow
-        controller.setToolbarHovered(true)
+        controller.syncModButtons()
         XCTAssertFalse(window.isKeyWindow)
         XCTAssertTrue(window.childWindows?.isEmpty ?? true)
         XCTAssertTrue(NSApp.keyWindow === keyBefore)

@@ -16,14 +16,14 @@ form submissions, cursor/drag state, the image cache and native editor instances
 reuse those objects. Changes to this state library or other host code require a
 normal host update.
 
-The top-left browser notch groups native traffic lights, command access, navigation,
-website permissions and the active tab favicon. Profile identity has a separate
-right-hand notch. Both have rounded, angled shoulders; the page extends to the
-window top with no full-width toolbar background or reserved padding. The
-favicon remains visible; hovering expands the title to the right without moving
-window controls. Extra mod buttons appear on hover in a horizontally scrollable
-area. Reduced-motion settings disable the expansion animation. The host owns the
-notch frame, title and favicon; the replaceable module owns command controls.
+The browser uses one native, translucent unified toolbar. AppKit owns its
+material, traffic lights, resizing and fullscreen behavior. Navigation, command
+access and mod actions stay visible; the centered address control shows the
+current host and opens the selected full URL for editing. Profile identity is
+part of the same toolbar when multiple profiles exist. The page begins below
+the toolbar, keeping its top edge reachable. There are no pointer-driven reveal
+animations. The host owns the address, favicon and loading line; the replaceable
+module owns command controls.
 
 ## Install and update
 

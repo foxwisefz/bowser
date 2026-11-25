@@ -5,11 +5,14 @@ import XCTest
 
 @MainActor final class FirstModPlaygroundTests: XCTestCase {
     func testChoicePageAndAllExercisesInWebKit() async throws {
-        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-        let assets = root.appendingPathComponent("website/learn")
+        let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+        let website = repo.deletingLastPathComponent().appendingPathComponent("bowser-services/website")
+        try XCTSkipUnless(FileManager.default.fileExists(atPath: website.path), "Requires the companion website checkout")
+        let assets = website.appendingPathComponent("learn")
         let css = try String(contentsOf: assets.appendingPathComponent("learn.css"), encoding: .utf8)
         var js = try String(contentsOf: assets.appendingPathComponent("learn.js"), encoding: .utf8)
-        let icon = try Data(contentsOf: root.appendingPathComponent("website/app-icon.webp")).base64EncodedString()
+        let icon = try Data(contentsOf: website.appendingPathComponent("app-icon.webp")).base64EncodedString()
         js = js.replacingOccurrences(of: "/app-icon.webp", with: "data:image/webp;base64," + icon)
         let html = try String(contentsOf: assets.appendingPathComponent("index.html"), encoding: .utf8)
             .replacingOccurrences(of: "<link rel=\"stylesheet\" href=\"/learn/learn.css\">", with: "<style>\(css)</style>")

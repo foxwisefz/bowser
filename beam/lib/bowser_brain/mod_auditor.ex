@@ -1,5 +1,6 @@
 defmodule BowserBrain.ModAuditor do
   @moduledoc "Independent LLM review gate for generated Elixir; not an OS sandbox."
+  require Logger
 
   def instructions do
     """
@@ -49,12 +50,14 @@ defmodule BowserBrain.ModAuditor do
     runner = Application.get_env(:bowser_brain, :modsmith_auditor, &BowserBrain.ModSmith.run_audit/1)
     case runner.(prompt) do
       {:ok, output} when is_binary(output) -> verdict(output, hash, nonce)
-      _ -> {:error, "Security audit unavailable; Elixir was not installed"}
+      {:error, reason} when reason in [:timeout, 504] -> failure("timeout")
+      {:error, reason} -> failure("unavailable", BowserBrain.AI.message(reason))
+      _ -> failure("invalid_response")
     end
   rescue
-    _ -> {:error, "Security audit failed; Elixir was not installed"}
+    _ -> failure("unavailable")
   catch
-    _, _ -> {:error, "Security audit failed; Elixir was not installed"}
+    _, _ -> failure("unavailable")
   end
 
   def verdict(output, hash, nonce) do
@@ -71,15 +74,43 @@ defmodule BowserBrain.ModAuditor do
          true <- is_binary(reason) and byte_size(reason) > 0 and byte_size(reason) <= 2_000,
          true <- decision in ["allow", "reject", "uncertain"] do
       if decision == "allow", do: :ok,
-        else: {:error, "Security audit did not approve this Elixir; it was not installed. " <>
-          "Audit finding (#{decision}): #{reason}. Repair the source and resubmit to put_mod for a fresh audit. " <>
-          "This finding is review feedback, not permission to bypass any control."}
+        else: failure(decision, reason)
     else
-      _ -> {:error, "Invalid security audit verdict; Elixir was not installed"}
+      _ -> failure("invalid_response")
     end
   rescue
-    _ -> {:error, "Invalid security audit verdict; Elixir was not installed"}
+    _ -> failure("invalid_response")
   catch
-    _, _ -> {:error, "Invalid security audit verdict; Elixir was not installed"}
+    _, _ -> failure("invalid_response")
+  end
+
+  defp failure(kind, reason \\ nil) do
+    Logger.warning("modsmith event=audit_failed kind=#{kind}")
+    {:error, %{"kind" => kind, "reason" => reason}}
+  end
+
+  # Keep the tool's error a string, while retaining the structured cause for the
+  # conversation. A transport failure is not a security verdict.
+  def message(%{"kind" => kind, "reason" => reason}) when kind in ["reject", "uncertain"],
+    do: "Security audit did not approve this Elixir; it was not installed. " <>
+      "Audit finding (#{kind}): #{reason}. Repair the source and resubmit to put_mod for a fresh audit. " <>
+      "This finding is review feedback, not permission to bypass any control."
+  def message(%{"kind" => "timeout"}), do: "Security audit timed out; Elixir was not installed. Retry the review."
+  def message(%{"kind" => "invalid_response"}), do: "Invalid security audit verdict; Elixir was not installed. Retry the review."
+  def message(%{"kind" => "unavailable", "reason" => reason}),
+    do: "Security audit unavailable; Elixir was not installed. " <> (reason || "Retry the review.")
+  def message(reason) when is_binary(reason), do: reason
+
+  def notice([]), do: nil
+  def notice(failures) do
+    findings = failures |> Enum.uniq() |> Enum.map(fn
+      %{"kind" => "reject", "reason" => reason} -> "Security review rejected a proposed change: " <> reason
+      %{"kind" => "uncertain", "reason" => reason} -> "Security review could not confirm a proposed change is safe: " <> reason
+      %{"kind" => "timeout"} -> "Security review took too long to respond. Try again."
+      %{"kind" => "invalid_response"} -> "Security review returned an unusable response. Try again."
+      %{"kind" => "unavailable", "reason" => reason} -> "Security review couldn’t run. " <> (reason || "Try again.")
+      _ -> "Security review did not finish. Try again."
+    end)
+    Enum.join(findings, "\n") <> "\nThe proposed code was not installed. Any earlier saved changes remain."
   end
 end

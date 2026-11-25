@@ -85,10 +85,11 @@ say "checking icon crash isolation before replacing the installed app"
 "$REPO/bin/check-icon-isolation"
 
 # Native helpers are required even for brain-only builds. Customers never need Python.
-say "runtime: compiling native helpers"
-(cd "$REPO/shell" && swift build --product BowserBackendHost && swift build --product BowserRuntimeTool)
-RUNTIME_TOOL="$REPO/shell/.build/debug/BowserRuntimeTool"
-BACKEND_HOST="$REPO/shell/.build/debug/BowserBackendHost"
+CONF="$BOWSER_NATIVE_CONFIGURATION"
+say "runtime: compiling $CONF native helpers"
+(cd "$REPO/shell" && swift build -c "$CONF" --product BowserBackendHost && swift build -c "$CONF" --product BowserRuntimeTool)
+RUNTIME_TOOL="$REPO/shell/.build/$CONF/BowserRuntimeTool"
+BACKEND_HOST="$REPO/shell/.build/$CONF/BowserBackendHost"
 
 # Stage the bundle/runtime so file watchers cannot restart an active browser.
 DEST_APP_DIR="$APP_DIR"
@@ -119,7 +120,6 @@ rm -f "$APP_DIR/bin/backend-host.before-loop-fix" "$APP_DIR/bin/install"
 
 # ---------------------------------------------------------------- shell
 if [ "$BRAIN_ONLY" = 0 ]; then
-  CONF=release; [ "$DEBUG" = 1 ] && CONF=debug
   say "shell: swift build -c $CONF"
   (cd "$REPO/shell" && swift build -c "$CONF")
   BIN="$REPO/shell/.build/$CONF/Bowser"
@@ -152,10 +152,17 @@ if [ "$BRAIN_ONLY" = 0 ]; then
   "$REPO/bin/build-native-surfaces" "$STAGE/Bowser.app/Contents/Resources/SurfaceRenderer.bundle"
   mkdir -p "$STAGE/Bowser.app/Contents/Frameworks"
   cp -f "$REPO/shell/.build/$CONF/libBowserSurfaceKit.dylib" "$STAGE/Bowser.app/Contents/Frameworks/"
+  # The model runs in its own native helper. Ship only our supported arm64 slice.
+  mkdir -p "$STAGE/Bowser.app/Contents/Helpers"
+  cp -f "$REPO/shell/.build/$CONF/BowserHistoryWorker" "$STAGE/Bowser.app/Contents/Helpers/"
+  cp -Rf "$REPO/licenses" "$STAGE/Bowser.app/Contents/Resources/Licenses"
+  lipo "$REPO/shell/.build/$CONF/libCLiteRTLM_mac.dylib" -thin arm64 -output "$STAGE/Bowser.app/Contents/Frameworks/libCLiteRTLM_mac.dylib"
   native_sign=(--force --sign "$BOWSER_SIGN_IDENTITY")
   if [ "$BOWSER_SIGN_IDENTITY" != - ]; then native_sign+=(--options runtime); fi
   if [ -n "${BOWSER_SIGN_KEYCHAIN:-}" ]; then native_sign+=(--keychain "$BOWSER_SIGN_KEYCHAIN"); fi
   codesign "${native_sign[@]}" "$STAGE/Bowser.app/Contents/Frameworks/libBowserSurfaceKit.dylib"
+  codesign "${native_sign[@]}" "$STAGE/Bowser.app/Contents/Frameworks/libCLiteRTLM_mac.dylib"
+  codesign "${native_sign[@]}" "$STAGE/Bowser.app/Contents/Helpers/BowserHistoryWorker"
   codesign "${native_sign[@]}" --entitlements "$REPO/bin/shell-entitlements.plist" "$STAGE/Bowser.app"
   codesign --verify --deep --strict "$STAGE/Bowser.app"
   # Assemble inside the unpublished generation.
@@ -172,7 +179,8 @@ for helper in detach apply-update bowser-mcp-bridge; do
   codesign --force --sign - "$APP_DIR/bin/$helper"
 done
 codesign --force --sign - "$APP_DIR/bin/backend-host"
-WORKER="$REPO/shell/.build/${CONF:-debug}/BowserIconWorker"
+if [ "$BRAIN_ONLY" = 1 ]; then (cd "$REPO/shell" && swift build -c "$CONF" --product BowserIconWorker); fi
+WORKER="$REPO/shell/.build/$CONF/BowserIconWorker"
 [ -x "$WORKER" ] || { echo "missing icon worker: $WORKER" >&2; exit 1; }
 cp -f "$WORKER" "$APP_DIR/bin/BowserIconWorker.new"
 codesign --force --sign - "$APP_DIR/bin/BowserIconWorker.new"

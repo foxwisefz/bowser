@@ -1,6 +1,21 @@
 defmodule BowserBrain.ModSmithOutcome do
   @moduledoc "User-facing ModSmith activity and next steps, independent of mod behavior."
 
+  @legacy_fault "A page hook was paused because its observer kept triggering itself. Repair the hook, then run verification again."
+  @legacy_review "A proposed change could not pass security review and was not installed. Any earlier saved changes remain."
+  def runtime_fault_summary, do: "Bowser paused this customization to keep the page responsive. It still needs a fix."
+  def runtime_fault_step, do: %{"title" => "Let ModSmith repair it", "detail" => "ModSmith can try fixing the problem and test the result. Your existing work is saved.", "action" => "repair"}
+
+  def visible_project(%{"summary" => @legacy_fault} = project),
+    do: project |> Map.put("summary", runtime_fault_summary()) |> Map.put("next_step", runtime_fault_step()) |> visible_review()
+  def visible_project(project), do: visible_review(project)
+
+  # Old runs discarded the review result. Do not invent a rejection or a service
+  # outage when presenting those saved conversations.
+  defp visible_review(%{"repair_notice" => @legacy_review} = project),
+    do: Map.put(project, "repair_notice", "A proposed change was not installed. This saved result doesn’t say whether security review rejected it or couldn’t finish. Try again to review it.")
+  defp visible_review(project), do: project
+
   def activity("enable_and_test"), do: "Mod enabled. Testing it now…"
   def activity("continue"), do: "Resuming testing and fixes…"
   def activity("retry"), do: "Trying your request again…"
@@ -16,6 +31,7 @@ defmodule BowserBrain.ModSmithOutcome do
   def visible_turn(turn) do
     label = if turn["role"] == "user", do: legacy_activity(turn["text"]), else: nil
     turn = if label, do: Map.merge(turn, %{"role" => "activity", "text" => label}), else: turn
+    turn = if turn["text"] == @legacy_fault, do: Map.put(turn, "text", runtime_fault_summary()), else: turn
     Map.drop(turn, ["instruction"])
   end
 

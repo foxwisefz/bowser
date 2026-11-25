@@ -103,6 +103,12 @@ final class BackendLifecycle {
         else { NSApp.terminate(nil) }
     }
 
+    private func finishQuit() async {
+        do { try await SessionCookies.save() }
+        catch { NSLog("Session cookie snapshot failed (%@)", String(describing: type(of: error))) }
+        NSApp.reply(toApplicationShouldTerminate: true)
+    }
+
     func quit() -> NSApplication.TerminateReply {
         guard SiteAppConfiguration.current == nil else { return .terminateNow }
         guard !isQuitting else { return .terminateLater }
@@ -119,7 +125,7 @@ final class BackendLifecycle {
                 for _ in 0..<100 {
                     try? await Task.sleep(for: .milliseconds(100))
                     if quitAcknowledged && !BrainBridge.shared.isConnected {
-                        NSApp.reply(toApplicationShouldTerminate: true)
+                        await finishQuit()
                         return
                     }
                 }
@@ -128,7 +134,7 @@ final class BackendLifecycle {
             if let helper = Self.helper(), let stop = try? launch(helper, action: "stop-brain") {
                 while stop.isRunning { try? await Task.sleep(for: .milliseconds(100)) }
             }
-            NSApp.reply(toApplicationShouldTerminate: true)
+            await finishQuit()
         }
         return .terminateLater
     }

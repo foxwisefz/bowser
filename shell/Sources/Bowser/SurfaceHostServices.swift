@@ -7,6 +7,14 @@ import BowserSurfaceKit
     static func configure() {
         guard !configured else { return }; configured = true
         SurfaceServices.shared.emit = { message in
+            if message["event"] as? String == "surface", message["surface"] as? String == "edge_dock",
+               message["id"] as? String == "select",
+               let value = message["value"], let id = UInt64(String(describing: value)),
+               let host = BrowserWindowController.host(of: id) {
+                host.pendingTabLesson = id
+                host.pendingTabLessonPoint = NSEvent.mouseLocation
+                host.focusWindow()
+            }
             if message["event"] as? String == "surface_dismiss", let id = message["surface"] as? String {
                 SurfaceManager.shared.dismiss(id: id)
             } else { BrainBridge.shared.send(message) }
@@ -30,10 +38,8 @@ import BowserSurfaceKit
         }
         SurfaceServices.shared.exportTab = { id in
             guard let tab = EngineView.live[id], let url = tab.currentURLString.flatMap(URL.init(string:)) else { throw CocoaError(.fileNoSuchFile) }
-            let bowser = Bundle.main.bundleURL.pathExtension == "app" ? Bundle.main.bundleURL
-                : FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications/Bowser.app")
-            return try TabAppBundle.create(url: url, profile: tab.profileId, iconData: tab.appIconData,
-                directory: TabAppBundle.directory, bowser: bowser)
+            return try TabAppBundle.installed.export(url: url, profile: tab.profileId,
+                icon: tab.faviconICNSPath.map { URL(fileURLWithPath: $0) })
         }
         SurfaceServices.shared.edgeDragging = { SurfaceManager.shared.setEdgeDragging("edge_dock", $0) }
         SurfaceServices.shared.portrait = { name, size in

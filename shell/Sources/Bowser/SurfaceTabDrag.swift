@@ -19,7 +19,7 @@ final class TabAppPasteboardProvider: NSObject, NSPasteboardItemDataProvider {
     }
 }
 
-final class TabAppDragView: NSView, NSDraggingSource, SurfaceTabDragSource, NSMenuDelegate {
+class TabAppDragView: NSView, NSDraggingSource, SurfaceTabDragSource, NSMenuDelegate {
     var isAuthorized: () -> Bool = { true }
     private var interaction: UUID?
     private func beginInteraction() {
@@ -42,6 +42,12 @@ final class TabAppDragView: NSView, NSDraggingSource, SurfaceTabDragSource, NSMe
     private var closeCue: NSPanel?
     private var closeIcon: NSImage?
     private var escapeMonitor: Any?
+    private var scrollTimer: Timer?
+    private var dragPoint: NSPoint?
+    private var dragEvent: NSEvent?
+    private var nextDockCheck: TimeInterval = 0
+    private var dockWindowNumber: Int?
+    private var dockWindowIsTarget = false
 
     /// A failed/cancelled drag is not automatically a request to close a tab.
     static func shouldRemove(closing: Bool, operation: NSDragOperation, cancelled: Bool, mouseButtons: Int,
@@ -85,18 +91,27 @@ final class TabAppDragView: NSView, NSDraggingSource, SurfaceTabDragSource, NSMe
         defer { down = nil; endInteraction() }
         if dragged && closeGesture {
             let point = window?.convertPoint(toScreen: event.locationInWindow) ?? NSEvent.mouseLocation
-            let remove = Self.shouldRemove(closing: true, operation: [], cancelled: cancelled,
+            updateReorder(at: point)
+            let preview = TabDragPreview.shared
+            // The Dock may appear between the last drag event and release.
+            // A missed/unsupported export must never turn into closing the tab.
+            let overDock = systemDockContains(point)
+            let destination = cancelled || overDock ? nil : preview.target
+            let after = preview.after
+            let remove = !overDock && isAuthorized() && Self.shouldRemove(closing: true, operation: [], cancelled: cancelled,
                 mouseButtons: 0, exportFailed: false, point: point, dock: dragFrame)
             let id = draggedID
             finishDrag()
-            if remove, let id, SurfaceServices.shared.closeTab(id) {
+            if let id, let destination, isAuthorized() {
+                _ = SurfaceServices.shared.moveTab(id, destination, after)
+            } else if remove, let id, SurfaceServices.shared.closeTab(id) {
                 TabDustEffect.show(at: point)
             }
         } else if !dragged, down != nil, bounds.contains(convert(event.locationInWindow, from: nil)) { select() }
     }
     override func mouseDragged(with event: NSEvent) {
         if dragged && closeGesture {
-            updateCloseCue(at: window?.convertPoint(toScreen: event.locationInWindow) ?? NSEvent.mouseLocation)
+            updateLocalDrag(with: event)
             return
         }
         guard !dragged, let down,
@@ -108,7 +123,8 @@ final class TabAppDragView: NSView, NSDraggingSource, SurfaceTabDragSource, NSMe
         TabDragPreview.shared.source = webviewID
         dragFrame = window?.frame
         cancelled = false
-        // Ordinary drags remove tabs; Option opts into exporting a saved app.
+        // Ordinary drags stay local until they reach the macOS Dock.
+        // Option-drag also allows exporting to Finder and other destinations.
         closeGesture = !event.modifierFlags.contains(.option)
         escapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             if event.keyCode == 53 { self?.cancelOperation(nil) }
@@ -116,14 +132,77 @@ final class TabAppDragView: NSView, NSDraggingSource, SurfaceTabDragSource, NSMe
         }
         let icon = tab.icon
             ?? NSImage(systemSymbolName: "globe", accessibilityDescription: nil)
+        closeIcon = icon
+        SurfaceServices.shared.edgeDragging(true)
         if closeGesture {
-            closeIcon = icon
-            // Keep this entirely in AppKit mouse tracking: no drag pasteboard,
-            // file promise, URL or drop operation is offered to another app.
-            SurfaceServices.shared.edgeDragging(true)
-            updateCloseCue(at: window?.convertPoint(toScreen: event.locationInWindow) ?? NSEvent.mouseLocation)
+            updateLocalDrag(with: event)
+            guard closeGesture else { return }
+            let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated { self?.trackLocalDrag() }
+            }
+            scrollTimer = timer
+            RunLoop.main.add(timer, forMode: .common)
             return
         }
+        beginAppDrag(with: event)
+    }
+
+    private func updateLocalDrag(with event: NSEvent) {
+        guard !cancelled, isAuthorized() else { return }
+        dragEvent = event
+        let point = window?.convertPoint(toScreen: event.locationInWindow) ?? NSEvent.mouseLocation
+        dragPoint = point
+        nextDockCheck = ProcessInfo.processInfo.systemUptime + 0.1
+        if systemDockContains(point) {
+            TabDragPreview.shared.target = nil
+            closeCue?.orderOut(nil)
+            if SurfaceServices.shared.tabSnapshot(webviewID)?.canExport == true {
+                beginAppDrag(with: event)
+            }
+            return
+        }
+        updateReorder(at: point)
+        updateCloseCue(at: point)
+    }
+
+    private func trackLocalDrag() {
+        guard closeGesture, !cancelled else { return }
+        // An auto-hidden Dock can appear under a stationary pointer. Recheck
+        // during the gesture, without polling WindowServer at scroll cadence.
+        if ProcessInfo.processInfo.systemUptime >= nextDockCheck, let event = dragEvent {
+            updateLocalDrag(with: event)
+        }
+        if closeGesture { scrollDuringDrag() }
+    }
+
+    func systemDockContains(_ point: NSPoint) -> Bool {
+        // Native mouse hit-testing handles Dock placement, multiple displays,
+        // auto-hide and our mouse-transparent drag cue without guessed regions.
+        let number = NSWindow.windowNumber(at: point, belowWindowWithWindowNumber: 0)
+        if dockWindowNumber != number {
+            dockWindowNumber = number
+            dockWindowIsTarget = false
+            if number > 0,
+               let info = (CGWindowListCopyWindowInfo(.optionIncludingWindow, CGWindowID(number)) as? [[String: Any]])?.first,
+               // Dock also owns desktop/background windows; those are not
+               // destinations for pinning an app.
+               info[kCGWindowLayer as String] as? Int32 == CGWindowLevelForKey(.dockWindow),
+               let pid = info[kCGWindowOwnerPID as String] as? Int32 {
+                dockWindowIsTarget = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier == "com.apple.dock"
+            }
+        }
+        return dockWindowIsTarget
+    }
+
+    private func beginAppDrag(with event: NSEvent) {
+        guard !cancelled, isAuthorized(), let tab = SurfaceServices.shared.tabSnapshot(webviewID) else { return }
+        // Once exported, cancellation or a refused drop only ends the gesture.
+        // It cannot fall back to drag-out close.
+        closeGesture = false
+        scrollTimer?.invalidate(); scrollTimer = nil
+        dragEvent = nil
+        closeCue?.close(); closeCue = nil
+        TabDragPreview.shared.target = nil
         let pasteboard = NSPasteboardItem()
         pasteboard.setString(String(webviewID), forType: Self.tabType)
         if tab.canExport {
@@ -133,9 +212,9 @@ final class TabAppDragView: NSView, NSDraggingSource, SurfaceTabDragSource, NSMe
             pasteboard.setDataProvider(provider, forTypes: [.fileURL])
         }
         let item = NSDraggingItem(pasteboardWriter: pasteboard)
-        item.setDraggingFrame(bounds, contents: icon)
-        SurfaceServices.shared.edgeDragging(true)
-        let session = beginDraggingSession(with: [item], event: down, source: self)
+        let point = convert(event.locationInWindow, from: nil)
+        item.setDraggingFrame(NSRect(x: point.x - 16, y: point.y - 16, width: 32, height: 32), contents: closeIcon)
+        let session = beginDraggingSession(with: [item], event: event, source: self)
         session.animatesToStartingPositionsOnCancelOrFail = true
     }
 
@@ -148,10 +227,67 @@ final class TabAppDragView: NSView, NSDraggingSource, SurfaceTabDragSource, NSMe
 
     override func cancelOperation(_ sender: Any?) {
         cancelled = true
+        scrollTimer?.invalidate(); scrollTimer = nil
+        TabDragPreview.shared.target = nil
         closeCue?.orderOut(nil)
     }
 
+    private func updateReorder(at point: NSPoint) {
+        let preview = TabDragPreview.shared
+        guard !cancelled, isAuthorized(), let id = draggedID, let window,
+              let root = window.contentView else { preview.target = nil; return }
+        guard window.frame.insetBy(dx: -64, dy: -32).contains(point) else {
+            preview.target = nil; return
+        }
+        func rows(in view: NSView) -> [(TabAppDragView, NSRect)] {
+            guard !view.isHidden else { return [] }
+            if let row = view as? TabAppDragView,
+               !row.bounds.intersection(row.visibleRect).isEmpty, row.isAuthorized(),
+               (row === self || SurfaceServices.shared.canMoveTab(id, row.webviewID)) {
+                return [(row, window.convertToScreen(row.convert(row.bounds.intersection(row.visibleRect), to: nil)))]
+            }
+            return view.subviews.flatMap { rows(in: $0) }
+        }
+        guard let (row, frame) = rows(in: root).min(by: {
+            abs($0.1.midY - point.y) < abs($1.1.midY - point.y)
+        }) else { preview.target = nil; return }
+        guard row !== self else { preview.target = nil; return }
+        // The vacancy takes the nearest original slot, so it stays under the
+        // dragged icon. Artwork slides independently of these hit rectangles.
+        let sourceFrame = window.convertToScreen(convert(bounds, to: nil))
+        preview.after = sourceFrame.midY > frame.midY
+        preview.target = row.webviewID
+    }
+
+    private func scrollDuringDrag() {
+        guard !cancelled, isAuthorized(), let point = dragPoint, let window,
+              window.frame.insetBy(dx: -64, dy: -32).contains(point),
+              let scroll = enclosingScrollView, let document = scroll.documentView else { return }
+        let clip = scroll.contentView
+        let bounds = clip.bounds
+        guard document.bounds.height > bounds.height else { return }
+        let local = clip.convert(window.convertPoint(fromScreen: point), from: nil)
+        let edge: CGFloat = 28
+        let step: CGFloat
+        if local.y < bounds.minY + edge {
+            step = -min(10, max(2, (bounds.minY + edge - local.y) / 3))
+        } else if local.y > bounds.maxY - edge {
+            step = min(10, max(2, (local.y - bounds.maxY + edge) / 3))
+        } else { return }
+        let y = min(max(document.bounds.minY, bounds.minY + step), document.bounds.maxY - bounds.height)
+        guard y != bounds.minY else { return }
+        clip.scroll(to: NSPoint(x: bounds.minX, y: y))
+        scroll.reflectScrolledClipView(clip)
+        scroll.layoutSubtreeIfNeeded()
+        updateReorder(at: point)
+    }
+
     private func finishDrag() {
+        scrollTimer?.invalidate(); scrollTimer = nil
+        dragPoint = nil
+        dragEvent = nil
+        dockWindowNumber = nil
+        dockWindowIsTarget = false
         if let escapeMonitor { NSEvent.removeMonitor(escapeMonitor) }
         escapeMonitor = nil
         endInteraction()
@@ -171,29 +307,27 @@ final class TabAppDragView: NSView, NSDraggingSource, SurfaceTabDragSource, NSMe
         guard !cancelled else { return }
         let ready = Self.shouldRemove(closing: true, operation: [], cancelled: false,
             mouseButtons: 0, exportFailed: false, point: point, dock: dragFrame)
-        let panel = closeCue ?? NSPanel(contentRect: NSRect(x: 0, y: 0, width: 220, height: 52),
+        let panel = closeCue ?? NSPanel(contentRect: NSRect(x: 0, y: 0, width: 170, height: 36),
             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         if closeCue == nil {
             panel.isReleasedWhenClosed = false
             panel.isOpaque = false
             panel.backgroundColor = .clear
+            panel.hasShadow = false
             panel.ignoresMouseEvents = true
             panel.level = .popUpMenu
             panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
             closeCue = panel
         }
-        panel.contentView = NSHostingView(rootView:
-            HStack(spacing: 10) {
-                if let closeIcon {
-                    Image(nsImage: closeIcon).resizable().scaledToFit()
-                        .frame(width: 32, height: 32)
-                        .accessibilityHidden(true)
-                }
-                Text(ready ? "Release to close" : "Drag out to close")
-                    .font(.system(size: 13, weight: .semibold))
-            }
-            .padding(10).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 9)))
-        panel.setFrameOrigin(NSPoint(x: point.x + 18, y: point.y - 62))
+        panel.contentView = NSHostingView(rootView: TabDragCue(icon: closeIcon, closing: ready))
+        if ready {
+            // The icon stays under the pointer; the label floats above it,
+            // like the macOS Dock's removal cue.
+            panel.setFrame(NSRect(x: point.x - 60, y: point.y - 24, width: 120, height: 84), display: true)
+        } else {
+            let x = dragFrame?.midX ?? point.x
+            panel.setFrame(NSRect(x: x - 20, y: point.y - 20, width: 40, height: 40), display: true)
+        }
         panel.orderFrontRegardless()
     }
 
@@ -228,47 +362,31 @@ final class TabAppDragView: NSView, NSDraggingSource, SurfaceTabDragSource, NSMe
     }
 }
 
-/// Only a real in-app tab drag from the visible deck may close a tab here.
-final class TabTrashView: NSView {
-    var allowedIDs: Set<UInt64> = []
-    var isAuthorized: () -> Bool = { true }
-    private var hovering = false { didSet { needsDisplay = true } }
-    override init(frame: NSRect) {
-        super.init(frame: frame)
-        registerForDraggedTypes([TabAppDragView.tabType])
-        toolTip = "Drop a tab here to close it"
-        setAccessibilityLabel("Drop tab to close")
-    }
-    required init?(coder: NSCoder) { fatalError("init(coder:)") }
-    func accepts(source: AnyObject?) -> UInt64? {
-        guard isAuthorized(), let source = source as? any SurfaceTabDragSource,
-              let id = source.draggedID, allowedIDs.contains(id),
-              TabDragPreview.shared.source == id,
-              SurfaceServices.shared.tabSnapshot(id) != nil else { return nil }
-        return id
-    }
-    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { draggingUpdated(sender) }
-    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
-        hovering = accepts(source: sender.draggingSource as AnyObject?) != nil
-        return hovering ? .move : []
-    }
-    override func draggingExited(_ sender: NSDraggingInfo?) { hovering = false }
-    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool { accepts(source: sender.draggingSource as AnyObject?) != nil }
-    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        defer { hovering = false }
-        guard let id = accepts(source: sender.draggingSource as AnyObject?) else { return false }
-        return closeDraggedTab(id)
-    }
-    func closeDraggedTab(_ id: UInt64) -> Bool {
-        guard isAuthorized(), allowedIDs.contains(id), TabDragPreview.shared.source == id else { return false }
-        return SurfaceServices.shared.closeTab(id)
-    }
-    override func draw(_ dirtyRect: NSRect) {
-        (hovering ? NSColor.systemRed : NSColor.controlBackgroundColor).setFill()
-        NSBezierPath(roundedRect: bounds.insetBy(dx: 2, dy: 2), xRadius: 12, yRadius: 12).fill()
-        let image = NSImage(systemSymbolName: hovering ? "trash.fill" : "trash", accessibilityDescription: nil)?
-            .withSymbolConfiguration(.init(pointSize: 20, weight: .medium))?
-            .withSymbolConfiguration(.init(paletteColors: [hovering ? .white : .secondaryLabelColor]))
-        image?.draw(in: NSRect(x: bounds.midX - 11, y: bounds.midY - 11, width: 22, height: 22))
+
+/// A Dock-style caption above the dragged tab, with room for its soft shadow.
+struct TabDragCue: View {
+    let icon: NSImage?
+    let closing: Bool
+
+    var body: some View {
+        VStack(spacing: 10) {
+            if closing {
+                Text("Close tab")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.primary)
+                    .fixedSize()
+                    .padding(.horizontal, 13)
+                    .padding(.vertical, 5)
+                    .background(.regularMaterial, in: Capsule())
+                    .overlay(Capsule().strokeBorder(.white.opacity(0.45), lineWidth: 0.5))
+                    .shadow(color: .black.opacity(0.16), radius: 4, y: 2)
+            }
+            if let icon {
+                Image(nsImage: icon).resizable().scaledToFit()
+                    .frame(width: 32, height: 32)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityHidden(true)
     }
 }

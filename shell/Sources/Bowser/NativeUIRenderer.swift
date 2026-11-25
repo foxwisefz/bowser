@@ -62,6 +62,9 @@ import BowserSurfaceKit
         )
         closeWindowItem.keyEquivalentModifierMask = [.command, .shift]
         }
+        fileMenu.addItem(.separator())
+        let saveResource = fileMenu.addItem(withTitle: "Save As…", action: NSSelectorFromString("saveResource:"), keyEquivalent: "s")
+        saveResource.target = context.target
         fileMenuItem.submenu = fileMenu
         mainMenu.addItem(fileMenuItem)
 
@@ -70,13 +73,20 @@ import BowserSurfaceKit
         editMenu.addItem(withTitle: "Cut", action: NSSelectorFromString("cut:"), keyEquivalent: "x")
         editMenu.addItem(withTitle: "Copy", action: NSSelectorFromString("copy:"), keyEquivalent: "c")
         editMenu.addItem(withTitle: "Paste", action: NSSelectorFromString("paste:"), keyEquivalent: "v")
+        let pasteMatchingStyle = editMenu.addItem(withTitle: "Paste and Match Style", action: NSSelectorFromString("pasteAsPlainText:"), keyEquivalent: "v")
+        pasteMatchingStyle.keyEquivalentModifierMask = [.command, .option, .shift]
         editMenu.addItem(withTitle: "Select All", action: NSSelectorFromString("selectAll:"), keyEquivalent: "a")
+        editMenu.addItem(.separator())
+        editMenu.addItem(withTitle: "Find in Page…", action: NSSelectorFromString("findInPage:"), keyEquivalent: "f")
+        editMenu.addItem(withTitle: "Find Next", action: NSSelectorFromString("findNextMatch:"), keyEquivalent: "g")
+        let findPrevious = editMenu.addItem(withTitle: "Find Previous", action: NSSelectorFromString("findPreviousMatch:"), keyEquivalent: "g")
+        findPrevious.keyEquivalentModifierMask = [.command, .shift]
         editMenuItem.submenu = editMenu
         mainMenu.addItem(editMenuItem)
 
         let viewMenuItem = NSMenuItem()
         let view = NSMenu(title: "View")
-        let modsmith = NSMenuItem(title: "ModSmith…", action: NSSelectorFromString("open:"), keyEquivalent: "")
+        let modsmith = NSMenuItem(title: "Tasks & Mods…", action: NSSelectorFromString("open:"), keyEquivalent: "")
         modsmith.target = context.targets["modsmith"]
         view.addItem(modsmith)
         let permissions = view.addItem(withTitle: "Website Permissions…", action: NSSelectorFromString("show:"), keyEquivalent: "")
@@ -115,7 +125,9 @@ import BowserSurfaceKit
 
         if context.siteHost == nil {
             goMenu.addItem(withTitle: "Command Bar", action: NSSelectorFromString("focusOmnibarAction:"), keyEquivalent: "k")
-            goMenu.addItem(withTitle: "Open Location", action: NSSelectorFromString("focusOmnibarAction:"), keyEquivalent: "l")
+            goMenu.addItem(withTitle: "Open Location", action: NSSelectorFromString("openLocationAction:"), keyEquivalent: "l")
+            let history = goMenu.addItem(withTitle: "Search History…", action: NSSelectorFromString("openHistory:"), keyEquivalent: "y")
+            history.target = context.target
         }
         let copyURLItem = goMenu.addItem(
             withTitle: "Copy URL", action: NSSelectorFromString("copyCurrentURL:"), keyEquivalent: "c"
@@ -131,6 +143,9 @@ import BowserSurfaceKit
             withTitle: "Next Tab", action: NSSelectorFromString("nextTabInOrder:"), keyEquivalent: "]"
         )
         nextItem.keyEquivalentModifierMask = [.command, .shift]
+        let lastItem = goMenu.addItem(withTitle: "Last Focused Tab",
+            action: NSSelectorFromString("lastFocusedTab:"), keyEquivalent: "\t")
+        lastItem.keyEquivalentModifierMask = .control
         }
         if context.siteHost != nil {
             for action in context.siteActions {
@@ -231,7 +246,7 @@ import BowserSurfaceKit
     static func settingsItem(_ section: SettingsSection, _ target: NSObject) -> NSToolbarItem {
         let item = NSToolbarItem(itemIdentifier: NSToolbarItem.Identifier(section.id))
         item.label = section.title; item.paletteLabel = section.title
-        let symbol = ["websites": "globe", "settings": "gearshape", "profiles": "person.crop.rectangle", "mods": "puzzlepiece.extension"][section.id] ?? "slider.horizontal.3"
+        let symbol = ["websites": "globe", "settings": "gearshape", "profiles": "person.crop.rectangle", "mods": "puzzlepiece.extension", "history": "clock.arrow.circlepath"][section.id] ?? "slider.horizontal.3"
         item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: section.title)
         item.target = target; item.action = NSSelectorFromString("selectToolbarSection:")
         return item

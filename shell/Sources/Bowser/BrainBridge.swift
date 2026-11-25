@@ -1,4 +1,5 @@
 import AppKit
+import BackendRuntime
 import WebKit
 
 /// Swift-native implementation of the brain protocol (ADR 0008): a Unix
@@ -16,13 +17,7 @@ final class BrainBridge {
 
     lazy var resources = NativeResources(session: engineSessionID)
 
-    // Written by the socket thread, read under lock by send().
-    private let connLock = NSLock()
-    nonisolated(unsafe) private var connFD: Int32 = -1
-    nonisolated(unsafe) private var connectionID = UUID()
-    nonisolated private func isCurrent(_ id: UUID) -> Bool {
-        connLock.lock(); defer { connLock.unlock() }; return connectionID == id && connFD >= 0
-    }
+    private var connection: SocketFrameWriter?
 
     func start() {
         let dir = SiteAppConfiguration.current?.home ?? BowserPaths.home
@@ -50,41 +45,21 @@ final class BrainBridge {
 
     // MARK: - Outbound
 
-    var isConnected: Bool {
-        connLock.lock()
-        defer { connLock.unlock() }
-        return connFD >= 0
-    }
+    var isConnected: Bool { connection?.isOpen == true }
 
     func send(_ message: [String: Any]) {
-        // Quit is a lifecycle transaction, not a sequence of tab closures.
-        if BackendLifecycle.shared.isQuitting, message["op"] as? String == "event" { return }
-        guard JSONSerialization.isValidJSONObject(message),
-              let payload = try? JSONSerialization.data(withJSONObject: message)
-        else {
-            NSLog("Bowser: refusing to send non-JSON message")
-            return
-        }
-        var frame = Data(capacity: payload.count + 4)
-        var length = UInt32(payload.count).bigEndian
-        withUnsafeBytes(of: &length) { frame.append(contentsOf: $0) }
-        frame.append(payload)
+        guard let connection else { return }
+        send(message, over: connection)
+    }
 
-        connLock.lock()
-        defer { connLock.unlock() }
-        guard connFD >= 0 else { return }
-        let ok = frame.withUnsafeBytes { raw -> Bool in
-            var written = 0
-            while written < raw.count {
-                let n = write(connFD, raw.baseAddress!.advanced(by: written), raw.count - written)
-                if n <= 0 { return false }
-                written += n
-            }
-            return true
-        }
-        if !ok {
-            shutdown(connFD, SHUT_RDWR) // readLoop owns the close
-            connFD = -1
+    private func send(_ message: [String: Any], over writer: SocketFrameWriter) {
+        guard connection === writer, writer.isOpen else { return }
+        // A deliberate quit flushes the earlier events before app_quit.
+        if BackendLifecycle.shared.isQuitting, message["op"] as? String == "event" { return }
+        do {
+            try writer.sendJSON(message)
+        } catch {
+            NSLog("Bowser: could not send brain message: %@", String(describing: error))
         }
     }
 
@@ -138,55 +113,59 @@ final class BrainBridge {
                 close(fd)
                 continue
             }
-            // The main browser can quit while a site is emitting events.
-            // A disconnected peer must not terminate that app with SIGPIPE.
-            var noSigPipe: Int32 = 1
-            setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size))
-            NSLog("Bowser: brain connected")
-            connLock.lock()
-            connFD = fd
-            let connection = UUID(); connectionID = connection
-            connLock.unlock()
-
-            DispatchQueue.main.async { if self.isCurrent(connection) { self.sendHello() } }
-            readLoop(fd: fd, connection: connection)
-
-            connLock.lock()
-            if connFD == fd { connFD = -1 }
-            connLock.unlock()
-            close(fd)
+            serveConnection(fd)
             NSLog("Bowser: brain disconnected")
         }
         close(listenFD)
     }
 
-    nonisolated private func readLoop(fd: Int32, connection: UUID) {
+    nonisolated func serveConnection(_ fd: Int32) {
+        let writer = SocketFrameWriter(fd: fd)
+        DispatchQueue.main.async {
+            self.connection = writer
+            if writer.isOpen { self.sendHello() }
+        }
+        readLoop(fd: fd, writer: writer)
+        writer.finishReading()
+        DispatchQueue.main.async {
+            if self.connection === writer { self.connection = nil }
+        }
+    }
+
+    nonisolated private func readLoop(fd: Int32, writer: SocketFrameWriter) {
         var buffer = Data()
         var chunk = [UInt8](repeating: 0, count: 1 << 16)
 
         while true {
             let n = read(fd, &chunk, chunk.count)
+            if n < 0 && errno == EINTR { continue }
             if n <= 0 { return }
             buffer.append(contentsOf: chunk[0..<n])
 
-            while buffer.count >= 4 {
-                let length = buffer.prefix(4).reduce(0) { ($0 << 8) | Int($1) }
-                guard length <= 64 * 1024 * 1024 else { return }
-                guard buffer.count >= 4 + length else { break }
-                let payload = buffer.subdata(in: 4..<(4 + length))
-                buffer.removeSubrange(0..<(4 + length))
+            var offset = buffer.startIndex
+            while buffer.endIndex - offset >= 4 {
+                let start = offset + 4
+                let length = buffer[offset..<start].reduce(0) { ($0 << 8) | Int($1) }
+                guard length <= SocketFrameWriter.maximumPayloadBytes else { return }
+                guard buffer.endIndex - start >= length else { break }
+                offset = start + length
+                let payload = buffer.subdata(in: start..<offset)
 
                 // Data is Sendable; parse on the main actor where handling lives.
                 DispatchQueue.main.async {
-                    guard self.isCurrent(connection) else { return }
+                    guard self.connection === writer else { return }
                     if let object = try? JSONSerialization.jsonObject(with: payload),
                        let message = object as? [String: Any] {
-                        BrainBridge.shared.handle(message)
+                        // The relay closes immediately after quit_ready. Honor
+                        // that final complete frame even if EOF arrived first.
+                        guard writer.isOpen || message["op"] as? String == "quit_ready" else { return }
+                        self.handle(message, reply: self.replySender())
                     } else {
                         NSLog("Bowser: bad JSON from brain")
                     }
                 }
             }
+            if offset != buffer.startIndex { buffer.removeSubrange(buffer.startIndex..<offset) }
         }
     }
 
@@ -194,7 +173,8 @@ final class BrainBridge {
 
     private func sendHello() {
         let ordered = BrowserWindowController.orderedTabIDs
-        let ids = ordered + EngineView.live.keys.filter { !ordered.contains($0) }.sorted()
+        let owned = Set(ordered)
+        let ids = ordered + EngineView.live.keys.filter { !owned.contains($0) }.sorted()
         let tabs: [[String: Any]] = ids.map { id in
             var tab: [String: Any] = ["id": id]
             // Never box an Optional into JSON — JSONSerialization rejects it
@@ -234,7 +214,17 @@ final class BrainBridge {
         return EngineView.live.keys.min().flatMap { EngineView.live[$0] }
     }
 
-    private func handle(_ message: [String: Any]) {
+    /// Numeric request IDs can repeat after a reconnect. WebKit and saved-app
+    /// callbacks retain a sender for the peer that issued the request.
+    func replySender() -> @MainActor ([String: Any]) -> Void {
+        let writer = connection
+        return { [weak self, weak writer] response in
+            guard let writer else { return }
+            self?.send(response, over: writer)
+        }
+    }
+
+    private func handle(_ message: [String: Any], reply: @escaping @MainActor ([String: Any]) -> Void) {
         let op = message["op"] as? String ?? ""
         var requested = UInt64(message["webview"] as? Int ?? 0)
         if let profile = message["profile"] as? String, message["webview"] != nil, op != "set_user_content" {
@@ -250,10 +240,10 @@ final class BrainBridge {
         case "resource_ready": resources.ready()
         case "resource_decision": resources.decide(message)
         case "resource_snapshot":
-            send(["op": "resource_result", "snapshot": resources.snapshot()])
+            reply(["op": "resource_result", "snapshot": resources.snapshot()])
         case "resource_command":
             let result = resources.apply(message)
-            send(["op": "resource_result", "result": result, "snapshot": resources.snapshot()])
+            reply(["op": "resource_result", "result": result, "snapshot": resources.snapshot()])
         case "quit_ready":
             BackendLifecycle.shared.quitAcknowledged = true
 
@@ -271,15 +261,15 @@ final class BrainBridge {
                     throw NSError(domain: "Bowser.WebsiteLayout", code: 1, userInfo: [NSLocalizedDescriptionKey: "Target tab is not in a browser window"])
                 }
                 let value = try controller.websiteLayoutCommand(message)
-                send(["op": "js_result", "id": id, "ok": true, "value": value])
+                reply(["op": "js_result", "id": id, "ok": true, "value": value])
             } catch {
-                send(["op": "js_result", "id": id, "ok": false, "value": error.localizedDescription])
+                reply(["op": "js_result", "id": id, "ok": false, "value": error.localizedDescription])
             }
 
         case "page_screenshot":
             guard let id = message["id"] as? Int else { return }
             guard let view = (requested == 0 ? resolve(0) : EngineView.live[requested]), view.inspectionUnavailableReason == nil else {
-                send(["op": "js_result", "id": id, "ok": false, "value": "Activate and load the target tab before capturing it"])
+                reply(["op": "js_result", "id": id, "ok": false, "value": "Activate and load the target tab before capturing it"])
                 return
             }
             let maxWidth = message["max_width"] as? Int ?? 1280
@@ -295,9 +285,9 @@ final class BrainBridge {
                         throw NSError(domain: "Bowser", code: 1, userInfo: [NSLocalizedDescriptionKey: "Page changed during capture; request a fresh screenshot"])
                     }
                     result["webview"] = view.webviewId
-                    send(["op": "js_result", "id": id, "ok": true, "value": result])
+                    reply(["op": "js_result", "id": id, "ok": true, "value": result])
                 } catch {
-                    send(["op": "js_result", "id": id, "ok": false, "value": error.localizedDescription])
+                    reply(["op": "js_result", "id": id, "ok": false, "value": error.localizedDescription])
                 }
             }
 
@@ -306,7 +296,7 @@ final class BrainBridge {
             guard requested != 0, let controller = BrowserWindowController.host(of: requested),
                   (controller.activeTab?.webviewId == requested || controller.websiteLayout?.ids.contains(requested) == true),
                   let window = controller.window else {
-                send(["op": "js_result", "id": id, "ok": false, "value": "Target tab must be visible in a browser window"])
+                reply(["op": "js_result", "id": id, "ok": false, "value": "Target tab must be visible in a browser window"])
                 return
             }
             Task { @MainActor in
@@ -322,43 +312,40 @@ final class BrainBridge {
                         try NativeVerification.click(window, x: x, y: y)
                         value = ["dispatched": true]
                     }
-                    send(["op": "js_result", "id": id, "ok": true, "value": value])
+                    reply(["op": "js_result", "id": id, "ok": true, "value": value])
                 } catch {
-                    send(["op": "js_result", "id": id, "ok": false, "value": error.localizedDescription])
+                    reply(["op": "js_result", "id": id, "ok": false, "value": error.localizedDescription])
                 }
             }
 
         case "eval_js":
             guard let id = message["id"] as? Int, let code = message["code"] as? String else { return }
             guard let view = resolve(requested) else {
-                send(["op": "js_result", "id": id, "ok": false, "value": "no webview"])
+                reply(["op": "js_result", "id": id, "ok": false, "value": "no webview"])
                 return
             }
             if let reason = view.inspectionUnavailableReason {
-                send(["op": "js_result", "id": id, "ok": false, "value": reason])
+                reply(["op": "js_result", "id": id, "ok": false, "value": reason])
                 return
             }
             let world = message["world"] as? String ?? "page"
             guard ["isolated", "page"].contains(world) else {
-                send(["op": "js_result", "id": id, "ok": false, "value": "invalid script world"])
+                reply(["op": "js_result", "id": id, "ok": false, "value": "invalid script world"])
                 return
             }
             let webviewId = view.webviewId
             let contentWorld = world == "page" ? WKContentWorld.page : ModScript.isolatedWorld
-            view.webView.evaluateJavaScript(code, in: nil, in: contentWorld) { [weak self] result in
+            view.webView.evaluateJavaScript(code, in: nil, in: contentWorld) { result in
                 switch result {
-                case .success(let value):
-                    self?.send(["op": "js_result", "id": id, "webview": webviewId, "ok": true, "value": Self.jsonify(value)])
+                case .success:
+                    reply(Self.javaScriptReply(result, id: id, webview: webviewId))
                 case .failure(let error):
                     if error.localizedDescription.contains("unsupported type") {
                         view.webView.callAsyncJavaScript("return (\(code));", arguments: [:], in: nil, in: contentWorld) { result in
-                            switch result {
-                            case .success(let value): self?.send(["op": "js_result", "id": id, "webview": webviewId, "ok": true, "value": Self.jsonify(value)])
-                            case .failure(let error): self?.send(["op": "js_result", "id": id, "webview": webviewId, "ok": false, "value": error.localizedDescription])
-                            }
+                            reply(Self.javaScriptReply(result, id: id, webview: webviewId))
                         }
                     } else {
-                        self?.send(["op": "js_result", "id": id, "webview": webviewId, "ok": false, "value": error.localizedDescription])
+                        reply(Self.javaScriptReply(result, id: id, webview: webviewId))
                     }
                 }
             }
@@ -375,21 +362,21 @@ final class BrainBridge {
             if SiteAppConfiguration.current == nil { SiteAppHub.shared.requestIcons() }
 
         case "refresh_app_icons":
-            if SiteAppConfiguration.current == nil { TabAppBundle.upgradeSavedApps() }
+            TabAppBundle.upgradeSavedApps((message["icon_key"] as? String).map(SavedAppRegistry.Scope.icon) ?? .all)
 
         case "site_eval", "site_screenshot", "site_status":
             guard SiteAppConfiguration.current == nil else { return }
-            SiteAppHub.shared.route(message)
+            SiteAppHub.shared.route(message, reply: reply)
 
         case "modsmith_scope":
             let id = message["request_id"] as? String ?? ""
             let choice = message["choice"] as? String ?? "unclear"
             CommandBar.shared.receiveScope(id: id, choice: choice)
-            ModSmithWindow.shared.model.scopeChoice.receive(id: id, choice: choice)
+            ModSmithWindow.shared.model.scopeChoice.receive(id: id, choice: choice, kind: message["kind"] as? String)
 
         case "modsmith_state":
             if SiteAppConfiguration.current == nil, message["app"] is String {
-                SiteAppHub.shared.route(message)
+                SiteAppHub.shared.route(message, reply: reply)
             } else {
                 ModSmithWindow.shared.receive(message)
             }
@@ -400,7 +387,7 @@ final class BrainBridge {
         case "site_app_info":
             guard let config = SiteAppConfiguration.current else { return }
             let titles = NSApp.mainMenu?.items.flatMap { $0.submenu?.items.map(\.title) ?? [] } ?? []
-            send(["op": "site_app_info", "id": message["id"] ?? 0,
+            reply(["op": "site_app_info", "id": message["id"] ?? 0,
                   "app": config.identifier, "profile": config.profile,
                   "windows": BrowserWindowController.all.count, "menu_titles": titles,
                   "page_top_inset": EngineView.pageTopInset,
@@ -440,10 +427,10 @@ final class BrainBridge {
             guard let id = message["id"] as? Int else { return }
             guard let url = CookieAccess.target(message["url"]), let host = url.host,
                   let store = CookieAccess.store(profile: message["profile"] as? String, webview: requested) else {
-                send(["op": "cookies_result", "id": id, "cookies": [], "error": "invalid_cookie_scope"])
+                reply(["op": "cookies_result", "id": id, "cookies": [], "error": "invalid_cookie_scope"])
                 return
             }
-            store.httpCookieStore.getAllCookies { [weak self] cookies in
+            store.httpCookieStore.getAllCookies { cookies in
                 MainActor.assumeIsolated {
                     let matched = cookies.filter { c in
                         CookieAccess.matches(domain: c.domain, host: host)
@@ -454,7 +441,7 @@ final class BrainBridge {
                             "path": c.path, "secure": c.isSecure, "http_only": c.isHTTPOnly,
                         ]
                     }
-                    self?.send(["op": "cookies_result", "id": id, "cookies": serialized])
+                    reply(["op": "cookies_result", "id": id, "cookies": serialized])
                 }
             }
 
@@ -503,12 +490,9 @@ final class BrainBridge {
             SurfaceManager.shared.handle(message)
 
         case "activate_tab":
-            // Mount it as the window's content — no window ordering games,
-            // the tab has no window of its own any more.
             if let host = BrowserWindowController.host(of: requested),
                host.activateTab(id: requested) {
-                host.window?.makeKeyAndOrderFront(nil)
-                NSApp.activate()
+                host.focusWindow()
             }
 
         case "close_tab":
@@ -542,14 +526,25 @@ final class BrainBridge {
         }
     }
 
-    nonisolated static func jsonify(_ value: Any?) -> Any {
-        switch value {
-        case nil: return NSNull()
-        case let v as NSNumber: return v
-        case let v as String: return v
-        case let v as [Any]: return v.map { jsonify($0) }
-        case let v as [String: Any]: return v.mapValues { jsonify($0) }
-        default: return String(describing: value!)
+    nonisolated static func javaScriptReply(_ result: Result<Any, Error>, id: Int, webview: UInt64) -> [String: Any] {
+        var reply: [String: Any] = ["op": "js_result", "id": id, "webview": webview]
+        do {
+            reply["value"] = try JavaScriptResult.convert(result.get())
+            reply["ok"] = true
+        } catch {
+            reply["value"] = error.localizedDescription
+            reply["ok"] = false
+        }
+        return reply
+    }
+
+    nonisolated static func pageEvent(_ value: Any, webview: UInt64) -> [String: Any] {
+        do {
+            return ["op": "event", "event": "page", "webview": webview,
+                    "payload": try JavaScriptResult.convert(value)]
+        } catch {
+            return ["op": "event", "event": "console", "webview": webview,
+                    "level": "error", "message": "Dropped page event: \(error.localizedDescription)"]
         }
     }
 }

@@ -47,11 +47,21 @@ import WebKit
     }
 
     static let editTrackingScript = """
-    for (const event of ['input', 'change', 'pointerdown', 'keydown']) {
-      addEventListener(event, e => {
-        if (e.isTrusted) window.webkit.messageHandlers.bowserEdited.postMessage(true);
-      }, true);
-    }
+    (() => {
+      const events = ['input', 'change', 'pointerdown', 'keydown'];
+      const markEdited = () => window.webkit.messageHandlers.bowserEdited.postMessage(true);
+      function firstInteraction(event) {
+        if (!event.isTrusted) return;
+        markEdited();
+        for (const name of events) removeEventListener(name, firstInteraction, true);
+        // WebKit can restore this document with its existing listeners. The
+        // native tab resets its protection on commit, so restore it as well.
+        addEventListener('pageshow', event => {
+          if (event.isTrusted && event.persisted) markEdited();
+        });
+      }
+      for (const name of events) addEventListener(name, firstInteraction, true);
+    })();
     """
 
     static func pageIsSafe(_ view: WKWebView) async -> Bool {

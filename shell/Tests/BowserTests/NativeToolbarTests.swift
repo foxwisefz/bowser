@@ -100,7 +100,7 @@ import AppKit
         slot.onAction = { actions.append($0) }
         var state: [String: Any] = ["revealed": true, "colors": [:], "buttonStyle": "flat",
             "cornerRadius": 6, "showNavigation": true, "modWidth": 40,
-            "permissionsAvailable": true, "capturing": true,
+            "permissionsAvailable": true, "capturing": true, "resourceAvailable": true,
             "siteMods": [["id": "site", "title": "Site toggle", "on": true]],
             "buttons": [["id": "one", "title": "First", "symbol": "star"],
                         ["id": "two", "title": "Second", "symbol": "star"]]]
@@ -108,16 +108,20 @@ import AppKit
         XCTAssertTrue(slot.install(library))
         defer { slot.retire() }
         slot.layoutSubtreeIfNeeded()
-        if let path = ProcessInfo.processInfo.environment["BOWSER_TOOLBAR_PREVIEW"],
-           let bitmap = slot.bitmapImageRepForCachingDisplay(in: slot.bounds) {
+        func writePreview(_ phase: String? = nil) throws {
+            guard let path = ProcessInfo.processInfo.environment["BOWSER_TOOLBAR_PREVIEW"] else { return }
+            let original = URL(fileURLWithPath: path)
+            let output = phase.map { original.deletingPathExtension().appendingPathExtension("\($0).png") } ?? original
+            let bitmap = try XCTUnwrap(slot.bitmapImageRepForCachingDisplay(in: slot.bounds))
             slot.cacheDisplay(in: slot.bounds, to: bitmap)
-            try bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+            try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: output)
         }
+        try writePreview()
         func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
         func control(_ id: String) throws -> NSButton {
             try XCTUnwrap(descendants(slot).compactMap { $0 as? NSButton }.first { $0.accessibilityIdentifier() == id })
         }
-        for action in ["command", "back", "forward", "reload", "mod:one", "mod:two", "permissions"] {
+        for action in ["command", "back", "forward", "reload", "download-resource", "mod:one", "mod:two", "permissions"] {
             try control(action).performClick(nil)
             XCTAssertEqual(actions.last, action)
         }
@@ -130,12 +134,43 @@ import AppKit
         let scroll = try XCTUnwrap(descendants(slot).compactMap { $0 as? NSScrollView }.first)
         XCTAssertEqual(scroll.frame.width, 40)
         XCTAssertGreaterThan(try XCTUnwrap(scroll.documentView).frame.width, scroll.frame.width)
-        state["revealed"] = false; state["capturing"] = false
+        let transport = try control("reload")
+        let back = try control("back")
+        let forward = try control("forward")
+        state["navigation"] = ["canGoBack": false, "canGoForward": true, "canReload": true, "isLoading": true]
+        slot.setSnapshot(try JSONSerialization.data(withJSONObject: state))
+        slot.layoutSubtreeIfNeeded()
+        XCTAssertFalse(back.isEnabled)
+        XCTAssertTrue(forward.isEnabled)
+        XCTAssertTrue(try control("stop") === transport)
+        XCTAssertEqual(transport.imagePosition, .imageOnly)
+        XCTAssertNotNil(transport.image)
+        XCTAssertEqual(transport.accessibilityLabel(), "Stop loading")
+        try writePreview("stop")
+        transport.performClick(nil)
+        XCTAssertEqual(actions.last, "stop")
+        state["navigation"] = ["canGoBack": true, "canGoForward": false, "canReload": true, "isLoading": false]
+        slot.setSnapshot(try JSONSerialization.data(withJSONObject: state))
+        slot.layoutSubtreeIfNeeded()
+        XCTAssertTrue(back.isEnabled)
+        XCTAssertFalse(forward.isEnabled)
+        XCTAssertTrue(try control("reload") === transport)
+        XCTAssertTrue(transport.isEnabled)
+        XCTAssertEqual(transport.imagePosition, .imageOnly)
+        XCTAssertNotNil(transport.image)
+        XCTAssertEqual(transport.accessibilityLabel(), "Reload this tab")
+        try writePreview("reload")
+        state["navigation"] = ["canReload": false, "isLoading": false, "canGoBack": true, "canGoForward": false]
+        slot.setSnapshot(try JSONSerialization.data(withJSONObject: state))
+        slot.layoutSubtreeIfNeeded()
+        XCTAssertFalse(transport.isEnabled)
+        state["revealed"] = false; state["capturing"] = false; state["resourceAvailable"] = false
         slot.setSnapshot(try JSONSerialization.data(withJSONObject: state))
         slot.layoutSubtreeIfNeeded()
         let remaining = descendants(slot).compactMap { ($0 as? NSButton)?.accessibilityIdentifier() }
         XCTAssertFalse(remaining.contains("mod:one"))
         XCTAssertFalse(remaining.contains("permissions"))
+        XCTAssertFalse(remaining.contains("download-resource"))
         XCTAssertNoThrow(try control("command"))
         XCTAssertEqual(slot.build, library.build)
     }

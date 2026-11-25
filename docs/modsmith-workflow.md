@@ -3,6 +3,12 @@
 ModSmith's workflow applies to every generated mod. A reported website or mod
 is a reproduction case, not a reason to add a special action to the product.
 
+The mod menu offers **Copy to profile** for installed browser mods. Choose a
+destination profile to create an independent copy of its current code and assets.
+The copy starts turned off, with fresh Store namespaces and no conversation,
+undo history, runtime state, website data, or saved mod data copied. Enable it
+from Mods in the destination profile. The original remains unchanged.
+
 The result envelope uses `active` only for verified requested behavior.
 `needs_help` includes a structured next step:
 
@@ -29,6 +35,23 @@ Enable, resume, retry, and clarify actions keep their instructions in agent
 context and durable history. UI snapshots expose only short activity messages;
 Undo uses the same short labels. Previously saved enable/resume instructions
 are presented this way as well. Owner-written requests remain visible.
+
+Direct API runs checkpoint tool arguments, returned results, and assistant handoff
+notes into the same mod conversation before and after each tool action. Resume
+receives that work history with the current request and API contract. A cancelled
+or interrupted action without a saved result is marked pending; the agent must
+inspect its state before retrying. Checkpoints survive restart, are cleared by
+Undo, and are not copied to another profile. History retains at most 96 recent
+entries and 256 KiB per project, truncates large values, and omits screenshot
+pixels. These historical observations do not count as fresh verification.
+The result card distinguishes the request limit, elapsed-time limit, and a lack
+of further progress using the runner's actual stopping reason.
+
+A final `files` entry may omit content for a draft written in this run or an
+owned file inspected with `read_mod` in this run. The file must still match the
+written or observed content. This lets resumed verification finish without
+reinstalling unchanged code. New and modified files still require content;
+other mods' files and external edits cannot be adopted by a reference.
 
 Security-review failures produce a separate repair notice even when the final
 result also asks for input. A later approved revision for the same file clears
@@ -93,7 +116,7 @@ When a target tab leaves the mod’s site, ModSmith recovers to another matching
 
 Before calling a result working, ModSmith runs a separate, tool-free outcome review against the original request, later changes and actual tool receipts. The proposed files must already be installed, and the reviewer must cite live observations after the last draft write. Compilation, a visible button or disabling a failed action alone does not establish success. The review can send the generator back for up to two repair attempts; unavailable or inconclusive reviews leave the result unverified. This is model-assisted evidence review, not a guarantee of correctness.
 
-Failed review findings stay with the mod independently of the recent chat window. Refinements use them to investigate different implementations, including maintained local libraries or tools through an audited native mod when appropriate. The review does not bypass the code security audit or grant permission for external actions. Raw tool transcripts remain bounded in run memory; the retained history contains concise review findings.
+Failed review findings stay with the mod independently of the recent chat window. Refinements use them to investigate different implementations, including maintained local libraries or tools through an audited native mod when appropriate. The review does not bypass the code security audit or grant permission for external actions. Raw tool transcripts remain bounded in run memory; direct API continuations also retain bounded tool excerpts, separately from fresh verification receipts.
 
 `page_screenshot(webview: id, max_width: 1280)` returns a PNG image of the loaded webpage viewport directly from WebKit, without desktop screen-recording permission. `list_tabs` supplies tab IDs; ModSmith pins the target to its scoped tab, and saved apps capture only their own page. Deferred tabs must be activated first. `max_width` bounds the longest image edge to 320–1920 pixels; `point_width`, `point_height` and `scale` map image pixels to viewport points. The tool excludes browser chrome and does not capture the full document; WebKit may omit protected video.
 
@@ -108,3 +131,57 @@ Desktop native mods use `BowserBrain.NativeTools.find_executable/1` (path or nil
 Security rejections return the bounded auditor finding to the generator so it can repair and resubmit the source. The existing exact-source digest and request nonce still gate approval; a rejection cannot grant execution permission. Source security and runtime outcome verification are separate checks.
 
 Results claiming an external dependency also receive independent review before stopping. This review checks the blocker and summary against tool receipts, including executable discovery and audit findings; it does not require installing a genuinely missing dependency. Unsupported blockers and claims that a failed action is working go back through the bounded repair loop. Owner choices and permission requests do not imply consent and are not automatically fulfilled. If review cannot establish the claim, the result stays unfinished rather than reporting success or presenting an unsupported prerequisite as fact.
+
+
+## One-off page tasks
+
+Task activity describes page work, answer review and file exports in everyday language.
+Repeated identical activity updates are folded together; tool receipts remain in the
+saved execution history. Task continuations and result review use the page-task contract,
+including text answers and writing drafts, rather than installed-mod testing. Review checks
+the requested result against observed evidence and names a specific gap when one remains.
+When a task reaches a run limit or its result cannot be verified, it keeps the drafted
+answer, clearly marked as unfinished or not fully checked. Follow-ups continue the same
+task conversation.
+
+**⌘K → Run a task…** opens a Run once draft with the text already typed and
+the page where the command bar opened. Type `:task <request>` and press Return
+to run directly; bare `:task` opens an empty draft. Ordinary searches retain
+their navigation behavior, and `:do` / **Create a mod…** select a reusable mod.
+
+**Tasks & Mods → New request** defaults to **Run once**. The editable intent
+suggestion can recommend **Keep as a mod** for reusable behavior. Explicit choices
+win and unavailable suggestions leave Run once selected. Existing mods and the
+omnibar's explicit Create a mod command retain their mod behavior.
+
+Tasks use the selected tab only; switching focus does not redirect execution and
+closing that tab never falls back to another tab. This first version does not
+select additional tabs. Tasks have their own history tab, progress, Stop, Resume,
+and checked results. Temporary DOM edits can disappear on navigation or a site
+rerender. Website actions can persist; deleting history does not undo them.
+**Run again on current page** starts a fresh task. **Make reusable** opens an
+editable mod draft; it does not install or rerun anything until submitted.
+
+Task completion uses live page observations and export receipts, with the same
+independent outcome reviewer as mods. It does not require source installation,
+usage instructions, or a nonempty `files` envelope. Tasks always return `files: []`.
+`status: active` means the task outcome was checked, rendered as Completed.
+Saved checkpoints retain progress; pending actions must be inspected before retrying.
+
+The task tool allowlist is `list_tabs`, `page_html`, `page_eval`, `page_screenshot`,
+`ask_user`, `save_task_file`, and `task_files`. The server enforces it even if a
+client advertises more tools. Mod writes, native tools, and Store access are not
+available to tasks. Page data is untrusted, and task prompts prohibit persistent
+scripts/timers. `page_eval` still runs arbitrary page JavaScript within the user's
+authorization, so transient edits are not a general-purpose rollback sandbox.
+
+`save_task_file({name, content})` writes UTF-8 .json/.csv/.txt/.md under a unique
+`~/Downloads/Bowser Tasks/` directory. Names cannot contain directories; JSON is
+validated. Limit: 1 MiB per file, 32 files and 8 MiB per task. Existing files are
+never overwritten. The result includes `file: {name, path, bytes, sha256,
+exported_at}`. Export time is not an original content timestamp.
+`task_files({})` returns the task's recorded files with an `intact` boolean based
+on current bytes/hash. Both require an active task token and can run even after
+its tab closes. The UI exposes recorded files through Show in Finder. Deleting
+task history leaves exported files in Downloads. Model-provided paths in a final
+response never authorize filesystem writes or Finder actions.

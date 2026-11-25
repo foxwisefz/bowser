@@ -21,8 +21,17 @@ defmodule BowserBrain.Handoff do
     dir = System.fetch_env!("BOWSER_RELAY_DIR")
     # BEAM is never allowed to outlive its owner, even if that owner is killed
     # during a freeze. The native app is not a child of either process.
-    owner = System.fetch_env!("BOWSER_RELAY_PID")
-    spawn(fn -> watch_owner(owner) end)
+    if System.get_env("BOWSER_RELAY_LIFETIME") == "stdin" do
+      # The host keeps the only writer. EOF also arrives after SIGKILL, while
+      # the bridge is disconnected, or while the checkpointed services freeze.
+      spawn(fn ->
+        IO.binread(:stdio, 1)
+        System.halt(0)
+      end)
+    else
+      owner = System.fetch_env!("BOWSER_RELAY_PID")
+      spawn(fn -> watch_owner(owner) end)
+    end
     System.put_env("BOWSER_NO_SPAWN", "1")
     Application.load(:bowser_brain)
     for key <- [:connect_bridge, :spawn_engine, :load_user_mods, :watch_lib, :watch_sites],
@@ -152,6 +161,10 @@ defmodule BowserBrain.Handoff do
   end
   defp command(%{"op" => "commit"}, []) do
     enable(false)
+    # The candidate inherits protocol capability and receives no new hello.
+    # Only the committed generation can request a replay of pending intents.
+    send(BowserBrain.ResourceController, :ready)
+    send(BowserBrain.TabDeck, :decay_tick)
     {%{ok: true}, []}
   end
   defp command(%{"op" => "resume"}, suspended) do

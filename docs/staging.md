@@ -55,8 +55,15 @@ The updater preserves the previous app/runtime pair separately by renaming it. S
 files outside these roots reached through links are not copied. The macOS
 Keychain is unchanged and is not part of these file backups.
 
-Backups are private to the user and retained under `~/.bowser/backups`; they are
-not pruned automatically. A failed backup leaves the current build installed and
+Backups are private to the user under `~/.bowser/backups`. After a verified backup,
+Bowser retains the three newest completed snapshots and removes older ones.
+Put an empty `.keep` file inside a snapshot directory to retain it beyond that
+limit. A snapshot being restored is also protected during recovery.
+`bin/staging cleanup` previews the same retention policy; add `--apply` to verify
+the three newest snapshots and remove the older ones immediately. Cleanup leaves
+unrecognized files, incomplete snapshots and symbolic links alone, and never
+changes current profiles, mods or website data.
+A failed backup leaves the current build installed and
 the update pending. Ensure there is space for persistent user and website data.
 
 To restore, quit Bowser and every saved app, then run:

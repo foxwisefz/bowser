@@ -2,11 +2,12 @@ import AppKit
 import WebKit
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var siteTerminationObserver: NSObjectProtocol?
     private var didFinishLaunching = false
     private(set) var admissionRequired = false
     private var browserStarted = false
+    private var browserStarting = false
     private(set) var isTerminating = false
     private var pendingExternalURLs: [URL] = []
     private lazy var externalProfilePicker = ExternalProfilePicker { [weak self] urls, profile in
@@ -52,7 +53,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func startBrowser() {
-        guard !admissionRequired, !browserStarted else { return }
+        guard !admissionRequired, !browserStarted, !browserStarting else { return }
+        browserStarting = true
+        if SiteAppConfiguration.current != nil || !FileManager.default.fileExists(atPath: SessionCookies.file.path) {
+            finishStartingBrowser()
+            return
+        }
+        Task {
+            if SiteAppConfiguration.current == nil {
+                do { try await SessionCookies.restore() }
+                catch { NSLog("Session cookie restoration failed (%@)", String(describing: type(of: error))) }
+            }
+            if isTerminating {
+                try? await SessionCookies.save()
+                NSApp.reply(toApplicationShouldTerminate: true)
+                return
+            }
+            finishStartingBrowser()
+        }
+    }
+
+    private func finishStartingBrowser() {
+        browserStarting = false
         browserStarted = true
         if SiteAppConfiguration.current != nil { SiteAppNotifications.shared.start() }
         buildMenu()
@@ -82,8 +104,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 forName: NSWorkspace.didTerminateApplicationNotification, object: nil, queue: .main
             ) { notification in
                 guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
-                      app.bundleIdentifier?.hasPrefix("com.foxwiseai.bowser.site.") == true else { return }
-                MainActor.assumeIsolated { TabAppBundle.upgradeSavedApps() }
+                      app.bundleIdentifier?.hasPrefix("com.foxwiseai.bowser.site.") == true,
+                      let url = app.bundleURL else { return }
+                MainActor.assumeIsolated { TabAppBundle.upgradeSavedApps(.bundle(url)) }
             }
         }
         NSApp.activate()
@@ -100,6 +123,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let controller = Self.browserController(eventWindow: event.window, keyWindow: NSApp.keyWindow,
                                                 mainWindow: NSApp.mainWindow)
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if event.keyCode == 53, flags.isEmpty, controller?.pageFindBar?.isHidden == false {
+            controller?.pageFindBar?.dismiss()
+            return nil
+        }
+        if flags == .control, event.keyCode == 48, let controller {
+            controller.activateLastFocusedTab()
+            return nil
+        }
         // ⌘` / ⌘⇧` by PHYSICAL key (kVK_ANSI_Grave): the typed character
         // for that key varies by layout, and a miss here beeps.
         if event.keyCode == 50 || event.keyCode == 10, flags == .command || flags == [.command, .shift] {
@@ -118,6 +149,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             case "]":
                 controller?.activateAdjacentTab(offset: 1)
                 return nil
+            case "g":
+                controller?.findNext(backwards: true)
+                return nil
             case "c":
                 self.copyURL(from: controller)
                 return nil
@@ -135,11 +169,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case "k", "l":
             guard SiteAppConfiguration.current == nil else { return event }
             if let controller {
-                CommandBar.shared.show(for: controller)
+                if key == "k" {
+                    guard !event.isARepeat else { return nil }
+                    if CommandBar.shared.handShortcutToPage(event, for: controller) { return nil }
+                }
+                CommandBar.shared.show(for: controller, invocation: key == "l" ? .location : .commands)
             }
+            return nil
+        case "f":
+            controller?.showFindInPage()
+            return nil
+        case "g":
+            controller?.findNext()
             return nil
         case "r":
             controller?.activeTab?.reloadPage()
+            return nil
+        case "s":
+            guard controller?.activeTab?.downloadableResource != nil else { return event }
+            controller?.activeTab?.saveResource(destination: .saveAs)
             return nil
         case ",":
             self.openSettings(nil)
@@ -167,6 +215,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         isTerminating = true
+        if browserStarting { return .terminateLater }
         return browserStarted ? BackendLifecycle.shared.quit() : .terminateNow
     }
 
@@ -183,6 +232,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         if admissionRequired { showAdmission(); return false }
+        if browserStarting { return false }
         guard SiteAppConfiguration.current != nil else {
             if BrowserWindowController.all.isEmpty && externalProfilePicker.model.linkCount == 0 { openWindow() }
             return true
@@ -214,6 +264,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func openExternalURLs(_ urls: [URL]) {
         if admissionRequired { pendingExternalURLs.append(contentsOf: urls); showAdmission(); return }
+        if browserStarting { pendingExternalURLs.append(contentsOf: urls); return }
         if SiteAppConfiguration.current == nil {
             externalProfilePicker.receive(urls)
             return
@@ -258,7 +309,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // resurrecting window is about to display the restored session and
         // the palette popping over the freeze-frame breaks the illusion
         // (bowser-browser-xl8).
-        if !controller.isResurrecting { controller.focusOmnibar() }
+        if !controller.isResurrecting, let tab = controller.activeTab {
+            CommandBar.shared.show(for: controller, invocation: .newTab(tab))
+        }
         if isFirstWindowForProfile { controller.restoreFullscreen() }
         return controller
     }
@@ -320,8 +373,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             openWindow()
             return
         }
-        controller.openTab(opener: controller.activeTab?.webviewId, activate: true)
-        controller.focusOmnibar()
+        let tab = controller.openTab(opener: controller.activeTab?.webviewId, activate: true)
+        CommandBar.shared.show(for: controller, invocation: .newTab(tab))
     }
 
     /// ⌘N: another window of the CURRENT profile.
@@ -411,6 +464,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         currentController?.activeTab?.reloadPage()
     }
 
+    @objc func saveResource(_ sender: Any?) {
+        currentController?.activeTab?.saveResource(destination: .saveAs)
+    }
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(saveResource(_:)) { return currentController?.activeTab?.downloadableResource != nil }
+        return true
+    }
+
     @objc func copyCurrentURL(_ sender: Any?) {
         copyURL(from: currentController)
     }
@@ -422,6 +484,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pb.setString(url, forType: .string)
     }
 
+    @objc func findInPage(_ sender: Any?) { currentController?.showFindInPage() }
+    @objc func findNextMatch(_ sender: Any?) { currentController?.findNext() }
+    @objc func findPreviousMatch(_ sender: Any?) { currentController?.findNext(backwards: true) }
+    @objc func lastFocusedTab(_ sender: Any?) { currentController?.activateLastFocusedTab() }
     @objc func previousTab(_ sender: Any?) { currentController?.activateAdjacentTab(offset: -1) }
     @objc func nextTabInOrder(_ sender: Any?) { currentController?.activateAdjacentTab(offset: 1) }
 
@@ -476,6 +542,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ])
     }
 
+    @objc func openHistory(_ sender: Any?) {
+        showHistory(in: currentController)
+    }
+
+    func openHistory(forProfile profile: String) {
+        let candidates = BrowserWindowController.all.filter { $0.profile.id == profile }
+        let owner = candidates.last { $0.tabs.contains { $0.currentURLString == EngineView.historyURL } } ?? candidates.last
+        showHistory(in: owner, profile: profile)
+    }
+
+    private func showHistory(in owner: BrowserWindowController?, profile: String? = nil) {
+        let tab: EngineView
+        if let owner, let existing = owner.tabs.first(where: { $0.currentURLString == EngineView.historyURL }) {
+            HistoryController.shared.selectedProfile = owner.profile.id
+            HistoryController.shared.allProfiles = false
+            owner.activate(existing, focusPage: false)
+            tab = existing
+        } else if let owner {
+            tab = owner.openTab()
+            tab.load(urlString: EngineView.historyURL)
+        } else {
+            tab = openTab(url: EngineView.historyURL, profile: profile)
+        }
+        revealHistoryDestination(tab)
+        tab.focusHistorySearch()
+    }
+
+    func reopenHistoryPage(_ url: String, profile: String) {
+        revealHistoryDestination(openTab(url: url, profile: profile))
+    }
+
+    private func revealHistoryDestination(_ tab: EngineView) {
+        let window = BrowserWindowController.host(of: tab.webviewId)?.window
+        window?.deminiaturize(nil)
+        window?.makeKeyAndOrderFront(nil)
+        CommandBar.shared.hide()
+    }
+
     @objc func openWelcome(_ sender: Any?) {
         if admissionRequired { showAdmission() }
     }
@@ -505,6 +609,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             app.addItem(withTitle: "Quit Bowser", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
             for (title, action, key) in [("Cut", "cut:", "x"), ("Copy", "copy:", "c"), ("Paste", "paste:", "v"), ("Select All", "selectAll:", "a")] {
                 edit.addItem(withTitle: title, action: NSSelectorFromString(action), keyEquivalent: key)
+                if action == "paste:" {
+                    let pasteMatchingStyle = edit.addItem(withTitle: "Paste and Match Style", action: NSSelectorFromString("pasteAsPlainText:"), keyEquivalent: "v")
+                    pasteMatchingStyle.keyEquivalentModifierMask = [.command, .option, .shift]
+                }
             }
             let editItem = NSMenuItem(); editItem.submenu = edit; main.addItem(editItem)
             NSApp.mainMenu = main

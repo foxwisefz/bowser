@@ -70,14 +70,35 @@ website data separate from an installed Bowser. The API server, marketing
 website and production deployment are maintained in a separate private project;
 they are not required for this source-build workflow.
 
-A browser window appears. `⌘K` opens the command bar: type a URL, or a
-`:command`. Useful ones out of the box: `:settings`, `:panels`, `:do`.
-`⌘T` new tab, `⌘⇧[`/`⌘⇧]` cycle tabs, `⌘R` reload, `⌘0/+/-` zoom.
+A browser window appears. Type an address or search term to start browsing in
+its first tab. `⌘T` opens a fresh tab with the address field focused.
+Use `⌘K` to switch to an open tab, open a search or website in a new tab,
+or run a command such as `:settings`, `:panels`, or `:do`.
+For a one-off page task, type `:task <request>` and press Return. Or type your
+request and click **Run a task…** to review it in **Tasks & Mods** first.
+Press `⌘K` again while Bowser’s command bar is open to send `⌘K` to the webpage and open its own command menu, when supported.
+Use `⌘L` to select the current URL. Enter an address and press Return to navigate
+in that tab, or use `⌘⇧C` to copy its URL directly.
+
+Use `⌘Y` to open History. Scan visits by title and website, switch to Gallery
+for previews, or press `⌘F` to search within the current profile and filters.
+Visit recording is opt-in through
+History’s settings button. Lightweight visits keep saving while content capture
+pauses during calls. See [local history search](docs/history-search.md) for capture,
+privacy, and storage details.
+
+`⌘F` find in page (`Return`/`⇧Return` or `⌘G`/`⇧⌘G` for matches; `Esc` closes),
+`⌘T` new tab, `⌘⇧[`/`⌘⇧]` cycle tabs, `⌃Tab` last focused tab, `⌘R` reload, `⌘0/+/-` zoom.
+Clicking a neighboring or previously focused tab in DockTabs teaches its shortcut with shortcut glyphs that float inward from the clicked tab and fade away. Hints taper off and stop after using the shortcut.
 **View → Picture in Picture** (`⌥⌘P`) toggles a floating player for a supported
 video on the current page. Some embedded players require their own PiP control.
 Open local HTML, images, PDFs or text with **File → Open File…** (`⌘O`),
 Finder’s **Open With → Bowser**, or a `file:///…`, `/…` or `~/…` path in `⌘K`.
 Local HTML can load assets from its containing directory.
+Directly opened PDFs, videos, audio, images, text, and other non-HTML files show a
+download button that saves the original file to Downloads. Use **File → Save As…**
+(`⌘S`) to choose a filename and location. This also works for pages containing a
+single PDF embedded as a data URL.
 
 Prefer to run the browser without the brain? `shell/.build/debug/Bowser`
 runs standalone (start order doesn't matter — they find each other).
@@ -91,7 +112,7 @@ Bowser running; opening it from the Dock creates a window again. **Quit Bowser**
 mod processes. Backend startup failures show a retry dialog with the log path.
 
 For separate `/Applications/Bowser.app` and `/Applications/Bowser-staging.app`
-using the same live sessions and website logins, run `bin/staging update`. Staging takes a verified build-and-data backup before
+using the same live sessions and website logins, run `bin/staging update`. Staging takes a verified data backup before
 activation and offers **Update Staging from Dev…** in the app menu. See
 [staging and recovery](docs/staging.md) for backup coverage and restore commands.
 
@@ -105,6 +126,10 @@ against the built release with:
 swift build --package-path shell
 BOWSER_TEST_RELEASE="$PWD/beam/_build/prod/rel/bowser_brain" python3 -m unittest discover -s tests
 ```
+
+Drag a tab from DockTabs into the macOS Dock to save it as an app. The original
+tab stays open. Drag within DockTabs to reorder, or release away from both docks
+to close the tab. Option-drag also exports a saved app to Finder.
 
 Saved apps support page notifications (`new Notification`) while running, with
 website permission and macOS notification authorization. Notification clicks

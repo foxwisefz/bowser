@@ -20,7 +20,7 @@ enum TabDustEffect {
         view.wantsLayer = true
         panel.contentView = view
         let reduced = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-        let duration = reduced ? 0.18 : 0.55
+        let duration = reduced ? 0.12 : 0.22
         if let layer = view.layer { populate(layer, size: size, reducedMotion: reduced, duration: duration) }
         panel.orderFrontRegardless()
         DispatchQueue.main.asyncAfter(deadline: .now() + duration + 0.05) { panel.close() }

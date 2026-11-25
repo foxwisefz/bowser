@@ -15,23 +15,28 @@ public struct TabCandidate: Equatable {
     public var favicon: String? = nil
   }
 public struct Result: Equatable {
-    public init(tab: TabCandidate?, query: String) { self.tab = tab; self.query = query }
+    public init(tab: TabCandidate?, query: String) { self.tab = tab; self.query = query; self.history = nil }
+    public init(history: HistorySearchItem, query: String) { self.tab = nil; self.query = query; self.history = history }
 
     public let tab: TabCandidate?
     public let query: String
+    public let history: HistorySearchItem?
     public var title: String {
-      tab.map { $0.title.isEmpty ? ($0.url.isEmpty ? "New Tab" : $0.url) : $0.title }
+      history.map { $0.title.isEmpty ? $0.url : $0.title } ?? tab.map { $0.title.isEmpty ? ($0.url.isEmpty ? "New Tab" : $0.url) : $0.title }
         ?? "Open or search: \(query)"
     }
-    public var detail: String { tab.map { "Switch to tab · \($0.url)" } ?? "Open in a new tab" }
+    public var detail: String { history?.snippet ?? tab.map { "Switch to tab · \($0.url)" } ?? "Open in a new tab" }
   }
 
 
     public let modScope = ModScopeChoice()
     public var results: [Result] = []
+    public var historyResults: [HistorySearchItem] = []
+    public var searchHistory: (String) -> Void = { _ in }
     public var query = ""
     public var placeholder = "Search, address, or :command"
     public var selected = 0
+    public var opensInCurrentTab = false
     public var profile = "default"
     public var active: UInt64?
     public var tabs: () -> [TabCandidate] = { [] }

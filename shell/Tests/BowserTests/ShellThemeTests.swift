@@ -14,9 +14,8 @@ final class ShellThemeTests: XCTestCase {
             "show_navigation": true, "title_size": 13, "corner_radius": 2
         ]])
         let theme = ChromeSurface.theme
-        let cluster = CmdCluster(profileID: "default", reveal: ChromeReveal(), tint: nil,
-                                 openBar: {}, goBack: {}, goForward: {}, reload: {}, modClick: { _ in },
-                                 onHoverChanged: { _ in })
+        let cluster = CmdCluster(profileID: "default", tint: nil,
+                                 openBar: {}, goBack: {}, goForward: {}, reload: {}, modClick: { _ in })
         let view = NSHostingView(rootView:
             HStack {
                 cluster.frame(width: 250, height: 24)
