@@ -110,6 +110,8 @@ defmodule BowserBrain.IconJobsTest do
     jobs = start_jobs(root, tasks, executable)
     send(jobs, {:browser_event, event("first", [candidate("cached")])})
     assert_receive %{op: "icon_ready", attempts: 1}, 3000
+    key = IconJobs.icon_key("https://example.com", "work")
+    assert_receive %{op: "refresh_app_icons", icon_key: ^key}
     worker(root, "kill -KILL \"$$\"\n")
     send(jobs, {:browser_event, event("cached", [candidate("cached")])})
     assert_receive %{op: "icon_ready", attempts: 0}, 3000

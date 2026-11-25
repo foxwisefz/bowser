@@ -2,6 +2,7 @@
 Python is a developer test runner only; none of it is installed with Bowser.
 """
 import asyncio
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -10,6 +11,7 @@ import signal
 import subprocess
 import struct
 import tempfile
+import termios
 import time
 import unittest
 
@@ -95,6 +97,7 @@ class ReleaseTests(unittest.IsolatedAsyncioTestCase):
         end
         ''')
         self.native_writer = None
+        self.hold_rpc_replies = False
         self.commands = []
         self.connections = 0
         self.resources = dict(version=1, session="fixture", next=1, revision="fixture",
@@ -159,20 +162,25 @@ class ReleaseTests(unittest.IsolatedAsyncioTestCase):
     async def native(self, reader, writer):
         self.connections += 1
         self.native_writer = writer
-        send(writer, dict(op='hello', v=1, engine_build_id='01' * 16, engine_binary=str(self.engine), resources=self.resources, webviews=[1, 2], active=2,
+        hello = dict(op='hello', v=1, engine_build_id='01' * 16, engine_binary=str(self.engine), resources=self.resources, webviews=[1, 2], active=2,
             tabs=[dict(id=1, url='https://fixture.invalid/work', profile='work'),
-                  dict(id=2, url='https://fixture.invalid/personal', profile='personal')]))
+                  dict(id=2, url='https://fixture.invalid/personal', profile='personal')])
+        if self._testMethodName == 'test_crashed_beam_is_replaced_without_reconnecting_native':
+            del hello['webviews']
+        send(writer, hello)
         try:
             while True:
                 msg = await receive(reader)
                 self.commands.append(msg)
+                if self.hold_rpc_replies and msg.get('op') in ('eval_js', 'page_screenshot', 'website_layout'):
+                    continue
                 if msg.get('op') == 'get_cookies':
                     send(writer, dict(op='cookies_result', id=msg['id'], cookies=[]))
                 elif msg.get('op') == 'resource_snapshot':
                     send(writer, dict(op='resource_result', snapshot=self.resources))
-                elif msg.get('op') in ('eval_js', 'native_screenshot', 'native_click'):
+                elif msg.get('op') in ('eval_js', 'native_screenshot', 'native_click', 'page_screenshot', 'website_layout'):
                     send(writer, dict(op='js_result', id=msg['id'], ok=True,
-                        value={} if msg['op'].startswith('native_') else None))
+                        value=None if msg['op'] == 'eval_js' else {}))
         except (ConnectionError, asyncio.IncompleteReadError):
             pass
         finally:
@@ -231,10 +239,29 @@ class ReleaseTests(unittest.IsolatedAsyncioTestCase):
         return target
 
     async def test_native_verification_replies_survive_relay_id_translation(self):
-        for tool, args in [('native_screenshot', {}), ('native_click', {'x': 12, 'y': 20})]:
+        for tool, args in [('native_screenshot', {}), ('native_click', {'x': 12, 'y': 20}),
+                           ('page_screenshot', {}), ('website_layout', {'action': 'get'})]:
             reply = await self.tool(tool, webview=2, **args)
             self.assertTrue(reply['ok'], reply)
             self.assertIn('id', next(c for c in reversed(self.commands) if c.get('op') == tool))
+
+    async def test_native_disconnect_fails_pending_and_offline_calls_then_recovers(self):
+        self.hold_rpc_replies = True
+        pending = [asyncio.create_task(self.tool('page_screenshot', webview=2)),
+                   asyncio.create_task(self.tool('website_layout', webview=2, action='get'))]
+        await until(lambda: {'page_screenshot', 'website_layout'} <= {m.get('op') for m in self.commands})
+        self.server.close()
+        self.native_writer.close()
+        await self.native_writer.wait_closed()
+        await self.server.wait_closed()
+        failed = {'ok': False, 'error': ':not_connected'}
+        self.assertEqual(await asyncio.wait_for(asyncio.gather(*pending), 2), [failed, failed])
+        self.assertEqual(await self.tool('native_screenshot', webview=2), failed)
+
+        self.hold_rpc_replies = False
+        self.server = await asyncio.start_unix_server(self.native, path=str(self.home / 'brain.sock'))
+        await until(lambda: self.connections == 2)
+        self.assertTrue((await self.tool('page_screenshot', webview=2))['ok'])
 
     async def test_installer_handoff_preserves_mod_heap_profiles_and_host_connection(self):
         def ready_count():
@@ -341,6 +368,43 @@ class ReleaseTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(list((self.home / 'backend').glob('g*')))
         self.assertTrue(self.server.is_serving())
 
+    async def quit_with_parked_reader(self, resume):
+        self.hold_rpc_replies = True
+        writer = self.native_writer
+        fd = writer.get_extra_info('socket').fileno()
+        def available_bytes():
+            return struct.unpack('i', fcntl.ioctl(fd, termios.FIONREAD, bytes(4)))[0]
+
+        writer.transport.pause_reading()
+        before = available_bytes()
+        call = asyncio.create_task(self.tool('page_eval', webview=2, js='/*' + 'z' * 2_000_000 + '*/ 1'))
+        try:
+            await until(lambda: available_bytes() > before + 4096, 3)
+            url = 'https://fixture.invalid/quit'
+            send(writer, dict(op='event', event='url_changed', webview=2, url=url, profile='personal'))
+            send(writer, dict(op='app_quit'))
+            if resume:
+                await asyncio.sleep(.15)
+                writer.transport.resume_reading()
+            self.assertEqual(await asyncio.wait_for(self.process.wait(), 8), 0)
+            writer.transport.resume_reading()
+            await asyncio.wait_for(writer.wait_closed(), 3)
+            self.assertIn(url, (self.home / 'session.json').read_text())
+            ops = [m.get('op') for m in self.commands]
+            if resume:
+                self.assertLess(ops.index('eval_js'), ops.index('quit_ready'))
+            else:
+                self.assertNotIn('quit_ready', ops)
+        finally:
+            writer.transport.resume_reading()
+            await asyncio.gather(call, return_exceptions=True)
+
+    async def test_quit_acknowledges_after_stalled_reader_resumes(self):
+        await self.quit_with_parked_reader(resume=True)
+
+    async def test_quit_finishes_when_reader_stays_stalled(self):
+        await self.quit_with_parked_reader(resume=False)
+
     async def test_incompatible_release_never_pauses_active_backend(self):
         candidate = self.candidate()
         (candidate / 'HANDOFF.json').write_text('{"protocol":999,"state_schema":5}')
@@ -357,6 +421,13 @@ class ReleaseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.connections, 1)
 
     async def test_crashed_beam_is_replaced_without_reconnecting_native(self):
+        for event in [dict(event='tab_opened', webview=3, profile='work'),
+                      dict(event='url_changed', webview=3, url='https://fixture.invalid/replay'),
+                      dict(event='title_changed', webview=3, title='Replay'),
+                      dict(event='webview_closed', webview=1), dict(event='tab_activated', webview=3),
+                      dict(event='counter', profile='personal')]:
+            send(self.native_writer, dict(op='event', **event))
+        await self.count(1)
         rows = subprocess.check_output(['/bin/ps', '-axo', 'pid=,ppid=,comm='], text=True).splitlines()
         children = [int(parts[0]) for row in rows if len(parts := row.split(None, 2)) == 3 and int(parts[1]) == self.process.pid]
         self.assertEqual(len(children), 1)
@@ -364,6 +435,11 @@ class ReleaseTests(unittest.IsolatedAsyncioTestCase):
         await until(lambda: (self.home / 'init-count').read_text().count('init') == 2)
         self.assertEqual(self.connections, 1)
         self.assertEqual((await self.control('status'))['pid'], self.process.pid)
+        dock = (await self.generation_status())['core']['tab_deck']
+        self.assertEqual(dock['order'], [2, 3])
+        self.assertEqual(dock['active'], 3)
+        self.assertEqual(dock['tabs']['3']['title'], 'Replay')
+        self.assertEqual(dock['tabs']['3']['url'], 'https://fixture.invalid/replay')
         self.event(); await self.count(1)
 
     async def test_beam_exits_when_host_is_killed(self):

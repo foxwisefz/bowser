@@ -104,8 +104,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                 forName: NSWorkspace.didTerminateApplicationNotification, object: nil, queue: .main
             ) { notification in
                 guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
-                      app.bundleIdentifier?.hasPrefix("com.foxwiseai.bowser.site.") == true else { return }
-                MainActor.assumeIsolated { TabAppBundle.upgradeSavedApps() }
+                      app.bundleIdentifier?.hasPrefix("com.foxwiseai.bowser.site.") == true,
+                      let url = app.bundleURL else { return }
+                MainActor.assumeIsolated { TabAppBundle.upgradeSavedApps(.bundle(url)) }
             }
         }
         NSApp.activate()

@@ -287,7 +287,7 @@ final class TabAppDragTests: XCTestCase {
     }
 
     @MainActor
-    func testCreatesReusableApplicationWithSafeLauncherAndIcon() throws {
+    func testCreatesReusableApplicationWithSafeLauncherAndIcon() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let page = URL(string: "https://example.com/dashboard?q=hello&value=$(touch%20bad)")!
@@ -301,7 +301,8 @@ final class TabAppDragTests: XCTestCase {
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: source.path)
         let icon = NSImage(systemSymbolName: "globe", accessibilityDescription: nil)!
         let start = ProcessInfo.processInfo.systemUptime
-        let bundle = try TabAppBundle.create(url: page, profile: "work", iconData: IconRenderer.icns(icon.tiffRepresentation!), directory: root, bowser: browser, sign: false)
+        let registry = SavedAppRegistry(directory: root, bowser: browser, icons: root.appendingPathComponent("icons"), sign: { _ in })
+        let bundle = try registry.create(url: page, profile: "work", iconData: IconRenderer.icns(icon.tiffRepresentation!))
         print("Tab app preparation: \((ProcessInfo.processInfo.systemUptime - start) * 1000)ms")
         XCTAssertEqual(bundle.pathExtension, "app")
         XCTAssertEqual(try Data(contentsOf: bundle.appendingPathComponent("Contents/Frameworks/libBowserSurfaceKit.dylib")), try Data(contentsOf: kit))
@@ -314,7 +315,7 @@ final class TabAppDragTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: executable), try Data(contentsOf: source))
         XCTAssertEqual(SiteAppConfiguration.parse(app.infoDictionary ?? [:])?.url, page)
         XCTAssertNotNil(NSImage(contentsOf: bundle.appendingPathComponent("Contents/Resources/SiteIcon.icns")))
-        let again = try TabAppBundle.create(url: page, profile: "work", iconData: nil, directory: root, bowser: browser, sign: false)
+        let again = try registry.create(url: page, profile: "work", iconData: nil)
         XCTAssertEqual(bundle, again)
         // An already-pinned v1 launcher is upgraded at exactly the same path.
         let plist = bundle.appendingPathComponent("Contents/Info.plist")
@@ -322,20 +323,21 @@ final class TabAppDragTests: XCTestCase {
         oldInfo.removeValue(forKey: "BowserAppVersion")
         try PropertyListSerialization.data(fromPropertyList: oldInfo, format: .xml, options: 0).write(to: plist)
         try Data("#!/bin/sh\nexit 0\n".utf8).write(to: executable)
-        try TabAppBundle.upgrade(bundle: bundle, bowser: browser, sign: false)
+        registry.request(.bundle(bundle))
+        await registry.flush()
         XCTAssertEqual(try Data(contentsOf: executable), try Data(contentsOf: source))
         let updated = try PropertyListSerialization.propertyList(from: Data(contentsOf: plist), format: nil) as! [String: Any]
         XCTAssertEqual(updated["BowserAppVersion"] as? Int, 2)
         XCTAssertNotNil(updated["NSCameraUsageDescription"] as? String)
         XCTAssertNotNil(updated["NSMicrophoneUsageDescription"] as? String)
-        let other = try TabAppBundle.create(url: page, profile: "personal", iconData: nil, directory: root, bowser: browser, sign: false)
+        let other = try registry.create(url: page, profile: "personal", iconData: nil)
         XCTAssertNotEqual(bundle, other)
     }
 
     @MainActor
     func testRejectsNonWebLaunchTargets() {
-        XCTAssertThrowsError(try TabAppBundle.create(url: URL(string: "file:///tmp/test")!, profile: "default", iconData: nil,
-                                                    directory: FileManager.default.temporaryDirectory,
-                                                    bowser: URL(fileURLWithPath: "/Applications/Bowser.app")))
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let registry = SavedAppRegistry(directory: root, bowser: root, icons: root)
+        XCTAssertThrowsError(try registry.export(url: URL(string: "file:///tmp/test")!, profile: "default"))
     }
 }

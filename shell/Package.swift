@@ -26,7 +26,7 @@ let package = Package(
         ),
         .testTarget(
             name: "BowserTests",
-            dependencies: ["Bowser", "IconRendering"],
+            dependencies: ["Bowser", "IconRendering", "BackendRuntime"],
             path: "Tests/BowserTests"
         ),
         .testTarget(name: "HistoryCoreTests", dependencies: ["HistoryCore"]),

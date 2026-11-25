@@ -1,4 +1,5 @@
 import AppKit
+import BackendRuntime
 import Darwin
 import WebKit
 
@@ -241,7 +242,13 @@ final class SiteAppHub {
     static let shared = SiteAppHub()
     private var connections: [String: SiteAppConnection] = [:]
     private var connecting = Set<String>()
-    private var pending: [Int: String] = [:]
+    private struct PendingEvaluation {
+        let app: String
+        let requestID: Int
+        let reply: @MainActor ([String: Any]) -> Void
+    }
+    private var nextEvaluationID = 0
+    private var pending: [Int: PendingEvaluation] = [:]
     private var launchObserver: NSObjectProtocol?
     private var retry: Timer?
 
@@ -328,16 +335,18 @@ final class SiteAppHub {
                         BrainBridge.shared.send(["op": "event", "event": "site_mod_request", "request": request,
                             "app": ["id": config.identifier, "url": config.url.absoluteString, "profile": config.profile]])
                     case "js_result":
-                        guard let id = message["id"] as? Int, self.pending[id] == key else { return }
-                        self.pending.removeValue(forKey: id)
-                        BrainBridge.shared.send(message)
+                        guard let id = message["id"] as? Int, self.pending[id]?.app == key,
+                              let request = self.pending.removeValue(forKey: id) else { return }
+                        var response = message
+                        response["id"] = request.requestID
+                        request.reply(response)
                     default: break
                     }
                 }
                 connection.onClose = {
                     self.connections.removeValue(forKey: key)
                     self.scheduleRetry()
-                    for id in self.pending.filter({ $0.value == key }).map(\.key) {
+                    for id in self.pending.filter({ $0.value.app == key }).map(\.key) {
                         self.finishEval(id, error: "Saved app disconnected")
                     }
                 }
@@ -388,21 +397,23 @@ final class SiteAppHub {
     }
 
     private func finishEval(_ id: Int, error: String) {
-        guard pending.removeValue(forKey: id) != nil else { return }
-        BrainBridge.shared.send(["op": "js_result", "id": id, "ok": false, "value": error])
+        guard let request = pending.removeValue(forKey: id) else { return }
+        request.reply(["op": "js_result", "id": request.requestID, "ok": false, "value": error])
     }
 
-    func route(_ message: [String: Any]) {
+    func route(_ message: [String: Any], reply: @escaping @MainActor ([String: Any]) -> Void) {
         guard let key = message["app"] as? String, let connection = connections[key] else {
             if ["site_eval", "site_screenshot"].contains(message["op"] as? String ?? ""), let id = message["id"] as? Int {
-                BrainBridge.shared.send(["op": "js_result", "id": id, "ok": false, "value": "Saved app is not running"])
+                reply(["op": "js_result", "id": id, "ok": false, "value": "Saved app is not running"])
             }
             return
         }
         if message["op"] as? String == "modsmith_state" {
             connection.send(message)
-        } else if ["site_eval", "site_screenshot"].contains(message["op"] as? String ?? ""), let id = message["id"] as? Int {
-            pending[id] = key
+        } else if ["site_eval", "site_screenshot"].contains(message["op"] as? String ?? ""), let requestID = message["id"] as? Int {
+            nextEvaluationID += 1
+            let id = nextEvaluationID
+            pending[id] = PendingEvaluation(app: key, requestID: requestID, reply: reply)
             if message["op"] as? String == "site_screenshot" {
                 connection.send(["op": "page_screenshot", "webview": 0, "id": id, "max_width": message["max_width"] ?? 1280])
             } else {
@@ -428,15 +439,16 @@ final class SiteAppHub {
     }
 }
 
-/// Framed JSON I/O is kept off the AppKit thread. A stalled app must never
-/// stall the main browser. The lock protects closure/write against fd reuse.
+/// Each saved app owns a separate reader and a bounded, ordered writer.
 final class SiteAppConnection: @unchecked Sendable {
-    private var fd: Int32
-    private let lock = NSLock()
-    private let writer = DispatchQueue(label: "bowser.site-app.writer")
+    private let fd: Int32
+    private let writer: SocketFrameWriter
     @MainActor var onMessage: (([String: Any]) -> Void)?
     @MainActor var onClose: (() -> Void)?
-    private init(fd: Int32) { self.fd = fd }
+    private init(fd: Int32) {
+        self.fd = fd
+        writer = SocketFrameWriter(fd: fd)
+    }
 
     nonisolated static func connect(path: String, completion: @escaping @MainActor @Sendable (SiteAppConnection?) -> Void) {
         DispatchQueue.global(qos: .utility).async {
@@ -457,30 +469,17 @@ final class SiteAppConnection: @unchecked Sendable {
                 pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
             }
             guard result == 0 else { close(fd); DispatchQueue.main.async { completion(nil) }; return }
-            var enabled: Int32 = 1
-            setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &enabled, socklen_t(MemoryLayout<Int32>.size))
-            var timeout = timeval(tv_sec: 5, tv_usec: 0)
-            setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
             let connection = SiteAppConnection(fd: fd)
             DispatchQueue.main.async { completion(connection) }
         }
     }
 
     @MainActor func send(_ message: [String: Any]) {
-        guard let payload = try? JSONSerialization.data(withJSONObject: message) else { return }
-        var size = UInt32(payload.count).bigEndian
-        let frame = withUnsafeBytes(of: &size) { Data($0) } + payload
-        writer.async {
-            self.lock.lock(); defer { self.lock.unlock() }
-            guard self.fd >= 0 else { return }
-            frame.withUnsafeBytes { bytes in
-                var offset = 0
-                while offset < bytes.count {
-                    let written = write(self.fd, bytes.baseAddress!.advanced(by: offset), bytes.count - offset)
-                    guard written > 0 else { return }
-                    offset += written
-                }
-            }
+        guard writer.isOpen else { return }
+        do {
+            try writer.sendJSON(message)
+        } catch {
+            NSLog("Bowser: could not send saved-app message: %@", String(describing: error))
         }
     }
 
@@ -490,11 +489,12 @@ final class SiteAppConnection: @unchecked Sendable {
             var chunk = [UInt8](repeating: 0, count: 65536)
             while true {
                 let n = read(self.fd, &chunk, chunk.count)
+                if n < 0 && errno == EINTR { continue }
                 if n <= 0 { break }
                 buffer.append(contentsOf: chunk.prefix(n))
                 while buffer.count >= 4 {
                     let count = buffer.prefix(4).reduce(0) { ($0 << 8) | Int($1) }
-                    guard count <= 64 * 1024 * 1024 else { self.finish(); return }
+                    guard count <= SocketFrameWriter.maximumPayloadBytes else { self.finish(); return }
                     if buffer.count < count + 4 { break }
                     let data = buffer.subdata(in: 4..<(count + 4))
                     buffer.removeSubrange(0..<(count + 4))
@@ -510,14 +510,11 @@ final class SiteAppConnection: @unchecked Sendable {
     }
 
     nonisolated func disconnect() {
-        lock.lock(); defer { lock.unlock() }
-        if fd >= 0 { shutdown(fd, SHUT_RDWR) }
+        writer.close()
     }
 
     private func finish() {
-        lock.lock()
-        if fd >= 0 { close(fd); fd = -1 }
-        lock.unlock()
+        writer.finishReading()
         DispatchQueue.main.async {
             self.onClose?()
             self.onMessage = nil

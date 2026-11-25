@@ -50,7 +50,29 @@ final class Host {
     var quitting = false {
         didSet { if quitting { operation?.cancel(); stopContinuation.finish() } }
     }
-    var requests: [Int: (Generation, Any)] = [:]
+    private struct RPC {
+        let peer: Peer
+        let id: Int
+        let reply: String
+
+        init?(_ message: Message, from peer: Peer) {
+            guard let id = message["id"] as? Int else { return nil }
+            switch message["op"] as? String {
+            case "eval_js", "site_eval", "site_screenshot", "native_screenshot", "page_screenshot", "native_click", "website_layout":
+                reply = "js_result"
+            case "get_cookies": reply = "cookies_result"
+            case "site_app_info": reply = "site_app_info"
+            default: return nil
+            }
+            self.id = id
+            self.peer = peer
+        }
+
+        func fail() throws {
+            try peer.send(["op": reply, "id": id, "ok": false, "value": "not_connected", "error": "not_connected"])
+        }
+    }
+    private var requests: [Int: RPC] = [:]
     var serial = 0
     var operation: Task<Message, Error>?
     var buffer: [Message] = []
@@ -112,14 +134,19 @@ final class Host {
                 if op == "handoff_attached" { gen.attached = true; continue }
                 if op == "handoff_barrier" { if let id = message["id"] as? Int { gen.barriers.remove(id) }; continue }
                 guard gen === active, gen.writer === peer else { continue }
-                if ["eval_js", "site_eval", "get_cookies", "site_app_info", "native_screenshot", "native_click"].contains(op), let id = message["id"] {
-                    serial += 1; requests[serial] = (gen, id); message["id"] = serial
+                if let rpc = RPC(message, from: peer) {
+                    guard nativePeer != nil else { try rpc.fail(); continue }
+                    serial += 1; requests[serial] = rpc; message["id"] = serial
                 }
-                try nativePeer?.send(message)
+                if let nativePeer {
+                    do { try nativePeer.send(message) }
+                    catch { disconnectNative(nativePeer) }
+                }
                 if op == "quit_ready" { await nativePeer?.finishWrites(); quitting = true }
             }
         } catch { /* disconnect is handled below */ }
         peer.close()
+        requests = requests.filter { $0.value.peer !== peer }
         let disconnected = gen.writer === peer
         if disconnected { gen.writer = nil }
         if disconnected && gen === active && !quitting && !paused {
@@ -136,7 +163,6 @@ final class Host {
         do {
             paused = true
             await failed.stop(); children.removeAll { $0 === failed }
-            requests = requests.filter { $0.value.0 !== failed }
             let fresh = try await boot(failed.runtime); active = fresh
             _ = try await fresh.call("start")
             try await until(2) { fresh.writer != nil }
@@ -149,13 +175,24 @@ final class Host {
             do {
                 let peer = try Peer.connect(child(home, "brain.sock")); nativePeer = peer
                 for try await incoming in peer.messages {
+                    guard nativePeer === peer else { break }
                     var message = incoming
                     let op = message["op"] as? String ?? ""
-                    if op == "hello" { hello = message }
+                    if op == "hello" {
+                        if message["webviews"] == nil, let tabs = message["tabs"] as? [Message] {
+                            message["webviews"] = tabs.compactMap { $0["id"] as? Int }
+                        }
+                        hello = message
+                    }
                     else if op == "event" { noteTab(message) }
                     if ["js_result", "cookies_result", "site_app_info"].contains(op), let id = message["id"] as? Int {
-                        if let (owner, original) = requests.removeValue(forKey: id), owner === active {
-                            message["id"] = original; try owner.writer?.send(message)
+                        if let rpc = requests[id], rpc.reply == op {
+                            requests.removeValue(forKey: id)
+                            if rpc.peer === active?.writer {
+                                message["id"] = rpc.id
+                                do { try rpc.peer.send(message) }
+                                catch { rpc.peer.close() }
+                            }
                         }
                         continue
                     }
@@ -169,27 +206,53 @@ final class Host {
                             let file = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
                             try file.write(contentsOf: data); try file.synchronize(); try file.close()
                         } catch { journalError = error; operation?.cancel() }
-                    } else { try active?.writer?.send(message) }
+                    } else if let writer = active?.writer {
+                        do { try writer.send(message) }
+                        catch { writer.close() }
+                    }
                 }
             } catch { /* native listener may not be ready yet */ }
-            nativePeer?.close(); nativePeer = nil
+            if let nativePeer { disconnectNative(nativePeer) }
             if !quitting { try? await Task.sleep(nanoseconds: 250_000_000) }
         }
     }
+    private func disconnectNative(_ peer: Peer) {
+        guard peer === nativePeer else { return }
+        peer.close(); nativePeer = nil
+        for rpc in requests.values where rpc.peer === active?.writer {
+            do { try rpc.fail() }
+            catch { rpc.peer.close() }
+        }
+        requests.removeAll()
+    }
     func noteTab(_ message: Message) {
-        guard var state = hello else { return }
-        var tabs = state["tabs"] as? [Message] ?? []
-        let id = message["webview"] as? Int
-        let event = message["event"] as? String
-        if event == "tab_opened", let id {
+        guard let event = message["event"] as? String else { return }
+        if event == "tab_activated" {
+            hello?["active"] = message["webview"] as? Int
+            return
+        }
+        guard ["tab_opened", "webview_closed", "url_changed", "title_changed"].contains(event),
+              let id = message["webview"] as? Int, let state = hello else { return }
+        var tabs = state["tabs"] as? [Message] ?? (state["webviews"] as? [Int] ?? []).map { ["id": $0] }
+        switch event {
+        case "tab_opened":
+            let count = tabs.count
+            let lastID = tabs.last?["id"] as? Int
             tabs.removeAll { $0["id"] as? Int == id }
             var tab = message.filter { ["url", "profile", "title", "favicon"].contains($0.key) }; tab["id"] = id; tabs.append(tab)
-        } else if event == "webview_closed" { tabs.removeAll { $0["id"] as? Int == id } }
-        else if event == "tab_activated" { state["active"] = id }
-        else if event == "url_changed" || event == "title_changed", let index = tabs.firstIndex(where: { $0["id"] as? Int == id }) {
+            if tabs.count == count && lastID == id { hello?["tabs"] = tabs; return }
+        case "webview_closed":
+            let count = tabs.count
+            tabs.removeAll { $0["id"] as? Int == id }
+            guard tabs.count != count else { return }
+        default:
+            guard let index = tabs.firstIndex(where: { $0["id"] as? Int == id }) else { return }
             let key = event == "url_changed" ? "url" : "title"; tabs[index][key] = message[key]
+            hello?["tabs"] = tabs
+            return
         }
-        state["tabs"] = tabs; state["webviews"] = tabs.compactMap { $0["id"] as? Int }; hello = state
+        hello?["tabs"] = tabs
+        hello?["webviews"] = tabs.compactMap { $0["id"] as? Int }
     }
     func drain() throws -> Int {
         guard let writer = active?.writer else { throw RuntimeFailure("active backend disconnected") }
@@ -228,7 +291,6 @@ final class Host {
             try atomicJSON(child(home, channel.activePointer), ["runtime": runtime.path])
             active = candidate; committed = true
             await old.stop(killImmediately: true); children.removeAll { $0 === old }
-            requests = requests.filter { $0.value.0 !== old }
             _ = try await candidate.call("commit")
             let count = try drain()
             let result: Message = ["ok": true, "handoff_ms": (ProcessInfo.processInfo.systemUptime - started) * 1000, "buffered_events": count, "runtime": runtime.path]

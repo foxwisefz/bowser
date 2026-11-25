@@ -155,8 +155,8 @@ final class SiteAppTests: XCTestCase {
         let preparationStart = ProcessInfo.processInfo.systemUptime
         let server = try SiteIconFixtureServer()
         defer { server.stop() }
-        let bundle = try TabAppBundle.create(url: server.url, profile: "default",
-                                             iconData: nil, directory: root, bowser: browser)
+        let registry = SavedAppRegistry(directory: root, bowser: browser, icons: root.appendingPathComponent("icons"))
+        let bundle = try registry.create(url: server.url, profile: "default", iconData: nil)
         // The saved app may start its parent when the real browser is closed.
         // Give LaunchServices a complete, harmless parent instead of an invalid
         // Engine.app or another browser process with access to user state.

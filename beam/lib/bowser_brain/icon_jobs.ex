@@ -84,7 +84,10 @@ defmodule BowserBrain.IconJobs do
             })
           )
 
-          state.notify.(%{op: "refresh_app_icons"})
+          state.notify.(%{
+            op: "refresh_app_icons",
+            icon_key: icon_key(job.event["url"], job.event["profile"])
+          })
 
         # Keep the last usable icon; no browser restart or fatal UI error.
         {:error, _} ->

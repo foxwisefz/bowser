@@ -90,7 +90,7 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
     private(set) var faviconPath: String?
     private var faviconGeneration = UUID()
     private var iconCandidates: [[String: Any]] = []
-    private var faviconICNSPath: String?
+    private(set) var faviconICNSPath: String?
     /// Last sampled page tint. Cached because a tab can be mounted long
     /// after it loaded, and the chrome has to catch up on the spot.
     private(set) var themeColor: NSColor?
