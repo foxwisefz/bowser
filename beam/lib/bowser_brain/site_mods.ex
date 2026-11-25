@@ -3,7 +3,7 @@ defmodule BowserBrain.SiteMods do
   Per-origin persistent payloads (bowser-browser-uwo): plain files under
   ~/.bowser/sites/<host>/*.css|*.js, injected on every page of that host,
   forever — the "from now on" half of ModSmith, and hand-editable like
-  everything else. 1s mtime polling; changes apply with a reload.
+  everything else. The watcher checks content digests once a second; changes apply with a reload.
   JS runs isolated unless its first declaration (after an optional profile
   tag) is `// bowser-world: page`. The engine enforces each payload's host.
   """
@@ -30,8 +30,9 @@ defmodule BowserBrain.SiteMods do
 
     case File.ls(dir) do
       {:ok, names} ->
-        for name <- Enum.sort(names), Path.extname(name) in [".css", ".js"], BowserBrain.ModScope.file_profile(Path.join(dir, name)) == profile do
-          {name, File.read!(Path.join(dir, name))}
+        for name <- Enum.sort(names), Path.extname(name) in [".css", ".js"],
+            {:ok, source} <- [File.read(Path.join(dir, name))], BowserBrain.ModScope.source_profile(source) == profile do
+          {name, source}
         end
 
       _ ->
@@ -59,50 +60,61 @@ defmodule BowserBrain.SiteMods do
         {path, :crypto.hash(:sha256, File.read!(path))}
       end
 
-    if mtimes != state.mtimes do
-      if pid = Process.whereis(BowserBrain.ModControls), do: send(pid, :catalog_changed)
-      if map_size(state.mtimes) > 0 or not reload_on_change do
-        Logger.info("sitemods: #{map_size(mtimes)} payload(s) across sites — applying")
+    next =
+      if mtimes != state.mtimes or (files != [] and not Map.has_key?(state, :profiles)) do
+        if pid = Process.whereis(BowserBrain.ModControls), do: send(pid, :catalog_changed)
+        if map_size(state.mtimes) > 0 or not reload_on_change do
+          Logger.info("sitemods: #{map_size(mtimes)} payload(s) across sites — applying")
+        end
+
+        groups =
+          files
+          |> Enum.sort()
+          |> Enum.map(fn path ->
+            source = File.read!(path)
+            {BowserBrain.ModScope.source_profile(source), script(path, source)}
+          end)
+          |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
+
+        profiles = Map.keys(groups)
+        for profile <- Enum.uniq(profiles ++ Map.get(state, :profiles, [])) do
+          UserContent.put_scripts(:site_mods, Map.get(groups, profile, []),
+            reload: reload_on_change, profile: profile)
+        end
+        state |> Map.put(:mtimes, mtimes) |> Map.put(:profiles, profiles)
+      else
+        state
       end
 
-groups = Enum.group_by(files, &BowserBrain.ModScope.file_profile/1)
-profiles = Enum.uniq(Map.keys(groups) ++ Map.get(state, :profiles, []))
-for profile <- profiles do
-  UserContent.put_scripts(:site_mods, build_scripts(Map.get(groups, profile, [])),
-    reload: reload_on_change, profile: profile)
-end
-
-    end
-
     Process.send_after(self(), {:scan, true}, @poll_ms)
-    {:noreply, state |> Map.put(:mtimes, mtimes) |> Map.put(:profiles, Enum.map(files, &BowserBrain.ModScope.file_profile/1) |> Enum.uniq())}
+    {:noreply, next}
   end
 
   def handle_info(_other, state), do: {:noreply, state}
 
   @doc false
   def build_scripts(files) do
-    for path <- Enum.sort(files) do
-      host = path |> Path.dirname() |> Path.basename()
-      content = File.read!(path)
+    for path <- Enum.sort(files), do: script(path, File.read!(path))
+  end
 
-      body =
-        case Path.extname(path) do
-          ".css" ->
-            """
-            var s = document.createElement("style");
-            s.setAttribute("data-bowser-site", #{JSON.encode!(Path.basename(path))});
-            s.textContent = #{JSON.encode!(content)};
-            (document.head || document.documentElement).appendChild(s);
-            """
+  defp script(path, content) do
+    host = path |> Path.dirname() |> Path.basename()
+    body =
+      case Path.extname(path) do
+        ".css" ->
+          """
+          var s = document.createElement("style");
+          s.setAttribute("data-bowser-site", #{JSON.encode!(Path.basename(path))});
+          s.textContent = #{JSON.encode!(content)};
+          (document.head || document.documentElement).appendChild(s);
+          """
 
-          ".js" ->
-            content
-        end
+        ".js" ->
+          content
+      end
 
-      world = if Path.extname(path) == ".js", do: BowserBrain.ScriptPolicy.source_world(content), else: "isolated"
-      %{source: body, world: world, host: host}
-    end
+    world = if Path.extname(path) == ".js", do: BowserBrain.ScriptPolicy.source_world(content), else: "isolated"
+    %{source: body, world: world, host: host}
   end
 
   defp sanitize(name), do: String.replace(name, ~r/[^A-Za-z0-9._-]/, "_")

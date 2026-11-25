@@ -73,4 +73,25 @@ final class TabOrderTests: XCTestCase {
         XCTAssertTrue(host.tabs.last === restored)
         XCTAssertTrue(host.activeTab === next)
     }
+
+    @MainActor func testControllerCanFocusWithoutReorderingAndRejectsPartialArrangements() {
+        let host = BrowserWindowController(profile: .defaultProfile)
+        defer { host.window?.close() }
+        let first = host.activeTab!
+        let second = host.openTab(activate: false, append: true)
+        let third = host.openTab(activate: false, append: true)
+        let order = [first, second, third].map(\.webviewId)
+        XCTAssertTrue(host.arrangeTabs(order: order, active: second.webviewId, focusPage: false))
+        XCTAssertTrue(host.activeTab === second)
+        XCTAssertEqual(host.focusedTabIDs, [second.webviewId, first.webviewId])
+        XCTAssertEqual(host.tabs.map(\.webviewId), order)
+        XCTAssertFalse(host.arrangeTabs(order: [third.webviewId, first.webviewId, first.webviewId],
+                                        active: first.webviewId, focusPage: false))
+        XCTAssertTrue(host.activeTab === second)
+        XCTAssertEqual(host.tabs.map(\.webviewId), order)
+        let reversed = Array(order.reversed())
+        XCTAssertTrue(host.arrangeTabs(order: reversed, active: third.webviewId, focusPage: false))
+        XCTAssertEqual(host.tabs.map(\.webviewId), reversed)
+        XCTAssertTrue(host.activeTab === third)
+    }
 }

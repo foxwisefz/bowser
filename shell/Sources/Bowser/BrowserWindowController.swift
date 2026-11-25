@@ -20,13 +20,10 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     private(set) var tabs: [EngineView] = []
     /// The focused tab; other panes may also be mounted. Closing the last tab closes the window.
     private(set) var activeTab: EngineView!
-    private var focusHistory: [UInt64] = []
-    var focusedTabIDs: [UInt64] {
-        let live = Set(tabs.map(\.webviewId))
-        return focusHistory.filter { live.contains($0) }
-    }
+    private(set) var focusedTabIDs: [UInt64] = []
     private var lastFocusedTab: EngineView? {
-        focusedTabIDs.lazy.compactMap { id in self.tabs.first { $0.webviewId == id && $0 !== self.activeTab } }.first
+        guard let previous = focusedTabIDs.first(where: { $0 != activeTab?.webviewId }) else { return nil }
+        return tabs.first { $0.webviewId == previous }
     }
     var pendingTabLesson: UInt64?
     var pendingTabLessonPoint = NSPoint.zero
@@ -70,8 +67,18 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     private var clusterHosting: NSHostingView<AnyView>?
     private var nativeToolbar: NativeModuleSlot?
     private var browserToolbar: BrowserToolbar?
-    private var lastToolbarSnapshot: Data?
-    private var lastNavigationState: ToolbarNavigationState?
+    private struct ToolbarInputs: Equatable {
+        let navigation: ToolbarNavigationState
+        let modWidth: CGFloat
+        let siteMods: [ChromeSurface.SiteMod]
+        let buttons: [ChromeSurface.ModButton]
+        let theme: ShellTheme
+        let profileTint: String?
+        let hasResource: Bool
+        let capturing: Bool
+    }
+    private var lastToolbarInputs: ToolbarInputs?
+    private var locationIcon: (path: String, modified: Date, image: NSImage)?
     private var controlsWidth: CGFloat = 202
     let loadingLine = ToolbarLoadingLine()
     private let profileIdentity = NSStackView()
@@ -300,8 +307,10 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
             }
             pendingTabLesson = nil
         }
-        focusHistory = focusedTabIDs.filter { $0 != view.webviewId }
-        focusHistory.insert(view.webviewId, at: 0)
+        if focusedTabIDs.first != view.webviewId {
+            focusedTabIDs.removeAll { $0 == view.webviewId }
+            focusedTabIDs.insert(view.webviewId, at: 0)
+        }
         if let layout = websiteLayout, !layout.ids.contains(view.webviewId) {
             detachWebsiteLayout()
             activeTab = nil
@@ -513,11 +522,19 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
 
     /// Apply a validated controller decision without replacing any webview.
     func arrangeTabs(order: [UInt64], active: UInt64, focusPage: Bool) -> Bool {
-        guard order.count == tabs.count, Set(order) == Set(tabs.map(\.webviewId)),
+        guard order.count == tabs.count,
               let selected = tabs.first(where: { $0.webviewId == active }) else { return false }
-        let byID = Dictionary(uniqueKeysWithValues: tabs.map { ($0.webviewId, $0) })
-        tabs = order.map { byID[$0]! }
-        BrainBridge.shared.send(["op":"event", "event":"tabs_reordered", "order":Self.orderedTabIDs])
+        if !tabs.elementsEqual(order, by: { $0.webviewId == $1 }) {
+            var byID = Dictionary(uniqueKeysWithValues: tabs.map { ($0.webviewId, $0) })
+            var arranged: [EngineView] = []
+            arranged.reserveCapacity(order.count)
+            for id in order {
+                guard let tab = byID.removeValue(forKey: id) else { return false }
+                arranged.append(tab)
+            }
+            tabs = arranged
+            BrainBridge.shared.send(["op":"event", "event":"tabs_reordered", "order":Self.orderedTabIDs])
+        }
         // A command palette opened after a new-tab intent keeps its focus.
         activate(selected, focusPage: focusPage && !(window?.firstResponder is NSTextView && window?.firstResponder !== activeTab?.webView))
         return true
@@ -537,7 +554,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         let remainingTree = wasPane ? (try? WebsiteLayoutNode.parse(websiteLayout!.tree))?.removing(view.webviewId) : nil
         if wasPane { detachWebsiteLayout() }
         tabs.remove(at: index)
-        focusHistory.removeAll { $0 == view.webviewId }
+        focusedTabIDs.removeAll { $0 == view.webviewId }
         view.removeFromSuperview()
         view.tearDown()
 
@@ -573,7 +590,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         view.onNavigationChange = { [weak self, weak view] in
             guard let self, let view, self.activeTab === view else { return }
             if self.loadingLine.loading != view.webView.isLoading { self.refreshToolbarLoading() }
-            if self.navigationState != self.lastNavigationState { self.syncModButtons() }
+            if self.navigationState != self.lastToolbarInputs?.navigation { self.syncModButtons() }
         }
         view.onTitleChange = { [weak self, weak view] title in
             guard let self, let view, self.activeTab === view else { return }
@@ -586,6 +603,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         }
         view.onFaviconChange = { [weak self, weak view] in
             guard let self, self.activeTab === view else { return }
+            self.locationIcon = nil
             self.refreshToolbarFavicon()
         }
         view.onThemeColor = { [weak self, weak view] color in
@@ -640,14 +658,25 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private func adoptChrome(from view: EngineView) {
+        // An inactive tab may have received a replacement file at the same path.
+        locationIcon = nil
         applyTitle(view.currentTitle)
         applyThemeColor(view.themeColor)
     }
 
     private func refreshToolbarFavicon() {
-        let image = activeTab?.faviconPath.flatMap { NSImage(contentsOfFile: $0) }
         refreshToolbarLoading()
-        browserToolbar?.updateLocation(url: activeTab?.currentURLString, title: activeTab?.currentTitle ?? "", icon: image)
+        guard let browserToolbar else { return }
+        if let path = activeTab?.faviconPath, !path.isEmpty,
+           let attributes = try? FileManager.default.attributesOfItem(atPath: path),
+           let modified = attributes[.modificationDate] as? Date {
+            if path != locationIcon?.path || modified != locationIcon?.modified {
+                locationIcon = NSImage(contentsOfFile: path).map { (path, modified, $0) }
+            }
+        } else {
+            locationIcon = nil
+        }
+        browserToolbar.updateLocation(url: activeTab?.currentURLString, title: activeTab?.currentTitle ?? "", icon: locationIcon?.image)
     }
 
     func refreshToolbarLoading() {
@@ -728,33 +757,35 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     }
     /// Site mods are listed in a persistent toolbar dropdown.
     func syncModButtons() {
+        guard let browserToolbar else { return }
         if isCaptureMode { setCaptureMode(true) }
         let navigation = navigationState
-        lastNavigationState = navigation
-        let resourceWidth: CGFloat = activeTab?.downloadableResource == nil ? 0 : 27
-        let modCount = ChromeSurface.buttons(for: profile.id).count
-        let modWidth = min(CGFloat(modCount) * 27, min(135, max(0, (window?.frame.width ?? 800) - 640)))
-        controlsWidth = 202 + modWidth + resourceWidth
-        browserToolbar?.setControlsWidth(controlsWidth)
+        let hasResource = activeTab?.downloadableResource != nil
+        let buttons = ChromeSurface.buttons(for: profile.id)
+        let modWidth = min(CGFloat(buttons.count) * 27, min(135, max(0, (window?.frame.width ?? 800) - 640)))
         let theme = ChromeSurface.theme(for: profile.id)
+        let siteMods = currentSiteMods
+        let inputs = ToolbarInputs(navigation: navigation, modWidth: modWidth, siteMods: siteMods, buttons: buttons,
+                                   theme: theme, profileTint: profile.tint, hasResource: hasResource,
+                                   capturing: tabs.contains { $0.webView.cameraCaptureState != .none || $0.webView.microphoneCaptureState != .none })
+        guard inputs != lastToolbarInputs else { return }
+        controlsWidth = 202 + modWidth + (hasResource ? 27 : 0)
+        browserToolbar.setControlsWidth(controlsWidth)
         let tint = profile.color?.usingColorSpace(.sRGB)
         let payload: [String: Any] = [
             "revealed": true, "modWidth": modWidth, "colors": theme.colors,
             "navigation": navigation.snapshot,
-            "siteMods": currentSiteMods.prefix(128).map { ["id": $0.id, "title": $0.title, "on": $0.on] as [String: Any] },
+            "siteMods": siteMods.prefix(128).map { ["id": $0.id, "title": $0.title, "on": $0.on] as [String: Any] },
             "tint": tint.map { [$0.redComponent, $0.greenComponent, $0.blueComponent, $0.alphaComponent] } as Any? ?? NSNull(),
             "buttonStyle": theme.buttonStyle, "cornerRadius": theme.cornerRadius,
             "showNavigation": theme.showNavigation,
             "permissionsAvailable": true,
-            "resourceAvailable": activeTab?.downloadableResource != nil,
-            "capturing": tabs.contains { $0.webView.cameraCaptureState != .none || $0.webView.microphoneCaptureState != .none },
-            "buttons": ChromeSurface.buttons(for: profile.id).prefix(128).map { ["id": $0.id, "title": $0.title, "symbol": $0.symbol as Any? ?? NSNull()] }
+            "resourceAvailable": hasResource,
+            "capturing": inputs.capturing,
+            "buttons": buttons.prefix(128).map { ["id": $0.id, "title": $0.title, "symbol": $0.symbol as Any? ?? NSNull()] }
         ]
-        // Tab changes often leave all toolbar controls unchanged. Canonical
-        // encoding makes that a no-op for both the fallback and live renderer.
-        guard let data = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]),
-              data != lastToolbarSnapshot else { return }
-        lastToolbarSnapshot = data
+        guard let data = try? JSONSerialization.data(withJSONObject: payload) else { return }
+        lastToolbarInputs = inputs
         clusterHosting?.rootView = AnyView(clusterView())
         nativeToolbar?.setSnapshot(data)
     }
@@ -831,6 +862,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         CaptureMode.shared.refreshSharing()
         for tab in tabs { tab.tearDown() }
         tabs = []
+        focusedTabIDs.removeAll()
         activeTab = nil
     }
 

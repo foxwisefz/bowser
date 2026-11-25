@@ -1229,10 +1229,12 @@ final class EngineView: NSView, WKNavigationDelegate, WKUIDelegate {
         guard let url = webView.url else { return }
         guard !iconCandidates.isEmpty else { captureFavicon(); return }
         faviconGeneration = UUID()
+        let badge = Profile.find(profileId).avatar?.encodedIconBadge
+            ?? NSImage(systemSymbolName: "person.crop.circle.fill", accessibilityDescription: nil)?.tiffRepresentation?.base64EncodedString()
         BrainBridge.shared.send(["op": "event", "event": "icon_candidates", "webview": webviewId,
             "generation": faviconGeneration.uuidString, "url": url.absoluteString, "profile": profileId,
             "candidates": iconCandidates,
-            "profile_badge": (Profile.find(profileId).avatar?.image ?? NSImage(systemSymbolName: "person.crop.circle.fill", accessibilityDescription: nil))?.tiffRepresentation?.base64EncodedString() ?? ""])
+            "profile_badge": badge ?? ""])
     }
 
     var appIconData: Data? {

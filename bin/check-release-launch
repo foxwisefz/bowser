@@ -40,7 +40,7 @@ try Data(#"{"ai_provider":"openai","openai_api_key":"fixture"}"#.utf8)
 let gated = Process()
 gated.executableURL = mac.appendingPathComponent("Bowser")
 gated.environment = ProcessInfo.processInfo.environment.merging([
-    "BOWSER_HOME": home.path, "BOWSER_API_ENDPOINT": "http://127.0.0.1:1"
+    "BOWSER_HOME": home.path, "CFFIXED_USER_HOME": home.path, "BOWSER_API_ENDPOINT": "http://127.0.0.1:1"
 ]) { _, new in new }
 gated.standardOutput = FileHandle.nullDevice; gated.standardError = FileHandle.nullDevice
 try gated.run()
@@ -68,7 +68,7 @@ let receipt: [String: Any] = ["registrationID": "launch-fixture", "telemetryToke
 try JSONSerialization.data(withJSONObject: receipt).write(to: home.appendingPathComponent("registration.json"))
 let app = Process()
 app.executableURL = mac.appendingPathComponent("Bowser")
-app.environment = ProcessInfo.processInfo.environment.merging(["BOWSER_HOME": home.path]) { _, new in new }
+app.environment = ProcessInfo.processInfo.environment.merging(["BOWSER_HOME": home.path, "CFFIXED_USER_HOME": home.path]) { _, new in new }
 app.standardOutput = FileHandle.nullDevice
 app.standardError = FileHandle.nullDevice
 try app.run()

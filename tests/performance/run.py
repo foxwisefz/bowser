@@ -64,7 +64,7 @@ def shell_startup(stage, work, output, record):
         (home / 'registration.json').write_text(json.dumps(dict(registrationID='performance-fixture', telemetryToken='fixture', request=dict(requestID=str(uuid.uuid4()), email='fixture@example.invalid', termsVersion='fixture', acceptedAt=0))))
         with (output / 'startup.log').open('ab') as log:
             start = time.monotonic()
-            process = subprocess.Popen([str(bundle / 'Contents/MacOS/Bowser')], env={**ENV, 'BOWSER_HOME': str(home)}, stdout=log, stderr=log)
+            process = subprocess.Popen([str(bundle / 'Contents/MacOS/Bowser')], env={**ENV, 'BOWSER_HOME': str(home), 'CFFIXED_USER_HOME': str(home)}, stdout=log, stderr=log)
             try:
                 deadline = start + 15
                 with socket.socket(socket.AF_UNIX) as client:
@@ -96,7 +96,7 @@ async def browser_startup(stage, work, output, record):
             (home / 'session.json').write_text(json.dumps(dict(tabs=[dict(url=f'http://127.0.0.1:1/fixture/{i}', profile='default') for i in range(count)], active=0)))
             with (output / f'browser-{count}-{index}.log').open('ab') as log:
                 start = time.monotonic()
-                process = subprocess.Popen([str(bundle / 'Contents/MacOS/Bowser')], env={**ENV, 'BOWSER_HOME': str(home)}, stdout=log, stderr=log)
+                process = subprocess.Popen([str(bundle / 'Contents/MacOS/Bowser')], env={**ENV, 'BOWSER_HOME': str(home), 'CFFIXED_USER_HOME': str(home)}, stdout=log, stderr=log)
                 probes = []
                 def observe(begin, end, actual, error):
                     probes.append(dict(start_ms=(begin-start)*1000, end_ms=(end-start)*1000,
@@ -211,7 +211,7 @@ def main():
                 command([ROOT / 'bin/build-native-toolbar', work / f'{name}.bundle'], output / 'toolbar-build.log', {**ENV, 'BOWSER_SIGN_IDENTITY': '-'})
             home = work / 'swift-home'; home.mkdir()
             try:
-                command(['swift', 'test', '-c', 'release', '--package-path', 'shell', '--filter', 'BrowserPerformanceTests', '--xunit-output', output / 'swift-results.xml'], output / 'swift.log', {**ENV, 'BOWSER_HOME': str(home), 'BOWSER_PERF': '1', 'BOWSER_PERF_RESULTS': str(raw), 'BOWSER_PERF_TOOLBAR_A': str(work / 'A.bundle'), 'BOWSER_PERF_TOOLBAR_B': str(work / 'B.bundle')})
+                command(['swift', 'test', '-c', 'release', '--package-path', 'shell', '--filter', 'BrowserPerformanceTests', '--xunit-output', output / 'swift-results.xml'], output / 'swift.log', {**ENV, 'BOWSER_HOME': str(home), 'CFFIXED_USER_HOME': str(home), 'BOWSER_PERF': '1', 'BOWSER_PERF_RESULTS': str(raw), 'BOWSER_PERF_TOOLBAR_A': str(work / 'A.bundle'), 'BOWSER_PERF_TOOLBAR_B': str(work / 'B.bundle')})
             finally:
                 if (home / 'diagnostics').exists():
                     shutil.copytree(home / 'diagnostics', output / 'navigation-diagnostics')

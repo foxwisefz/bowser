@@ -6,16 +6,19 @@ defmodule BowserBrain.ResourceController do
   """
   use BowserBrain.CoreFeature
   def initial_state do
-    Process.send_after(self(), :ready, 1_000)
+    # A supervised restart can occur on an already-connected native session.
+    send(self(), :ready)
     %{}
   end
   def handle_info(:ready, state) do
     if BowserBrain.Bridge.resource_protocol() == 1, do: BowserBrain.Bridge.cast_msg(%{op: "resource_snapshot"})
-    Process.send_after(self(), :ready, 1_000)
     {:noreply, state}
   end
   def handle_info(message, state), do: super(message, state)
   def handle_event(%{"event" => "hello", "resources" => %{"version" => 1} = snapshot}, state), do: publish(snapshot, state)
+  # Native advances the intent queue when it applies a decision. Reissuing
+  # ready for that receipt would replay the next intent a second time.
+  def handle_event(%{"event" => "resources", "result" => _receipt}, state), do: state
   def handle_event(%{"event" => "resources", "snapshot" => %{"version" => 1} = snapshot}, state), do: publish(snapshot, state)
   def handle_event(%{"event" => "resource_intent"} = event, state) do
     BowserBrain.Bridge.cast_msg(decision(event))

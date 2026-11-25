@@ -65,9 +65,10 @@ import Foundation
              "tabs": host.tabs.map(\.webviewId), "panes": host.websiteLayout?.ids ?? [], "active": host.activeTab?.webviewId ?? 0,
              "focus_history": host.focusedTabIDs]
         }
-        let data = (try? JSONSerialization.data(withJSONObject: ["windows":windows, "downloads":NativeDownloads.shared.snapshot], options: [.sortedKeys])) ?? Data()
+        let downloads = NativeDownloads.shared.snapshot
+        let data = (try? JSONSerialization.data(withJSONObject: ["windows":windows, "downloads":downloads], options: [.sortedKeys])) ?? Data()
         let revision = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-        return ["version": 1, "session": journal.session, "next": journal.next, "revision": revision, "windows": windows, "downloads":NativeDownloads.shared.snapshot]
+        return ["version": 1, "session": journal.session, "next": journal.next, "revision": revision, "windows": windows, "downloads":downloads]
     }
     func apply(_ message: [String: Any]) -> [String: Any] {
         journal.apply(message) { command in

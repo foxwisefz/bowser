@@ -98,7 +98,9 @@ enum TabAppBundle {
     }
 
     static func upgradeSavedApps() {
-        guard SiteAppConfiguration.current == nil else { return }
+        // Only an installed browser manages the user's saved launchers. XCTest
+        // and release probes also run this shell with their own bundle identity.
+        guard Bundle.main.bundleIdentifier == "com.foxwiseai.bowser", SiteAppConfiguration.current == nil else { return }
         let bundles = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? []
         for bundle in bundles where bundle.pathExtension == "app" {
             do { try upgrade(bundle: bundle, bowser: Bundle.main.bundleURL) }

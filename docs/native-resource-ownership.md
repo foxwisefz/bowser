@@ -86,8 +86,9 @@ After `resource_ready`, native tab gestures and commands enqueue intents (up to
 time with a fresh topology snapshot. `resource_decision` must reference that
 request. A stale topology retries with a fresh snapshot; a completed request ID
 cannot be applied again. Pending intents stay native through controller death,
-reconnection and whole-brain replacement. A one-second readiness heartbeat recovers
-a controller restart without requiring a new socket connection. Browser-internal
+reconnection and whole-brain replacement. The native hello establishes readiness.
+A restarted controller or newly committed backend requests a fresh snapshot and
+resumes pending intents. An idle connection sends no readiness traffic. Browser-internal
 resource intents go only to the controller, not to mod event subscribers.
 
 The controller contains no authoritative resource state, so it reconstructs from

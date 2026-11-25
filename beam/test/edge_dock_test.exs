@@ -23,6 +23,21 @@ defmodule EdgeDockTabsTest do
     assert added.last_header.profile_id == "default"
     File.write!(path, JSON.encode!([%{"id" => "default", "name" => "Personal"}]))
     assert ev(added, %{"event" => "profiles_changed"}).last_header == nil
+    assert {:noreply, %{last_header: nil}} = BowserBrain.TabDeck.handle_info(:decay_tick, added)
+  end
+
+  test "navigation recomputes same-site markers for restored and newly visited tabs" do
+    state = ev(base(), %{"event" => "hello", "active" => 1, "tabs" => [
+      %{"id" => 1, "url" => "https://first.example/a"},
+      %{"id" => 2, "url" => "https://second.example/b"}
+    ]})
+    # A checkpoint written before derived hosts were kept has only the URL.
+    state = update_in(state.tabs[1], &Map.delete(&1, :host))
+    state = ev(state, %{"event" => "url_changed", "webview" => 2, "url" => "https://FIRST.example/b"})
+    assert Enum.map(state.last_items, & &1.tint) ==
+      Enum.map(["https://first.example/a", "https://FIRST.example/b"], &BowserBrain.TabDeck.domain_tint/1)
+    state = ev(state, %{"event" => "url_changed", "webview" => 1, "url" => "https://elsewhere.example"})
+    refute Enum.any?(state.last_items, &Map.has_key?(&1, :tint))
   end
 
   test "profile cycle follows profile order, wraps, and reuses existing tabs" do

@@ -123,7 +123,7 @@ class Bowser:
         (self.home/'app').symlink_to(self.stage/'runtime',target_is_directory=True)
         (self.home/'registration.json').write_text(json.dumps(dict(registrationID='compare-fixture',telemetryToken='fixture',request=dict(requestID=str(uuid.uuid4()),email='fixture@example.invalid',termsVersion='fixture',acceptedAt=0))))
         self.log=(self.output/'bowser.log').open('ab')
-        self.process=subprocess.Popen([str(bundle/'Contents/MacOS/Bowser')],env={**ENV,'BOWSER_HOME':str(self.home)},stdout=self.log,stderr=self.log)
+        self.process=subprocess.Popen([str(bundle/'Contents/MacOS/Bowser')],env={**ENV,'BOWSER_HOME':str(self.home),'CFFIXED_USER_HOME':str(self.home)},stdout=self.log,stderr=self.log)
         try:
             deadline=time.monotonic()+20
             while True:

@@ -20,15 +20,22 @@ enum ChromeSurface {
         let profile: String
         let on: Bool
 
-        func applies(to url: String?, profile: String) -> Bool {
-            guard self.profile == profile, let url, let host = URL(string: url)?.host?.lowercased() else { return false }
+        func applies(to host: String, profile: String) -> Bool {
+            guard self.profile == profile else { return false }
             let target = self.host.lowercased()
             return host == target || (subdomains && host.hasSuffix("." + target))
         }
     }
-    private(set) static var siteMods: [SiteMod] = []
+    private static var siteMods: [SiteMod] = [] {
+        didSet { lastSiteMatch = nil }
+    }
+    private static var lastSiteMatch: (profile: String, host: String, mods: [SiteMod])?
     static func siteMods(for profile: String, url: String?) -> [SiteMod] {
-        siteMods.filter { $0.applies(to: url, profile: profile) }
+        guard !siteMods.isEmpty, let url, let host = URL(string: url)?.host?.lowercased() else { return [] }
+        if let lastSiteMatch, lastSiteMatch.host == host, lastSiteMatch.profile == profile { return lastSiteMatch.mods }
+        let matches = siteMods.filter { $0.applies(to: host, profile: profile) }
+        lastSiteMatch = (profile, host, matches)
+        return matches
     }
 
     struct ModMenuItem: Equatable {

@@ -1,8 +1,38 @@
 import XCTest
 import WebKit
+import Combine
 @testable import Bowser
 
+private final class VisiblePermissionsWindow: NSWindow {
+    override var occlusionState: NSWindow.OcclusionState { [.visible] }
+}
+
 @MainActor final class SitePermissionTests: XCTestCase {
+    func testMonitoringSleepsOutsidePermissionsAndRefreshesOnReopen() async throws {
+        _ = NSApplication.shared
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = SitePermissionStore(file: dir.appendingPathComponent("permissions.json"))
+        let model = PermissionSettingsModel(store: store)
+        let origin = "https://fixture.test"
+        try store.set(profile: "default", origin: origin, kinds: ["camera"], decision: "allow")
+        let window = VisiblePermissionsWindow(contentRect: .zero, styleMask: [], backing: .buffered, defer: true)
+        model.monitor(window, showingPermissions: true)
+        XCTAssertEqual(model.sites, [origin])
+        var published = 0
+        let observation = model.objectWillChange.sink { published += 1 }
+        defer { observation.cancel() }
+        model.refresh()
+        XCTAssertEqual(published, 0, "Identical controls should not invalidate the view")
+        model.monitor(window, showingPermissions: false)
+        try store.reset(profile: "default")
+        try await Task.sleep(for: .milliseconds(1400))
+        XCTAssertEqual(model.sites, [origin], "Closed permissions must not continue polling")
+        model.monitor(window, showingPermissions: true)
+        XCTAssertTrue(model.sites.isEmpty)
+        model.monitor(window, showingPermissions: false)
+    }
+
     func testOriginsAndFrameIsolation() {
         XCTAssertEqual(SitePermissionKey.origin(URL(string: "https://EXAMPLE.com:443/path?q=1")), "https://example.com")
         XCTAssertEqual(SitePermissionKey.origin(URL(string: "https://example.com:8443")), "https://example.com:8443")

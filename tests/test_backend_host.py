@@ -97,6 +97,8 @@ class ReleaseTests(unittest.IsolatedAsyncioTestCase):
         self.native_writer = None
         self.commands = []
         self.connections = 0
+        self.resources = dict(version=1, session="fixture", next=1, revision="fixture",
+                              windows=[], downloads=[])
         self.server = await asyncio.start_unix_server(self.native, path=str(self.home / 'brain.sock'))
         self.log = open(self.home / 'host.log', 'wb')
         pinned = self._testMethodName == 'test_staging_pins_its_runtime_instead_of_production_pointer'
@@ -157,7 +159,7 @@ class ReleaseTests(unittest.IsolatedAsyncioTestCase):
     async def native(self, reader, writer):
         self.connections += 1
         self.native_writer = writer
-        send(writer, dict(op='hello', v=1, engine_build_id='01' * 16, engine_binary=str(self.engine), webviews=[1, 2], active=2,
+        send(writer, dict(op='hello', v=1, engine_build_id='01' * 16, engine_binary=str(self.engine), resources=self.resources, webviews=[1, 2], active=2,
             tabs=[dict(id=1, url='https://fixture.invalid/work', profile='work'),
                   dict(id=2, url='https://fixture.invalid/personal', profile='personal')]))
         try:
@@ -166,6 +168,8 @@ class ReleaseTests(unittest.IsolatedAsyncioTestCase):
                 self.commands.append(msg)
                 if msg.get('op') == 'get_cookies':
                     send(writer, dict(op='cookies_result', id=msg['id'], cookies=[]))
+                elif msg.get('op') == 'resource_snapshot':
+                    send(writer, dict(op='resource_result', snapshot=self.resources))
                 elif msg.get('op') in ('eval_js', 'native_screenshot', 'native_click'):
                     send(writer, dict(op='js_result', id=msg['id'], ok=True,
                         value={} if msg['op'].startswith('native_') else None))
@@ -233,6 +237,9 @@ class ReleaseTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn('id', next(c for c in reversed(self.commands) if c.get('op') == tool))
 
     async def test_installer_handoff_preserves_mod_heap_profiles_and_host_connection(self):
+        def ready_count():
+            return sum(msg.get('op') == 'resource_ready' for msg in self.commands)
+        await until(lambda: ready_count() == 1)
         for _ in range(3): self.event()
         await self.count(3)
         core_before = (await self.generation_status())['core']
@@ -260,12 +267,25 @@ class ReleaseTests(unittest.IsolatedAsyncioTestCase):
             stop.set(); await task
         await self.count(sent)
         self.assertEqual(self.connections, 1)
+        # Handoff has no new native hello. The candidate must explicitly
+        # recover pending intents once and then leave the idle peer alone.
+        await until(lambda: ready_count() == 2)
+        send(self.native_writer, dict(op='resource_result', result={'ok': True}, snapshot=self.resources))
+        await asyncio.sleep(1.2)
+        self.assertEqual(ready_count(), 2)
+        self.assertEqual(sum(msg.get('op') == 'resource_snapshot' for msg in self.commands), 1)
         self.assertEqual((self.home / 'init-count').read_text(), 'init\n')
         state = await self.generation_status()
         self.assertEqual(state['profiles'], {'1': 'work', '2': 'personal'})
         self.assertFalse(state['restoring'])
         self.assertEqual(state['engine_build'], {'running': '01' * 16, 'disk': '01' * 16, 'stale': False})
         self.assertEqual(state['core'], core_before)
+        profiles = [{'id': 'default', 'name': 'Personal'}, {'id': 'work', 'name': 'Renamed'}]
+        (self.home / 'profiles.json').write_text(json.dumps(profiles))
+        async def dock_profiles_refreshed():
+            while not any(p['name'] == 'Renamed' for p in (await self.generation_status())['core']['tab_deck']['profiles']):
+                await asyncio.sleep(.1)
+        await asyncio.wait_for(dock_profiles_refreshed(), 7)
         self.assertEqual((await self.tool('shell_theme'))['theme'], {'background': '#123456'})
         (self.home / 'mods/Counter.ex').unlink()
         await until(lambda: any(m.get('chrome') == 'set_theme' and m.get('profile') == 'personal'
@@ -345,6 +365,23 @@ class ReleaseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.connections, 1)
         self.assertEqual((await self.control('status'))['pid'], self.process.pid)
         self.event(); await self.count(1)
+
+    async def test_beam_exits_when_host_is_killed(self):
+        beam_pid = int((await self.generation_status())['pid'])
+        self.process.kill()
+        await self.process.wait()
+
+        def reaped():
+            try:
+                os.kill(beam_pid, 0)
+                return False
+            except ProcessLookupError:
+                return True
+        try:
+            await until(reaped, 3)
+        finally:
+            if not reaped():
+                os.kill(beam_pid, signal.SIGKILL)
 
     async def test_installed_launcher_starts_and_stops_native_host(self):
         await self.control('stop'); await asyncio.wait_for(self.process.wait(), 10)

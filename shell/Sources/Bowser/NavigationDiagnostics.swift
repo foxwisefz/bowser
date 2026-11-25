@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import Network
 
@@ -117,27 +118,50 @@ enum NavigationDiagnosticLog {
     static let sessionID = UUID()
     private static let queue = DispatchQueue(label: "bowser.navigation.diagnostics", qos: .utility)
     @MainActor static func record(_ record: NavigationDiagnosticRecord) {
-        let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601
-        guard let data = try? encoder.encode(record) else { return }
         let root = BowserPaths.home.appendingPathComponent("diagnostics")
         queue.async {
-            do { try append(data, directory: root) }
+            do {
+                let encoder = JSONEncoder()
+                encoder.dateEncodingStrategy = .iso8601
+                try append(encoder.encode(record), directory: root)
+            }
             catch { NSLog("Bowser: could not persist navigation diagnostics") }
         }
     }
     static func append(_ data: Data, directory: URL, limit: Int = 262_144) throws {
         let fm = FileManager.default
         try fm.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        // Saved apps can share this directory. Lock across rotation and append,
+        // including the interval in which the new current file is created.
+        let directoryFD = open(directory.path, O_RDONLY | O_DIRECTORY | O_EXLOCK | O_CLOEXEC)
+        guard directoryFD >= 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
+        defer { close(directoryFD) }
         let file = directory.appendingPathComponent("navigation-failures.jsonl")
-        var contents = (try? Data(contentsOf: file)) ?? Data()
-        if contents.count + data.count + 1 > limit {
-            let previous = directory.appendingPathComponent("navigation-failures.previous.jsonl")
-            try contents.write(to: previous, options: .atomic)
-            try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: previous.path)
-            contents = Data()
+        func openCurrent() throws -> (FileHandle, UInt64) {
+            let fd = open(file.path, O_WRONLY | O_APPEND | O_CREAT | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC, 0o600)
+            guard fd >= 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
+            let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+            var info = stat()
+            guard fstat(fd, &info) == 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
+            guard info.st_mode & S_IFMT == S_IFREG else { throw CocoaError(.fileWriteUnknown) }
+            if info.st_mode & 0o777 != 0o600, fchmod(fd, 0o600) != 0 {
+                throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+            }
+            return (handle, UInt64(info.st_size))
         }
-        contents.append(data); contents.append(0x0a)
-        try contents.write(to: file, options: .atomic)
-        try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+        var (handle, originalSize) = try openCurrent()
+        var line = data
+        line.append(0x0a)
+        if originalSize > 0 && originalSize + UInt64(line.count) > limit {
+            let previous = directory.appendingPathComponent("navigation-failures.previous.jsonl")
+            guard rename(file.path, previous.path) == 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
+            try handle.close()
+            (handle, originalSize) = try openCurrent()
+        }
+        do { try handle.write(contentsOf: line) }
+        catch {
+            try handle.truncate(atOffset: originalSize)
+            throw error
+        }
     }
 }

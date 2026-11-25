@@ -1,6 +1,6 @@
 import Foundation
 
-public struct PermissionControl: Identifiable {
+public struct PermissionControl: Identifiable, Equatable {
     public let id: String
     public let title: String
     public let choice: String

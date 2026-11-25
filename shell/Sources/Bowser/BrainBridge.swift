@@ -57,6 +57,7 @@ final class BrainBridge {
     }
 
     func send(_ message: [String: Any]) {
+        guard isConnected else { return }
         // Quit is a lifecycle transaction, not a sequence of tab closures.
         if BackendLifecycle.shared.isQuitting, message["op"] as? String == "event" { return }
         guard JSONSerialization.isValidJSONObject(message),
@@ -169,12 +170,14 @@ final class BrainBridge {
             if n <= 0 { return }
             buffer.append(contentsOf: chunk[0..<n])
 
-            while buffer.count >= 4 {
-                let length = buffer.prefix(4).reduce(0) { ($0 << 8) | Int($1) }
+            var offset = buffer.startIndex
+            while buffer.endIndex - offset >= 4 {
+                let start = offset + 4
+                let length = buffer[offset..<start].reduce(0) { ($0 << 8) | Int($1) }
                 guard length <= 64 * 1024 * 1024 else { return }
-                guard buffer.count >= 4 + length else { break }
-                let payload = buffer.subdata(in: 4..<(4 + length))
-                buffer.removeSubrange(0..<(4 + length))
+                guard buffer.endIndex - start >= length else { break }
+                offset = start + length
+                let payload = buffer.subdata(in: start..<offset)
 
                 // Data is Sendable; parse on the main actor where handling lives.
                 DispatchQueue.main.async {
@@ -187,6 +190,7 @@ final class BrainBridge {
                     }
                 }
             }
+            if offset != buffer.startIndex { buffer.removeSubrange(buffer.startIndex..<offset) }
         }
     }
 
@@ -194,7 +198,8 @@ final class BrainBridge {
 
     private func sendHello() {
         let ordered = BrowserWindowController.orderedTabIDs
-        let ids = ordered + EngineView.live.keys.filter { !ordered.contains($0) }.sorted()
+        let owned = Set(ordered)
+        let ids = ordered + EngineView.live.keys.filter { !owned.contains($0) }.sorted()
         let tabs: [[String: Any]] = ids.map { id in
             var tab: [String: Any] = ["id": id]
             // Never box an Optional into JSON — JSONSerialization rejects it

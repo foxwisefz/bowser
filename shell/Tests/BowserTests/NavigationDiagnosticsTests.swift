@@ -132,4 +132,18 @@ final class NavigationDiagnosticsTests: XCTestCase {
         XCTAssertEqual((try FileManager.default.attributesOfItem(atPath: current.path)[.posixPermissions] as? NSNumber)?.intValue, 0o600)
         XCTAssertEqual((try FileManager.default.attributesOfItem(atPath: root.path)[.posixPermissions] as? NSNumber)?.intValue, 0o700)
     }
+
+    func testConcurrentAppendsPreserveEveryRecordAndTheCurrentFile() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try NavigationDiagnosticLog.append(Data("0".utf8), directory: root)
+        let file = root.appendingPathComponent("navigation-failures.jsonl")
+        let original = try FileManager.default.attributesOfItem(atPath: file.path)[.systemFileNumber] as? NSNumber
+        DispatchQueue.concurrentPerform(iterations: 100) { index in
+            try? NavigationDiagnosticLog.append(Data(String(index + 1).utf8), directory: root)
+        }
+        let lines = try String(contentsOf: file, encoding: .utf8).split(separator: "\n").compactMap { Int($0) }
+        XCTAssertEqual(lines.sorted(), Array(0...100))
+        XCTAssertEqual(try FileManager.default.attributesOfItem(atPath: file.path)[.systemFileNumber] as? NSNumber, original)
+    }
 }

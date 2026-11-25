@@ -45,7 +45,10 @@ final class WebsiteIconTests: XCTestCase {
     @MainActor
     func testProfileBadgeIsAtUpperRightAndLeavesSiteMarkIntact() throws {
         let tile = try XCTUnwrap(IconRenderer.normalizedPNG(fixture()))
-        let portrait = try XCTUnwrap(ProfileCharacter.bowser.image?.tiffRepresentation)
+        let encoded = try XCTUnwrap(ProfileCharacter.bowser.encodedIconBadge)
+        let portrait = try XCTUnwrap(Data(base64Encoded: encoded))
+        XCTAssertEqual(portrait, ProfileCharacter.bowser.image?.tiffRepresentation)
+        XCTAssertEqual(encoded, ProfileCharacter.bowser.encodedIconBadge)
         let badged = try XCTUnwrap(IconRenderer.badgedPNG(tile, badge: portrait))
         let before = try XCTUnwrap(NSBitmapImageRep(data: tile))
         let after = try XCTUnwrap(NSBitmapImageRep(data: badged))
@@ -61,7 +64,8 @@ final class WebsiteIconTests: XCTestCase {
                                after.colorAt(x: x, y: y)?.alphaComponent)
             }
         }
-        let other = try XCTUnwrap(IconRenderer.badgedPNG(tile, badge: XCTUnwrap(ProfileCharacter.shyGuy.image?.tiffRepresentation)))
+        let otherPortrait = try XCTUnwrap(Data(base64Encoded: XCTUnwrap(ProfileCharacter.shyGuy.encodedIconBadge)))
+        let other = try XCTUnwrap(IconRenderer.badgedPNG(tile, badge: otherPortrait))
         XCTAssertNotEqual(badged, other)
         try badged.write(to: URL(fileURLWithPath: "/private/tmp/bowser-profile-badge-preview.png"))
         XCTAssertNotNil(IconRenderer.icns(badged))

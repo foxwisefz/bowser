@@ -7,6 +7,7 @@ final class Generation {
     let runtime: URL
     let directory: URL
     var process: Process?
+    var lifetimeWriter: FileHandle?
     var writer: Peer?
     var server: Listener?
     var attached = false
@@ -26,6 +27,7 @@ final class Generation {
             if process.isRunning { kill(process.processIdentifier, SIGKILL) }
             while process.isRunning { await Task.detached { try? await Task.sleep(nanoseconds: 10_000_000) }.value }
         }
+        try? lifetimeWriter?.close(); lifetimeWriter = nil
         writer?.close(); writer = nil
         server?.close(); server = nil
         try? remove(directory)
@@ -79,13 +81,17 @@ final class Host {
             var env = ProcessInfo.processInfo.environment
             env.merge(["BOWSER_HOME": home.path, "BOWSER_ROOT": runtime.path,
                        "BOWSER_RELAY_DIR": directory.path, "BOWSER_RELAY_PID": String(getpid()),
+                       "BOWSER_RELAY_LIFETIME": "stdin",
                        "BOWSER_NO_SPAWN": "1", "RELEASE_DISTRIBUTION": "none", "RELEASE_TMP": child(directory, "tmp").path]) { _, new in new }
             process.environment = env
             let logPath = child(home, "brain.log")
             let logFD = Darwin.open(logPath.path, O_WRONLY | O_CREAT | O_APPEND, 0o600)
             guard logFD >= 0 else { throw RuntimeFailure("cannot open brain log") }
             let log = FileHandle(fileDescriptor: logFD, closeOnDealloc: true)
-            process.standardOutput = log; process.standardError = log; process.standardInput = FileHandle.nullDevice
+            let lifetime = Pipe()
+            gen.lifetimeWriter = lifetime.fileHandleForWriting
+            process.standardInput = lifetime
+            process.standardOutput = log; process.standardError = log
             try process.run(); gen.process = process
             try log.close()
             try await until(20) { exists(child(directory, "control.sock")) || !process.isRunning }
