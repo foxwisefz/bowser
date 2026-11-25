@@ -4,6 +4,34 @@ import XCTest
 @testable import Bowser
 
 @MainActor final class DockWindowVisibilityTests: XCTestCase {
+    func testAutoHidePulseSurvivesContentUpdatesAndPointerExit() async throws {
+        let controller = BrowserWindowController(profile: .defaultProfile)
+        let window = try XCTUnwrap(controller.window)
+        let manager = SurfaceManager()
+        defer { manager.handle(["surface": "close", "id": "edge_dock"]); window.close() }
+        window.makeKeyAndOrderFront(nil)
+        manager.orderAllFront(parent: window)
+        let before = Set(NSApp.windows.map(ObjectIdentifier.init))
+        let message: [String: Any] = ["surface": "show", "id": "edge_dock", "kind": "edge",
+            "attach": "screen", "profile": "default", "width": 48.0,
+            "view": ["t": "text", "text": "Tabs",
+                     "dock_preferences": ["always_show": false, "reduce_motion": false]]]
+        manager.handle(message)
+        let panel = try XCTUnwrap(NSApp.windows.first { !before.contains(ObjectIdentifier($0)) } as? NSPanel)
+        let hidden = panel.frame
+        manager.pulseEdges(for: 3)
+        let startingFrame = panel.frame
+        manager.handle(message)
+        XCTAssertEqual(panel.frame, startingFrame, "Content updates must not snap the reveal to its destination")
+        manager.setEdgeRevealed("edge_dock", false)
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertGreaterThan(panel.frame.minX, hidden.minX, "Pointer exit must not cancel a tab pulse")
+        try await Task.sleep(for: .milliseconds(3000))
+        if !NSMouseInRect(NSEvent.mouseLocation, panel.frame, false) {
+            XCTAssertEqual(panel.frame.minX, hidden.minX, accuracy: 0.5)
+        }
+    }
+
     func testDockSelectionRaisesOwningWindowBeforeBackendReply() throws {
         SurfaceHostServices.configure()
         let owner = BrowserWindowController(profile: .defaultProfile)
